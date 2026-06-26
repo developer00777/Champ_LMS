@@ -1,0 +1,84 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+	background: #141414;
+	color: #fff;
+	font-family: 'Inter', system-ui, -apple-system, sans-serif;
+	-webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+button { cursor: pointer; }
+
+.btn-primary {
+	background: #e50914;
+	color: #fff;
+	border: none;
+	padding: 0.6rem 1.4rem;
+	border-radius: 4px;
+	font-size: 0.95rem;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background 0.15s;
+}
+.btn-primary:hover { background: #c5000f; }
+
+.btn-secondary {
+	background: rgba(255,255,255,0.15);
+	color: #fff;
+	border: none;
+	padding: 0.6rem 1.4rem;
+	border-radius: 4px;
+	font-size: 0.95rem;
+	font-weight: 600;
+	cursor: pointer;
+	backdrop-filter: blur(4px);
+	transition: background 0.15s;
+}
+.btn-secondary:hover { background: rgba(255,255,255,0.25); }
+
+input, textarea, select {
+	background: #2a2a2a;
+	border: 1px solid #444;
+	color: #fff;
+	padding: 0.5rem 0.75rem;
+	border-radius: 4px;
+	font-size: 0.9rem;
+	width: 100%;
+}
+input:focus, textarea:focus, select:focus {
+	outline: none;
+	border-color: #e50914;
+}
+
+.card {
+	background: #1f1f1f;
+	border-radius: 8px;
+	padding: 1.5rem;
+}
+
+.tag {
+	display: inline-block;
+	background: rgba(229,9,20,0.2);
+	color: #ff6b6b;
+	padding: 0.2rem 0.6rem;
+	border-radius: 4px;
+	font-size: 0.75rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.progress-bar-track {
+	height: 3px;
+	background: rgba(255,255,255,0.2);
+	border-radius: 2px;
+	overflow: hidden;
+}
+.progress-bar-fill {
+	height: 100%;
+	background: #e50914;
+	border-radius: 2px;
+	transition: width 0.3s;
+}
