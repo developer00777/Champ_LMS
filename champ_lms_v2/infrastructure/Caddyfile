@@ -1,0 +1,33 @@
+# Caddy reverse proxy — replaces ALB from v1
+# Caddy auto-provisions TLS via Let's Encrypt
+
+learn.championsgroup.com {
+    # Serve SvelteKit static build from Bunny CDN via redirect
+    # OR serve locally if not yet deployed to Bunny Storage
+    root * /var/www/champ-lms-frontend
+    try_files {path} /index.html
+    file_server
+
+    # Security headers
+    header {
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+}
+
+api.championsgroup.com {
+    reverse_proxy localhost:8000 {
+        health_uri /health
+        health_interval 10s
+    }
+
+    # Rate limit — 100 req/5min per IP (complement to Bunny Edge Rules)
+    # rate_limit {remote_host} 100r/5m  # requires caddy-ratelimit plugin
+
+    header {
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+}
