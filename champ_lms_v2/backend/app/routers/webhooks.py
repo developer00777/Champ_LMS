@@ -24,9 +24,10 @@ async def bunny_stream_webhook(request: Request):
       BunnyVideo-Signature: SHA256 HMAC of payload
     """
     body = await request.body()
-    signature = request.headers.get("BunnyVideo-Signature", "")
+    # Bunny Stream sends the library API key in the 'AccessKey' header (not HMAC)
+    access_key = request.headers.get("AccessKey", "")
 
-    if not bunny_stream.verify_webhook_signature(body, signature):
+    if not bunny_stream.verify_webhook_signature(body, access_key):
         raise HTTPException(status_code=401, detail="Invalid Bunny webhook signature")
 
     payload = await request.json()

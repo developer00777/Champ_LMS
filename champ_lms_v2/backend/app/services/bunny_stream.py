@@ -159,13 +159,18 @@ class BunnyStreamService:
     def verify_webhook_signature(self, payload: bytes, signature_header: str) -> bool:
         """
         Verify Bunny Stream webhook authenticity.
-        Bunny sends SHA256 HMAC in header 'BunnyVideo-Signature'.
+
+        Bunny Stream does NOT send a configurable HMAC secret — it sends the
+        library's API key in the header 'AccessKey'. We compare that against
+        the known API key instead of doing HMAC.
+
+        If BUNNY_STREAM_WEBHOOK_SECRET is set (to the library API key), we
+        compare it directly. If empty, we skip verification (dev/local mode).
         """
         secret = self.settings.bunny_stream_webhook_secret
-        expected = hmac.new(
-            secret.encode(), payload, hashlib.sha256
-        ).hexdigest()
-        return hmac.compare_digest(expected, signature_header)
+        if not secret:
+            return True  # dev mode — skip verification
+        return hmac.compare_digest(secret, signature_header)
 
 
 bunny_stream = BunnyStreamService()

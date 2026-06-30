@@ -22,6 +22,7 @@ load_dotenv()
 
 BUNNY_API = "https://api.bunny.net"
 BUNNY_STREAM_API = "https://video.bunnycdn.com"
+BUNNY_STREAM_BASE = "https://video.bunnycdn.com"
 
 API_KEY = os.environ["BUNNY_ACCOUNT_API_KEY"]
 VPN_CIDR = os.environ.get("VPN_CIDR", "10.0.0.0/8")
@@ -83,63 +84,69 @@ async def create_pull_zone(
 
 
 async def add_edge_rules(client: httpx.AsyncClient, pull_zone_id: int, vpn_cidr: str) -> None:
-    rules = [
-        {
-            "Enabled": True,
-            "Description": "Block mobile devices",
-            "TriggerMatchingType": 1,
-            "Triggers": [{
-                "Type": 3,
-                "PatternMatches": ["*Android*", "*iPhone*", "*iPad*", "*Mobile*", "*webOS*"],
-                "PatternMatchingType": 0,
-            }],
-            "ActionType": 2,
-            "ActionParameter1": "403",
-        },
-        {
-            "Enabled": True,
-            "Description": "VPN IP whitelist",
-            "TriggerMatchingType": 0,
-            "Triggers": [{
-                "Type": 1,
-                "PatternMatches": [f"!{vpn_cidr}"],
-                "PatternMatchingType": 0,
-            }],
-            "ActionType": 2,
-            "ActionParameter1": "403",
-        },
-    ]
-    for rule in rules:
-        resp = await client.post(
-            f"{BUNNY_API}/pullzone/{pull_zone_id}/edgerules/addOrUpdate",
-            headers=HEADERS,
-            json=rule,
-        )
-        status = "✓" if resp.status_code in (200, 201) else "✗"
-        print(f"  {status} Edge rule '{rule['Description']}': {resp.status_code}")
+    """
+    Bunny Edge Rules trigger types:
+      Type 0 = URL path
+      Type 1 = RequestHeader (pattern matches header value)
+      Type 3 = UrlExtension
+      Type 4 = CountryCode
+      Type 5 = RemoteIP  ← correct type for IP matching
 
+    NOTE: Bunny Edge Rules don't support CIDR negation ("block all IPs NOT in range")
+    in a single rule. VPN IP whitelisting is handled at the Caddy layer on the VPS
+    (see infrastructure/Caddyfile — simpler, more reliable, no CDN bypass risk).
 
-async def create_stream_library(client: httpx.AsyncClient, name: str) -> dict:
-    if not STREAM_API_KEY:
-        print("  ↩ BUNNY_STREAM_API_KEY not set — skip stream library creation")
-        return {}
-    headers = {"AccessKey": STREAM_API_KEY, "Content-Type": "application/json"}
+    This function sets up the mobile UA block only.
+    """
+    mobile_block = {
+        "Enabled": True,
+        "Description": "Block mobile devices",
+        "TriggerMatchingType": 1,  # ANY trigger matches
+        "Triggers": [{
+            "Type": 1,  # RequestHeader
+            "PatternMatches": ["*Android*", "*iPhone*", "*iPad*", "*Mobile*", "*webOS*"],
+            "PatternMatchingType": 0,  # 0 = MatchAny
+        }],
+        "ActionType": 2,  # BlockRequest
+        "ActionParameter1": "403",
+    }
     resp = await client.post(
-        f"{BUNNY_STREAM_API}/library",
-        headers=headers,
-        json={
-            "Name": name,
-            "ReplicationRegions": ["DE", "NY", "SG"],
-            "EnableTokenAuthentication": True,
-            "TokenAuthenticationKey": os.environ.get("BUNNY_STREAM_TOKEN_SECRET", ""),
-        },
+        f"{BUNNY_API}/pullzone/{pull_zone_id}/edgerules/addOrUpdate",
+        headers=HEADERS,
+        json=mobile_block,
     )
-    if resp.status_code in (200, 201):
+    status = "✓" if resp.status_code in (200, 201) else "✗"
+    print(f"  {status} Edge rule 'Block mobile devices': {resp.status_code}")
+    print("  ↩ VPN IP whitelist: handled at Caddy layer (see Caddyfile) — Bunny Edge Rules")
+    print("    don't support CIDR negation. Add 'remote_ip' directive in Caddyfile.")
+
+
+async def verify_stream_library(client: httpx.AsyncClient, library_id: str) -> dict:
+    """
+    Verify an existing Bunny Stream library (created manually in dashboard).
+    Bunny Stream library creation via API requires the account-level management API
+    which uses a different base URL. Since the library already exists from manual
+    setup (ID: 694284), we just verify and return its details.
+    """
+    if not STREAM_API_KEY:
+        print("  ↩ BUNNY_STREAM_API_KEY not set — skip stream library check")
+        return {}
+    if not library_id:
+        print("  ↩ No BUNNY_STREAM_LIBRARY_ID — skip (library already created manually)")
+        return {}
+
+    headers = {"AccessKey": STREAM_API_KEY, "Content-Type": "application/json"}
+    resp = await client.get(
+        f"{BUNNY_STREAM_BASE}/library/{library_id}",
+        headers=headers,
+        timeout=15,
+    )
+    if resp.status_code == 200:
         data = resp.json()
-        print(f"  ✓ Stream library '{name}' — ID: {data.get('Id')}, CDN: {data.get('PullZone')}")
+        print(f"  ✓ Stream library verified — videos: {data.get('videoCount', 0)}, collections: {data.get('collectionCount', 0)}")
         return data
     else:
-        print(f"  ✗ Stream library: {resp.status_code} {resp.text}")
+        print(f"  ✗ Stream library check failed: {resp.status_code} {resp.text}")
     return {}
 
 
@@ -188,20 +195,26 @@ async def main() -> None:
                 print("\n3. Edge Rules")
                 await add_edge_rules(client, pull_zone["Id"], VPN_CIDR)
 
-        print("\n4. Bunny Stream library")
-        stream_lib = await create_stream_library(client, "champ-lms-stream")
+        print("\n4. Bunny Stream library (verify existing)")
+        stream_library_id = os.environ.get("BUNNY_STREAM_LIBRARY_ID", "")
+        stream_lib = await verify_stream_library(client, stream_library_id)
 
         print("\n5. Bunny DNS")
         await create_dns_zone(client, DOMAIN, VPS_IP)
 
     print("\n=== Setup complete ===")
-    print("\nNext steps:")
-    print("  1. Copy the storage zone passwords to .env")
-    print("  2. Set BUNNY_STREAM_LIBRARY_ID and BUNNY_STREAM_CDN_HOSTNAME in .env")
-    print("  3. Add custom hostname 'cdn.learn.{DOMAIN}' to the pull zone in Bunny dashboard")
-    print("  4. Enable Bunny Optimizer on the pull zone for WebP/resize support")
-    print("  5. Configure Bunny Stream webhook URL: https://api.{DOMAIN}/webhooks/bunny-stream")
-    print("  6. Point your domain's nameservers to Bunny DNS (shown in dashboard)")
+    print("\n── Values to copy into backend/.env ──")
+    print(f"  BUNNY_STREAM_LIBRARY_ID={stream_library_id}")
+    print(f"  BUNNY_STREAM_CDN_HOSTNAME=vz-727d9382-c9a.b-cdn.net  # from Bunny Stream dashboard")
+    print(f"  BUNNY_STREAM_TOKEN_SECRET={os.environ.get('BUNNY_STREAM_TOKEN_SECRET','')}")
+    print(f"  BUNNY_STREAM_WEBHOOK_SECRET={os.environ.get('BUNNY_STREAM_API_KEY','')}  # = Stream API key")
+    print()
+    print("── Manual steps remaining ──")
+    print("  1. Bunny dashboard → Pull Zones → champ-lms-cdn → Hostnames")
+    print(f"     Add: cdn.learn.{DOMAIN}")
+    print("  2. Pull Zones → champ-lms-cdn → Optimizer → Enable Image Optimization")
+    print("  3. Add VPN IP whitelist in Caddyfile (see infrastructure/Caddyfile)")
+    print(f"  4. Change nameservers at your registrar to Bunny DNS (check dashboard → DNS → {DOMAIN})")
 
 
 if __name__ == "__main__":

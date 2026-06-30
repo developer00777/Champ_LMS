@@ -1,14 +1,22 @@
 # Caddy reverse proxy — replaces ALB from v1
 # Caddy auto-provisions TLS via Let's Encrypt
+# VPN IP whitelist is enforced here (Bunny Edge Rules don't support CIDR negation)
 
-learn.championsgroup.com {
-    # Serve SvelteKit static build from Bunny CDN via redirect
-    # OR serve locally if not yet deployed to Bunny Storage
-    root * /var/www/champ-lms-frontend
-    try_files {path} /index.html
-    file_server
+# ── VPN IP whitelist — replace 10.0.0.0/8 with your actual corporate VPN CIDR ──
+# Common values:
+#   10.0.0.0/8      — private class A (common VPN range)
+#   192.168.0.0/16  — private class C
+#   172.16.0.0/12   — private class B
+#   x.x.x.x/32     — single static IP
 
-    # Security headers
+(vpn_only) {
+    @blocked {
+        not remote_ip 10.0.0.0/8
+    }
+    respond @blocked "Access restricted to VPN" 403
+}
+
+(security_headers) {
     header {
         X-Frame-Options "DENY"
         X-Content-Type-Options "nosniff"
@@ -17,17 +25,35 @@ learn.championsgroup.com {
     }
 }
 
+learn.championsgroup.com {
+    import vpn_only
+    import security_headers
+
+    # Serve SvelteKit static build
+    root * /var/www/champ-lms-frontend
+    try_files {path} /index.html
+    file_server
+}
+
 api.championsgroup.com {
+    import vpn_only
+    import security_headers
+
+    # Block mobile User-Agent (backup to Bunny Edge Rule)
+    @mobile {
+        header User-Agent *Android*
+        header User-Agent *iPhone*
+        header User-Agent *iPad*
+        header User-Agent *Mobile*
+    }
+    respond @mobile "Mobile access not permitted" 403
+
+    # Rate limit: requires caddy-ratelimit plugin
+    # rate_limit {remote_host} 100r/5m
+
     reverse_proxy localhost:8000 {
         health_uri /health
         health_interval 10s
-    }
-
-    # Rate limit — 100 req/5min per IP (complement to Bunny Edge Rules)
-    # rate_limit {remote_host} 100r/5m  # requires caddy-ratelimit plugin
-
-    header {
-        X-Content-Type-Options "nosniff"
-        -Server
+        header_up X-Real-IP {remote_host}
     }
 }
