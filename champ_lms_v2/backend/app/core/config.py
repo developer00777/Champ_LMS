@@ -33,8 +33,9 @@ class Settings(BaseSettings):
     bunny_stream_token_secret: str = ""
     bunny_stream_webhook_secret: str = ""
 
-    # AI
-    anthropic_api_key: str = ""
+    # AI — OpenRouter (openrouter.ai/api/v1, OpenAI-compatible)
+    openrouter_api_key: str = ""
+    openrouter_model: str = "google/gemini-flash-1.5"  # cheap + fast; change freely in .env
 
     # Zoom
     zoom_webhook_secret: str = ""

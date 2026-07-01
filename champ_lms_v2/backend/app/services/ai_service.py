@@ -1,53 +1,29 @@
 """
-AI service — Claude API for Zoom → Module pipeline and quiz generation.
-Unchanged from v1 architecture; only AWS/CloudFront references removed.
+AI service — OpenRouter for Zoom → Module pipeline and quiz generation.
+OpenRouter gives access to 200+ models via one API key and OpenAI-compatible SDK.
+
+Recommended cheap models for this task:
+  google/gemini-flash-1.5       ~$0.075/1M tokens  (fast, good JSON)
+  meta-llama/llama-3.1-8b-instruct:free  FREE tier (rate limited)
+  deepseek/deepseek-chat        ~$0.14/1M tokens   (strong reasoning)
+  google/gemini-2.0-flash-001   ~$0.10/1M tokens   (best quality/cost)
+
+Set OPENROUTER_MODEL in .env to switch without code changes.
+Default: google/gemini-flash-1.5
 """
 import json
-import anthropic
+import httpx
 from app.core.config import get_settings
 
-MODULE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": "string"},
-        "description": {"type": "string"},
-        "category": {"type": "string"},
-        "tags": {"type": "array", "items": {"type": "string"}},
-        "target_roles": {"type": "array", "items": {"type": "string"}},
-        "episodes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "description": {"type": "string"},
-                    "key_points": {"type": "array", "items": {"type": "string"}},
-                    "duration_estimate_seconds": {"type": "integer"},
-                    "quiz_questions": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "question": {"type": "string"},
-                                "options": {"type": "array", "items": {"type": "string"}},
-                                "correct_index": {"type": "integer"},
-                                "explanation": {"type": "string"},
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
-ZOOM_MODULE_PROMPT = """
-You are a learning design expert. Given the Zoom meeting transcript and AI summary below,
-create a structured microlearning module following these rules:
+ZOOM_MODULE_PROMPT = """You are a learning design expert. Given the Zoom meeting transcript and AI summary below, create a structured microlearning module.
+
+Rules:
 - Max 5 episodes per module
 - Each episode covers ONE concept (2-10 min equivalent)
 - Episode titles must be action-oriented ("How to...", "Understanding...", "Mastering...")
-- Generate 3 quiz questions per episode (multiple choice, with explanations)
+- Generate 3 quiz questions per episode (multiple choice, 4 options each, with explanations)
 - Tag with relevant skills and target roles based on content
 - Category must be one of: sales, leadership, onboarding, product, engineering, ops
 
@@ -57,12 +33,32 @@ Transcript:
 Summary:
 {summary}
 
-Return a valid JSON object matching the provided schema.
-"""
+Return ONLY a valid JSON object with this exact structure (no markdown, no explanation):
+{{
+  "title": "string",
+  "description": "string",
+  "category": "string",
+  "tags": ["string"],
+  "target_roles": ["string"],
+  "episodes": [
+    {{
+      "title": "string",
+      "description": "string",
+      "key_points": ["string"],
+      "duration_estimate_seconds": 300,
+      "quiz_questions": [
+        {{
+          "question": "string",
+          "options": ["A", "B", "C", "D"],
+          "correct_index": 0,
+          "explanation": "string"
+        }}
+      ]
+    }}
+  ]
+}}"""
 
-QUIZ_PROMPT = """
-You are a learning assessment expert. Given the episode transcript below,
-generate 5 multiple-choice quiz questions that test comprehension of key concepts.
+QUIZ_PROMPT = """You are a learning assessment expert. Given the episode transcript below, generate 5 multiple-choice quiz questions.
 
 Rules:
 - Questions must be answerable from the transcript alone
@@ -73,94 +69,116 @@ Rules:
 Transcript:
 {transcript}
 
-Return a JSON array of question objects with fields:
-question, options (array of 4 strings), correct_index (0-3), explanation
-"""
+Return ONLY a valid JSON array (no markdown, no explanation):
+[
+  {{
+    "question": "string",
+    "options": ["A", "B", "C", "D"],
+    "correct_index": 0,
+    "explanation": "string"
+  }}
+]"""
+
+RECOMMENDATIONS_PROMPT = """You are a learning recommendation engine. Create 4 personalized content rows for a Netflix-style learning feed.
+
+User profile:
+- Role: {role}
+- Department: {department}
+- Points: {points}
+- Streak: {streak_days} days
+
+Available modules (ID | category | title):
+{modules_list}
+
+Return ONLY a valid JSON array (no markdown):
+[
+  {{"row_title": "Trending in Sales", "module_ids": ["id1", "id2", "id3", "id4"]}}
+]
+
+Each row needs 4-8 module IDs. Use only IDs from the list above."""
+
+
+def _extract_json_object(text: str) -> dict:
+    """Extract first JSON object from model output, handling markdown fences."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    return json.loads(text[start:end])
+
+
+def _extract_json_array(text: str) -> list:
+    """Extract first JSON array from model output, handling markdown fences."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    start = text.find("[")
+    end = text.rfind("]") + 1
+    return json.loads(text[start:end])
 
 
 class AIService:
     def __init__(self) -> None:
-        settings = get_settings()
-        self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self.settings = get_settings()
+
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://learn.championsgroup.com",
+            "X-Title": "Champ LMS",
+        }
+
+    async def _chat(self, prompt: str, max_tokens: int = 4096) -> str:
+        """Single chat completion via OpenRouter."""
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{OPENROUTER_BASE}/chat/completions",
+                headers=self._headers(),
+                json={
+                    "model": self.settings.openrouter_model,
+                    "max_tokens": max_tokens,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,  # low temp for consistent JSON output
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
 
     async def build_module_from_zoom(self, transcript: str, summary: str) -> dict:
-        """Call Claude to convert a Zoom transcript into a structured module JSON."""
-        message = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            tools=[
-                {
-                    "name": "create_module",
-                    "description": "Create a structured learning module from a Zoom transcript",
-                    "input_schema": MODULE_SCHEMA,
-                }
-            ],
-            tool_choice={"type": "tool", "name": "create_module"},
-            messages=[
-                {
-                    "role": "user",
-                    "content": ZOOM_MODULE_PROMPT.format(
-                        transcript=transcript, summary=summary
-                    ),
-                }
-            ],
-        )
-
-        for block in message.content:
-            if block.type == "tool_use" and block.name == "create_module":
-                return block.input
-
-        raise ValueError("Claude did not return tool_use block")
+        """Convert a Zoom transcript into a structured module JSON."""
+        prompt = ZOOM_MODULE_PROMPT.format(transcript=transcript[:12000], summary=summary)
+        text = await self._chat(prompt, max_tokens=4096)
+        return _extract_json_object(text)
 
     async def generate_quiz(self, transcript: str) -> list[dict]:
         """Generate quiz questions from an episode transcript."""
-        message = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            messages=[
-                {
-                    "role": "user",
-                    "content": QUIZ_PROMPT.format(transcript=transcript),
-                }
-            ],
-        )
-        text = message.content[0].text
-        # Claude returns JSON array
-        start = text.find("[")
-        end = text.rfind("]") + 1
-        return json.loads(text[start:end])
+        prompt = QUIZ_PROMPT.format(transcript=transcript[:8000])
+        text = await self._chat(prompt, max_tokens=2048)
+        return _extract_json_array(text)
 
-    async def generate_personalized_rows(self, user_profile: dict, available_modules: list[dict]) -> list[dict]:
+    async def generate_personalized_rows(
+        self, user_profile: dict, available_modules: list[dict]
+    ) -> list[dict]:
         """Generate personalized recommendation rows for the home feed."""
-        prompt = f"""
-        You are a learning recommendation engine. Given the user profile and available modules,
-        create 4 personalized content rows for a Netflix-style learning feed.
-
-        User profile:
-        - Role: {user_profile.get('role')}
-        - Department: {user_profile.get('department')}
-        - Points: {user_profile.get('points')}
-        - Streak: {user_profile.get('streak_days')} days
-
-        Available modules (IDs and categories):
-        {json.dumps(available_modules[:50], indent=2)}
-
-        Return a JSON array of rows:
-        [{{"row_title": "string", "module_ids": ["id1", "id2", ...]}}]
-
-        Row titles should be engaging ("Trending in Sales", "Recommended for You", etc.)
-        Each row should have 4-8 module IDs.
-        """
-
-        message = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+        modules_list = "\n".join(
+            f"{m['id']} | {m.get('category', '?')} | {m['title']}"
+            for m in available_modules[:50]
         )
-        text = message.content[0].text
-        start = text.find("[")
-        end = text.rfind("]") + 1
-        return json.loads(text[start:end])
+        prompt = RECOMMENDATIONS_PROMPT.format(
+            role=user_profile.get("role", "learner"),
+            department=user_profile.get("department", ""),
+            points=user_profile.get("points", 0),
+            streak_days=user_profile.get("streak_days", 0),
+            modules_list=modules_list,
+        )
+        text = await self._chat(prompt, max_tokens=1024)
+        return _extract_json_array(text)
 
 
 ai_service = AIService()
