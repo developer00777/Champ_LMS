@@ -38,5 +38,9 @@ RUN chmod +x ./start.sh
 
 ENV NODE_ENV=production
 ENV API_INTERNAL_URL=http://127.0.0.1:8000
+# adapter-node defaults BODY_SIZE_LIMIT to 512KB; the upload flow proxies
+# video files (up to ~1GB) through this SSR server before forwarding to
+# FastAPI, so the SvelteKit-side cap must be raised to match.
+ENV BODY_SIZE_LIMIT=1073741824
 
 CMD ["./start.sh"]
