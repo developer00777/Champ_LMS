@@ -1,124 +1,152 @@
-# Champ LMS v2 — Bunny CDN Architecture
+# Champ LMS v2 — Deployment Plan (Railway + Bunny)
 
-## Why Bunny Over AWS for This Scale
+This is the canonical v2 plan. If any other doc, comment, or script disagrees
+with this file, this file wins.
 
-| Concern | AWS (v1) | Bunny (v2) |
+**One line:** Railway hosts the entire app (frontend, backend, Postgres,
+Redis). Bunny hosts only video and thumbnails. No VPS, no custom domain, no
+DNS, no VPN/Caddy layer — all of that was part of an earlier v1 plan and does
+not apply to v2.
+
+## Split: Railway hosts the app, Bunny hosts video/media
+
+| Concern | Host | Why |
 |---|---|---|
-| Video CDN | CloudFront $0.085/GB | Bunny CDN $0.01/GB (8.5× cheaper) |
-| Video transcoding | MediaConvert $0.015/min | Bunny Stream included in storage cost |
-| Storage | S3 $0.023/GB | Bunny Storage $0.01/GB |
-| DRM / token auth | CloudFront signed URLs (complex) | Bunny Token Auth (single env var) |
-| Image optimization | Lambda@Edge | Bunny Optimizer (built-in) |
-| DNS | Route 53 $0.50/hosted zone | Bunny DNS free |
-| Edge rules (WAF-lite) | WAF $6/mo + rules | Bunny Edge Rules free |
-| Monthly total | ~$120–135 | ~$20–35 |
+| SvelteKit frontend | Railway (Node server, `adapter-node`) | Free `*.up.railway.app` HTTPS domain, no custom domain needed |
+| FastAPI backend | Railway (Docker) | Same — free HTTPS subdomain, git-push deploys |
+| Postgres | Railway plugin | Managed, backed up, injects `DATABASE_URL` automatically |
+| Redis | Railway plugin | Managed, injects `REDIS_URL` automatically |
+| Video (raw + transcoded) | Bunny Stream | Auto-transcodes to HLS, token-authenticated playback, ~8x cheaper than CloudFront |
+| Thumbnails | Bunny Storage + CDN pull zone | Cheap object storage + edge caching, image optimization via URL params |
+
+No custom domain is purchased or required anywhere in this setup. Railway's
+`*.up.railway.app` subdomains and Bunny's `*.b-cdn.net` subdomains both come
+with free, valid HTTPS out of the box.
+
+### Explicitly NOT part of v2
+
+These existed in earlier iterations of the plan and were removed. Do not
+reintroduce them without a deliberate decision to change the architecture:
+
+- **No VPS** — the backend does not run on a self-managed server.
+- **No Caddy / reverse proxy layer** — Railway terminates TLS itself.
+- **No Bunny DNS zone / nameserver changes** — nothing needs a custom domain.
+- **No VPN CIDR allowlisting** — access control is JWT-based at the app layer, not network-based.
+- **No frontend deploy to Bunny Storage** — the frontend is a Node server on Railway (`adapter-node`), not a static build pushed to a CDN.
+- **No AWS (S3 / CloudFront / MediaConvert / MongoDB)** — fully replaced by Bunny (video/thumbnails) and Railway (Postgres/Redis).
 
 ## Bunny Services Used
 
 ### 1. Bunny Stream (Video-as-a-Service)
-- Replaces: AWS MediaConvert + CloudFront video distribution
 - Uploads raw video via API → auto-transcodes to 360p/720p/1080p HLS
-- Token-authenticated playback URLs
-- Webhook on encode completion → update episode status in DB
-- Built-in embed player OR use Video.js with the Bunny HLS URL
+- Token-authenticated playback URLs (HMAC-SHA256, TTL configurable)
+- Webhook on encode completion → `POST /webhooks/bunny` updates episode status in DB
+- Served via Bunny's own `vz-xxxxx.b-cdn.net` hostname — no custom domain needed
 
-### 2. Bunny Storage (Object Storage)
-- Replaces: S3 raw-videos, thumbnails, frontend buckets
-- Storage zones: `champ-lms-raw`, `champ-lms-thumbs`, `champ-lms-frontend`
-- Geo-replication selectable per zone
-- FTP + HTTP API for upload/download
+### 2. Bunny Storage (thumbnails only)
+- Storage zone: `champ-lms-thumbs`
+- The frontend build itself is **not** deployed here — it runs as a Node
+  server on Railway instead (see `frontend/Dockerfile`, `adapter-node`)
 
 ### 3. Bunny CDN Pull Zone
-- Replaces: CloudFront distribution for static assets
-- Pull from Bunny Storage origin
-- Custom domain: `cdn.learn.championsgroup.com`
-- Edge Rules for VPN IP whitelist + mobile UA block (replaces WAF)
+- Pulls from the `champ-lms-thumbs` storage zone
+- Free `*.b-cdn.net` hostname (no custom domain)
+- Bunny Optimizer for on-the-fly WebP conversion / resizing (`?width=&height=`)
+- Optional edge rule: block mobile User-Agents (thumbnails are desktop-only)
 
 ### 4. Bunny Token Auth
-- Replaces: CloudFront signed URLs
-- HMAC-SHA256 token per video request
-- TTL configurable (default 4h)
-- IP-bound tokens for extra security
-
-### 5. Bunny Optimizer
-- Replaces: Lambda@Edge image transforms
-- Auto WebP conversion, resizing via URL params (`?width=400&height=225`)
-- Applied to thumbnail pull zone
-
-### 6. Bunny DNS
-- Replaces: Route 53
-- Free, anycast DNS
-- A records for: `learn.`, `api.`, `cdn.`
-
-### 7. Bunny Edge Rules (on Pull Zone)
-- VPN IP whitelist: block all IPs not in corporate CIDR
-- Mobile UA blocking: block Android/iPhone/iPad
-- These are configured in Bunny dashboard or via Bunny API
+- HMAC-SHA256 token per video request, configurable TTL (default 4h)
 
 ## Architecture Diagram
 
 ```
-USERS (desktop + tablet — VPN-filtered by Bunny Edge Rules)
-                │ HTTPS
-┌───────────────▼────────────────────────────────────────────┐
-│  Bunny CDN Pull Zone                                        │
-│  cdn.learn.championsgroup.com                               │
-│  - Serves SvelteKit static build (Bunny Storage origin)     │
-│  - Caches thumbnails (Bunny Optimizer for WebP/resize)      │
-│  - Edge Rules: VPN IP whitelist + mobile UA block           │
-└───┬──────────────────────────────────────┬─────────────────┘
-    │ API calls                            │ Static assets / thumbs
-┌───▼──────────────┐          ┌────────────▼────────────────┐
-│  Nginx / Caddy   │          │  Bunny Storage               │
-│  Reverse proxy   │          │  - champ-lms-frontend        │
-│  (VPS/Hetzner)   │          │  - champ-lms-thumbs          │
-└───┬──────────────┘          └─────────────────────────────┘
-    │
-┌───▼──────────────────────────────────────────────────────┐
-│  Docker: FastAPI container                                │
-│  - JWT auth (self-managed, no Cognito)                    │
-│  - Calls Bunny Stream API for video URLs                  │
-│  - Generates Bunny token-auth URLs                        │
-└───┬─────────┬───────────────────────────────────────────┘
-    │         │
-┌───▼──┐  ┌──▼───────────────────────────────────────────┐
-│Postgres│ │  Redis                                        │
-│(Docker)│ │  - Watch progress cache                       │
-│        │ │  - Leaderboard sorted sets                    │
-└───────┘  └──────────────────────────────────────────────┘
+USERS
+   │ HTTPS
+┌──▼─────────────────────────────┐      ┌────────────────────────────┐
+│ Railway: SvelteKit (Node)      │      │ Bunny CDN Pull Zone         │
+│ champ-lms-frontend.up.railway  │      │ champ-lms-cdn.b-cdn.net     │
+│  .app                          │      │ (thumbnails only)           │
+└──────────────┬──────────────────┘      └──────────────┬─────────────┘
+               │ API calls                               │ origin pull
+               │                                ┌─────────▼──────────┐
+┌──────────────▼──────────────────┐             │ Bunny Storage        │
+│ Railway: FastAPI (Docker)       │             │ champ-lms-thumbs      │
+│ champ-lms-backend.up.railway.app│             └───────────────────────┘
+│ - JWT auth (self-managed)       │
+│ - Calls Bunny Stream API        │
+│ - Generates Bunny token-auth URLs│
+└──────┬──────────────┬────────────┘
+       │              │
+┌──────▼─────┐  ┌─────▼──────────┐
+│ Railway     │  │ Railway         │
+│ Postgres    │  │ Redis           │
+│ (plugin)    │  │ (plugin)        │
+└─────────────┘  └─────────────────┘
 
-┌─────────────────────────────────────────────────────────┐
-│  Bunny Stream                                            │
-│  - Video library per environment                         │
-│  - Webhook on encode complete → POST /webhooks/bunny     │
-│  - Token-auth HLS playback via pull zone                 │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  Bunny Stream                                    │
+│  - Video library                                 │
+│  - Webhook on encode complete → backend webhook  │
+│  - Token-auth HLS playback                       │
+└───────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────┐
-│  Zoom webhook → FastAPI → Redis queue → Worker process   │
-│  - Claude API for transcript → module JSON               │
-│  - Upload recording to Bunny Stream via API              │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  Zoom webhook → FastAPI → Redis queue → worker   │
+│  - OpenRouter (Claude/Gemini/etc) for transcript  │
+│    → module JSON                                  │
+│  - Upload recording to Bunny Stream via API       │
+└───────────────────────────────────────────────────┘
 ```
 
 ## Cost Estimate (30 concurrent users, MVP)
 
 | Service | Config | ~Monthly |
 |---|---|---|
-| VPS (Hetzner CX22) | 2 vCPU / 4 GB RAM | ~$4.50 |
+| Railway (backend + frontend + Postgres + Redis) | Hobby/starter usage | ~$5–20 (usage-based) |
 | Bunny CDN | 500 GB transfer | ~$5 |
 | Bunny Stream | 100 GB storage + 500 GB transfer | ~$12 |
-| Bunny Storage | 50 GB (thumbs + frontend) | ~$0.50 |
-| Postgres (managed, Supabase free or same VPS) | 500 MB DB | ~$0 |
-| Redis (same VPS, Docker) | — | ~$0 |
-| Domain / TLS (Caddy auto-HTTPS) | — | ~$12/yr |
-| Anthropic API | Claude Sonnet | ~$5–15 |
-| **Total** | | **~$25–40/mo** |
+| Bunny Storage | ~5 GB (thumbnails) | ~$0.10 |
+| OpenRouter API | cheap model (Gemini Flash / DeepSeek) | ~$5–15 |
+| **Total** | | **~$25–50/mo** |
+
+No domain registration cost — everything runs on free provider subdomains.
 
 ## Bunny API Keys Needed
 
-1. **Bunny Account API Key** — for Storage + DNS zone management
-2. **Bunny Stream API Key** — for video library management  
-3. **Bunny Storage Zone Password** — per-zone FTP/HTTP access
+1. **Bunny Account API Key** — for Storage zone management
+2. **Bunny Stream API Key** — for video library management
+3. **Bunny Storage Zone Password** — HTTP API access for the thumbs zone
 4. **Bunny Token Auth Secret** — HMAC key for signed playback URLs
 5. **Bunny Stream CDN Hostname** — e.g. `vz-abc123.b-cdn.net`
+
+## First-time setup order
+
+1. **Bunny dashboard**: create a Bunny Stream video library manually (no API for library creation) → note its ID and `vz-xxxxx.b-cdn.net` hostname → enable Token Authentication → copy the secret.
+2. **Bunny setup script**: `make setup-bunny` — creates the thumbnail storage zone + CDN pull zone, verifies the Stream library, prints the values to copy into env vars.
+3. **Railway project**: create one Railway project with four services — `backend` (Docker), `frontend` (Docker), `Postgres` (plugin), `Redis` (plugin).
+4. **Env vars** — set on the `backend` service (see `backend/.env.example`):
+   - `DATABASE_URL` → reference `${{Postgres.DATABASE_URL}}`
+   - `REDIS_URL` → reference `${{Redis.REDIS_URL}}`
+   - All `BUNNY_*` values from steps 1–2
+   - `CORS_ORIGINS` → the frontend service's Railway domain
+   - `OPENROUTER_API_KEY`, `ZOOM_*` as needed
+5. **Env vars** — set on the `frontend` service:
+   - `VITE_API_URL` (build-time) → the backend service's Railway domain
+6. **Deploy**: `railway link` each of `backend/` and `frontend/` to its Railway service, then `make deploy`.
+7. **Migrate**: `make migrate` (or run once via `railway run` against the backend service) to apply Alembic migrations against the Railway Postgres instance.
+8. **Bunny Stream webhook**: point it at `<backend-railway-domain>/webhooks/bunny`.
+
+## Deploying (day-to-day)
+
+```bash
+# One-time Bunny setup (thumbnail storage zone + CDN pull zone)
+make setup-bunny
+
+# Push both services to Railway (requires `railway login`, and each
+# directory linked to its Railway service via `railway link`)
+make deploy
+```
+
+Set `CORS_ORIGINS` on the backend service to the frontend's Railway domain,
+and `VITE_API_URL` as a build-time variable on the frontend service pointing
+at the backend's Railway domain.

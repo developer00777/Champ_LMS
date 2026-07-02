@@ -1,4 +1,4 @@
-.PHONY: dev dev-api dev-fe build deploy-frontend setup-bunny
+.PHONY: dev dev-api dev-fe build setup-bunny migrate deploy
 
 # Start full local dev stack
 dev:
@@ -11,15 +11,11 @@ dev-api:
 dev-fe:
 	cd frontend && npm install && npm run dev
 
-# Build frontend static files
+# Build frontend (Node server via adapter-node, deployed as-is to Railway)
 build:
 	cd frontend && npm run build
 
-# Deploy frontend build to Bunny Storage
-deploy-frontend: build
-	python infrastructure/deploy_frontend.py
-
-# Run Bunny setup (create storage zones, pull zone, stream library, DNS)
+# Run Bunny setup (create thumbnail storage zone, pull zone, verify stream library)
 setup-bunny:
 	python infrastructure/setup_bunny.py
 
@@ -27,7 +23,7 @@ setup-bunny:
 migrate:
 	cd backend && alembic upgrade head
 
-# Build + push Docker image (set REGISTRY env var)
-docker-push:
-	docker build -t $(REGISTRY)/champ-lms-v2-api:latest ./backend
-	docker push $(REGISTRY)/champ-lms-v2-api:latest
+# Deploy both services to Railway (requires Railway CLI: `railway login` first)
+deploy:
+	cd backend && railway up --service backend
+	cd frontend && railway up --service frontend

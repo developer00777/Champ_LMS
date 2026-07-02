@@ -80,25 +80,5 @@ class BunnyStorageService:
         """Convenience: CDN URL optimised for 16:9 video card thumbnail."""
         return self.cdn_url(bunny_path, width=width, height=height)
 
-    async def upload_frontend_build(self, file_map: dict[str, tuple[bytes, str]]) -> None:
-        """
-        Upload a SvelteKit static build to the frontend storage zone.
-        file_map: {relative_path: (file_bytes, content_type)}
-        """
-        zone = self.settings.bunny_storage_frontend_zone
-        async with httpx.AsyncClient() as client:
-            for rel_path, (data, ct) in file_map.items():
-                url = f"{self._base_url(zone)}/{rel_path}"
-                resp = await client.put(
-                    url,
-                    content=data,
-                    headers={
-                        "AccessKey": self.settings.bunny_storage_frontend_password,
-                        "Content-Type": ct,
-                    },
-                    timeout=60,
-                )
-                resp.raise_for_status()
-
 
 bunny_storage = BunnyStorageService()

@@ -130,7 +130,7 @@ class AIService:
         return {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://learn.championsgroup.com",
+            "HTTP-Referer": "https://champ-lms.up.railway.app",
             "X-Title": "Champ LMS",
         }
 

@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 
 
@@ -8,19 +9,26 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-prod"
     access_token_expire_minutes: int = 480
 
-    # Database
+    # Database — Railway's Postgres plugin injects DATABASE_URL as
+    # postgres:// or postgresql://; asyncpg needs the +asyncpg driver prefix.
     database_url: str = "postgresql+asyncpg://dev:dev@localhost/champlmsv2"
 
-    # Redis
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, v: str) -> str:
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+asyncpg://" + v[len(prefix):]
+        return v
+
+    # Redis — Railway's Redis plugin injects REDIS_URL directly.
     redis_url: str = "redis://localhost:6379"
 
-    # Bunny Storage
+    # Bunny Storage (thumbnails only — frontend is hosted on Railway, not Bunny)
     bunny_account_api_key: str = ""
     bunny_storage_host: str = "storage.bunnycdn.com"
     bunny_storage_thumbs_zone: str = "champ-lms-thumbs"
     bunny_storage_thumbs_password: str = ""
-    bunny_storage_frontend_zone: str = "champ-lms-frontend"
-    bunny_storage_frontend_password: str = ""
 
     # Bunny CDN Pull Zone (serves thumbnails + static)
     bunny_cdn_hostname: str = ""
