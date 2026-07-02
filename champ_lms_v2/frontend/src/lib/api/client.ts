@@ -1,5 +1,13 @@
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
 
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('champ_token');
   const res = await fetch(`${BASE}${path}`, {
@@ -12,7 +20,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? 'Request failed');
+    throw new ApiError(res.status, err.detail ?? 'Request failed');
   }
   return res.json();
 }

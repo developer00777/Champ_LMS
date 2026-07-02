@@ -247,6 +247,23 @@ async def get_stream_url(
     ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
+
+    if ep.status != "ready" and ep.bunny_video_guid:
+        # Webhook delivery isn't guaranteed (misconfigured URL, dropped
+        # request, etc). Fall back to asking Bunny directly so an episode
+        # doesn't get stuck in "processing" forever if the webhook never
+        # arrives.
+        video = await bunny_stream.get_video(ep.bunny_video_guid)
+        bunny_status = video.get("status")
+        if bunny_status == 4:  # Finished
+            ep.status = "ready"
+            if video.get("length"):
+                ep.duration_seconds = int(video["length"])
+            await ep.save()
+        elif bunny_status in (5, 6):  # Error / UploadFailed
+            ep.status = "failed"
+            await ep.save()
+
     if ep.status != "ready":
         raise HTTPException(status_code=425, detail="Video is still processing")
     if not ep.bunny_video_guid:
