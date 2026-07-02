@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-prod"
     access_token_expire_minutes: int = 480
 
+    # Hardcoded admin bootstrap — if both are set, this account is created
+    # (or promoted to admin) on every startup. There is no other way to
+    # create an admin: POST /auth/register always creates role="learner".
+    admin_email: str = ""
+    admin_password: str = ""
+
     # Database — set MONGODB_URL directly, or rely on Railway's MongoDB
     # plugin, which injects MONGO_URL instead (picked up as a fallback
     # below since the plugin's variable name isn't ours to control).

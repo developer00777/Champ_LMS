@@ -154,11 +154,27 @@ No domain registration cost — everything runs on free provider subdomains.
 4. **Env vars** — set on the app service (see `backend/.env.example`):
    - `MONGODB_URL` → reference `${{MongoDB.MONGO_URL}}` (or leave unset — `config.py` falls back to Railway's `MONGO_URL` automatically)
    - `REDIS_URL` → reference `${{Redis.REDIS_URL}}`
+   - `SECRET_KEY` → random 32+ char string, e.g. `openssl rand -hex 32`
+   - `ADMIN_EMAIL` / `ADMIN_PASSWORD` → see "Admin account" below — this is the only way to create an admin
    - All `BUNNY_*` values from steps 1–2
    - `CORS_ORIGINS` → `http://localhost:5173` (production doesn't need it — same origin)
    - `OPENROUTER_API_KEY`, `ZOOM_*` as needed
 5. **Deploy**: `railway link` this directory to the Railway service, then `make deploy`. No migration step needed — `init_beanie()` creates indexes automatically against the Railway MongoDB instance on startup.
 6. **Bunny Stream webhook**: point it at `<railway-domain>/api/webhooks/bunny-stream`.
+
+## Admin account
+
+`POST /auth/register` always creates `role="learner"` — it does **not** accept
+a `role` field (removed 2026-07-02; it previously let any caller self-promote
+to admin by putting `"role": "admin"` in the request body, which was a real
+privilege-escalation hole). There is no in-app "promote to admin" endpoint.
+
+The only way to get an admin account is the `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+env vars: if both are set, `seed_admin()` (called from `main.py`'s lifespan on
+every startup) creates that account with `role="admin"` if it doesn't exist,
+or promotes it to admin if it already exists as a learner. Idempotent — safe
+to leave set across redeploys. Set these on the Railway app service, redeploy
+once, then log in with `POST /auth/token` using that email/password.
 
 ## Deploying (day-to-day)
 

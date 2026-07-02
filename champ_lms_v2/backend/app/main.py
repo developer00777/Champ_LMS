@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.db import init_db, close_db
+from app.core.auth import seed_admin
 from app.core.redis import close_redis
 from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks
 
@@ -12,6 +13,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await seed_admin()
     yield
     await close_redis()
     close_db()

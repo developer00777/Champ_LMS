@@ -63,3 +63,28 @@ async def require_admin(user: Annotated[User, Depends(get_current_user)]) -> Use
     if user.role not in ("admin", "ld_lead"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+async def seed_admin() -> None:
+    """
+    Create (or promote) the hardcoded admin account from ADMIN_EMAIL/
+    ADMIN_PASSWORD env vars. Idempotent — safe to run on every startup.
+    This is the only way to create an admin; POST /auth/register always
+    creates role="learner".
+    """
+    if not settings.admin_email or not settings.admin_password:
+        return
+
+    user = await User.find_one(User.email == settings.admin_email)
+    if user:
+        if user.role != "admin":
+            user.role = "admin"
+            await user.save()
+        return
+
+    await User(
+        email=settings.admin_email,
+        full_name="Admin",
+        hashed_password=hash_password(settings.admin_password),
+        role="admin",
+    ).insert()

@@ -13,7 +13,6 @@ class RegisterRequest(BaseModel):
     full_name: str
     password: str
     department: str | None = None
-    role: str = "learner"
 
 
 class TokenResponse(BaseModel):
@@ -45,7 +44,7 @@ async def register(body: RegisterRequest):
         full_name=body.full_name,
         hashed_password=hash_password(body.password),
         department=body.department,
-        role=body.role,
+        role="learner",
     )
     await user.insert()
     return user
