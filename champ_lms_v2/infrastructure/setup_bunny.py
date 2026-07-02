@@ -3,7 +3,7 @@
 Bunny setup script — run once to configure Bunny Storage + CDN for thumbnails.
 Video (Bunny Stream) library is created manually in the Bunny dashboard.
 
-Champ LMS v2 hosts the app itself on Railway (frontend + backend + Postgres +
+Champ LMS v2 hosts the app itself on Railway (frontend + backend + MongoDB +
 Redis), no custom domain. Bunny is used only for video (Stream) and thumbnail
 storage/CDN — both of which work fine on Bunny's free b-cdn.net subdomains.
 

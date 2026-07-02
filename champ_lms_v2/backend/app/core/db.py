@@ -1,23 +1,24 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import DeclarativeBase
+from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
 from app.core.config import get_settings
 
-settings = get_settings()
-
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,
-    pool_size=10,
-    max_overflow=20,
-)
-
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+_client: AsyncIOMotorClient | None = None
 
 
-class Base(DeclarativeBase):
-    pass
+async def init_db() -> None:
+    global _client
+    settings = get_settings()
+    _client = AsyncIOMotorClient(settings.mongodb_url)
+    from app.models import DOCUMENT_MODELS
+
+    await init_beanie(
+        database=_client[settings.mongodb_db_name],
+        document_models=DOCUMENT_MODELS,
+    )
 
 
-async def get_db() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        yield session
+def close_db() -> None:
+    global _client
+    if _client:
+        _client.close()
+        _client = None

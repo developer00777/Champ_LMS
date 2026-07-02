@@ -1,33 +1,31 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.db import Base
+from beanie import Document
+from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
-class Badge(Base):
-    __tablename__ = "badges"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
+class Badge(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str | None = None
     # Bunny Storage path, served via CDN
-    icon_bunny_path: Mapped[str | None] = mapped_column(String(500))
+    icon_bunny_path: str | None = None
     # {"type": "complete_module", "count": 1} etc.
-    criteria: Mapped[dict | None] = mapped_column(JSONB)
+    criteria: dict | None = None
+
+    class Settings:
+        name = "badges"
 
 
-class UserBadge(Base):
-    __tablename__ = "user_badges"
-    __table_args__ = (UniqueConstraint("user_id", "badge_id"),)
+class UserBadge(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str  # references users.id
+    badge_id: str  # references badges.id
+    earned_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
-    badge_id: Mapped[str] = mapped_column(ForeignKey("badges.id"))
-    earned_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-    user: Mapped["User"] = relationship(back_populates="badges")
-    badge: Mapped["Badge"] = relationship()
+    class Settings:
+        name = "user_badges"
+        indexes = [
+            IndexModel([("user_id", ASCENDING), ("badge_id", ASCENDING)], unique=True),
+        ]

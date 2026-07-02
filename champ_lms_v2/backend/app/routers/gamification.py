@@ -1,8 +1,6 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.core.db import get_db
+from beanie.operators import In
 from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from app.models.user import User
@@ -17,35 +15,31 @@ router = APIRouter(tags=["gamification"])
 @router.get("/leaderboard")
 async def leaderboard(
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[aioredis.Redis, Depends(get_redis)],
     department: str | None = None,
     limit: int = 10,
 ):
-    svc = GamificationService(redis, db)
+    svc = GamificationService(redis)
     return await svc.get_leaderboard(department=department, limit=limit)
 
 
 @router.get("/badges/me")
-async def my_badges(
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    result = await db.execute(
-        select(UserBadge, Badge)
-        .join(Badge, UserBadge.badge_id == Badge.id)
-        .where(UserBadge.user_id == user.id)
-    )
-    rows = result.all()
+async def my_badges(user: Annotated[User, Depends(get_current_user)]):
+    user_badges = await UserBadge.find(UserBadge.user_id == user.id).to_list()
+    if not user_badges:
+        return []
+    badge_ids = [ub.badge_id for ub in user_badges]
+    badges = {b.id: b for b in await Badge.find(In(Badge.id, badge_ids)).to_list()}
     return [
         {
             "badge_id": ub.id,
-            "name": badge.name,
-            "description": badge.description,
-            "icon_url": bunny_storage.cdn_url(badge.icon_bunny_path) if badge.icon_bunny_path else None,
+            "name": badges[ub.badge_id].name,
+            "description": badges[ub.badge_id].description,
+            "icon_url": bunny_storage.cdn_url(badges[ub.badge_id].icon_bunny_path)
+            if badges[ub.badge_id].icon_bunny_path else None,
             "earned_at": ub.earned_at.isoformat(),
         }
-        for ub, badge in rows
+        for ub in user_badges if ub.badge_id in badges
     ]
 
 

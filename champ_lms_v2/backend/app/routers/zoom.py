@@ -8,10 +8,7 @@ import hmac
 import hashlib
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from pydantic import BaseModel
-from app.core.db import get_db, AsyncSessionLocal
 from app.core.auth import get_current_user, require_admin
 from app.core.config import get_settings
 from app.models.user import User
@@ -38,7 +35,6 @@ class AddSessionBody(BaseModel):
 async def zoom_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
     Receives Zoom webhook (recording.completed).
@@ -73,9 +69,7 @@ async def zoom_webhook(
         topic=topic,
         recording_download_url=recording_url,
     )
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
+    await session.insert()
 
     background_tasks.add_task(_process_zoom_session, session.id)
     return {"status": "queued", "session_id": session.id}
@@ -86,90 +80,86 @@ async def _process_zoom_session(session_id: str) -> None:
     Background task: fetch transcript from Zoom, run AI pipeline,
     create module + episodes, upload recording to Bunny Stream.
     """
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(ZoomSession).where(ZoomSession.id == session_id))
-        session = result.scalar_one_or_none()
-        if not session:
+    session = await ZoomSession.get(session_id)
+    if not session:
+        return
+
+    try:
+        # 1. Fetch transcript from Zoom (if available)
+        transcript = session.transcript or ""
+        summary = session.summary or session.topic or ""
+
+        if session.zoom_meeting_id and not transcript:
+            try:
+                recordings = await zoom_service.get_recording(session.zoom_meeting_id)
+                # Zoom transcript is a separate file in recording_files
+                transcript_url = next(
+                    (f["download_url"] for f in recordings.get("recording_files", [])
+                     if f.get("file_type") == "TRANSCRIPT"),
+                    None,
+                )
+                if transcript_url:
+                    raw = await zoom_service.download_recording_bytes(transcript_url)
+                    transcript = raw.decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+
+        if not transcript:
             return
 
-        try:
-            # 1. Fetch transcript from Zoom (if available)
-            transcript = session.transcript or ""
-            summary = session.summary or session.topic or ""
+        # 2. Claude AI → module structure
+        module_data = await ai_service.build_module_from_zoom(transcript, summary)
 
-            if session.zoom_meeting_id and not transcript:
-                try:
-                    recordings = await zoom_service.get_recording(session.zoom_meeting_id)
-                    # Zoom transcript is a separate file in recording_files
-                    transcript_url = next(
-                        (f["download_url"] for f in recordings.get("recording_files", [])
-                         if f.get("file_type") == "TRANSCRIPT"),
-                        None,
-                    )
-                    if transcript_url:
-                        raw = await zoom_service.download_recording_bytes(transcript_url)
-                        transcript = raw.decode("utf-8", errors="ignore")
-                except Exception:
-                    pass
+        # 3. Create Module record
+        module = Module(
+            title=module_data["title"],
+            description=module_data.get("description"),
+            category=module_data.get("category"),
+            tags=module_data.get("tags"),
+            target_roles=module_data.get("target_roles"),
+            source_type="zoom",
+            zoom_session_id=session_id,
+            total_episodes=len(module_data.get("episodes", [])),
+        )
+        await module.insert()
 
-            if not transcript:
-                return
-
-            # 2. Claude AI → module structure
-            module_data = await ai_service.build_module_from_zoom(transcript, summary)
-
-            # 3. Create Module record
-            module = Module(
-                title=module_data["title"],
-                description=module_data.get("description"),
-                category=module_data.get("category"),
-                tags=module_data.get("tags"),
-                target_roles=module_data.get("target_roles"),
-                source_type="zoom",
-                zoom_session_id=session_id,
-                total_episodes=len(module_data.get("episodes", [])),
+        # 4. Create Episode records
+        for i, ep_data in enumerate(module_data.get("episodes", []), 1):
+            ep = Episode(
+                module_id=module.id,
+                title=ep_data["title"],
+                description=ep_data.get("description"),
+                sequence_order=i,
+                duration_seconds=ep_data.get("duration_estimate_seconds"),
+                transcript=transcript,
+                ai_summary="\n".join(ep_data.get("key_points", [])),
+                status="pending",
             )
-            db.add(module)
-            await db.flush()
+            await ep.insert()
 
-            # 4. Create Episode records
-            for i, ep_data in enumerate(module_data.get("episodes", []), 1):
-                ep = Episode(
-                    module_id=module.id,
-                    title=ep_data["title"],
-                    description=ep_data.get("description"),
-                    sequence_order=i,
-                    duration_seconds=ep_data.get("duration_estimate_seconds"),
-                    transcript=transcript,
-                    ai_summary="\n".join(ep_data.get("key_points", [])),
-                    status="pending",
-                )
-                db.add(ep)
+        # 5. Upload recording to Bunny Stream (if URL available)
+        if session.recording_download_url:
+            video_obj = await bunny_stream.create_video(f"{module.title} — Full Recording")
+            video_guid = video_obj["guid"]
+            # Instruct Bunny to fetch the video directly from Zoom URL
+            await bunny_stream.upload_video_from_url(video_guid, session.recording_download_url)
+            session.bunny_video_id = video_guid
 
-            # 5. Upload recording to Bunny Stream (if URL available)
-            if session.recording_download_url:
-                video_obj = await bunny_stream.create_video(f"{module.title} — Full Recording")
-                video_guid = video_obj["guid"]
-                # Instruct Bunny to fetch the video directly from Zoom URL
-                await bunny_stream.upload_video_from_url(video_guid, session.recording_download_url)
-                session.bunny_video_id = video_guid
+        session.module_id = module.id
+        session.processed = True
+        await session.save()
 
-            session.module_id = module.id
-            session.processed = True
-            await db.commit()
-
-        except Exception as exc:
-            # Log but don't crash — session stays unprocessed for retry
-            import structlog
-            log = structlog.get_logger()
-            log.error("zoom_processing_failed", session_id=session_id, error=str(exc))
+    except Exception as exc:
+        # Log but don't crash — session stays unprocessed for retry
+        import structlog
+        log = structlog.get_logger()
+        log.error("zoom_processing_failed", session_id=session_id, error=str(exc))
 
 
 @router.post("/sessions")
 async def add_manual_session(
     body: AddSessionBody,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     background_tasks: BackgroundTasks,
 ):
     """Manually add a Zoom session (paste transcript + summary from Zoom AI)."""
@@ -180,9 +170,7 @@ async def add_manual_session(
         transcript=body.transcript,
         recording_download_url=body.recording_download_url,
     )
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
+    await session.insert()
     background_tasks.add_task(_process_zoom_session, session.id)
     return {"session_id": session.id, "status": "processing"}
 
@@ -191,12 +179,10 @@ async def add_manual_session(
 async def build_module_from_session(
     session_id: str,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     background_tasks: BackgroundTasks,
 ):
     """Manually trigger AI module build for an existing session."""
-    result = await db.execute(select(ZoomSession).where(ZoomSession.id == session_id))
-    session = result.scalar_one_or_none()
+    session = await ZoomSession.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -205,12 +191,8 @@ async def build_module_from_session(
 
 
 @router.get("/sessions")
-async def list_sessions(
-    admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    result = await db.execute(select(ZoomSession).order_by(ZoomSession.created_at.desc()))
-    sessions = result.scalars().all()
+async def list_sessions(admin: Annotated[User, Depends(require_admin)]):
+    sessions = await ZoomSession.find_all().sort(-ZoomSession.created_at).to_list()
     return [
         {
             "id": s.id,

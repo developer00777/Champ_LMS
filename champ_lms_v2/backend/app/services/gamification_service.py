@@ -3,8 +3,7 @@ Gamification service — points, streaks, leaderboard via Redis sorted sets.
 """
 from datetime import datetime, timezone, timedelta
 import redis.asyncio as aioredis
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from beanie.operators import Set, Inc, In
 from app.models.user import User
 from app.models.gamification import Badge, UserBadge
 
@@ -25,9 +24,8 @@ BADGE_CRITERIA = {
 
 
 class GamificationService:
-    def __init__(self, redis: aioredis.Redis, db: AsyncSession) -> None:
+    def __init__(self, redis: aioredis.Redis) -> None:
         self.redis = redis
-        self.db = db
 
     async def award_points(self, user_id: str, action: str, department: str) -> int:
         pts = POINTS.get(action, 0)
@@ -39,11 +37,10 @@ class GamificationService:
         if department:
             await self.redis.zincrby(f"leaderboard:dept:{department}", pts, user_id)
 
-        # Persist to DB
-        await self.db.execute(
-            update(User).where(User.id == user_id).values(points=User.points + pts)
-        )
-        await self.db.commit()
+        # Persist to DB — atomic increment, mirrors the old SQL `points = points + pts`
+        user = await User.get(user_id)
+        if user:
+            await user.update(Inc({User.points: pts}))
         return pts
 
     async def record_activity(self, user_id: str) -> int:
@@ -70,13 +67,11 @@ class GamificationService:
         await self.redis.set(last_key, today)
 
         # Persist streak to DB
-        await self.db.execute(
-            update(User).where(User.id == user_id).values(
-                streak_days=streak,
-                last_activity_at=datetime.now(timezone.utc),
+        user = await User.get(user_id)
+        if user:
+            await user.update(
+                Set({User.streak_days: streak, User.last_activity_at: datetime.now(timezone.utc)})
             )
-        )
-        await self.db.commit()
 
         if streak == 7:
             await self.award_points(user_id, "streak_7day", "")
@@ -86,10 +81,15 @@ class GamificationService:
     async def get_leaderboard(self, department: str | None = None, limit: int = 10) -> list[dict]:
         key = f"leaderboard:dept:{department}" if department else "leaderboard:global"
         entries = await self.redis.zrevrange(key, 0, limit - 1, withscores=True)
+        if not entries:
+            return []
+
+        user_ids = [user_id for user_id, _ in entries]
+        users = {u.id: u for u in await User.find(In(User.id, user_ids)).to_list()}
+
         result = []
         for rank, (user_id, score) in enumerate(entries, 1):
-            result_obj = await self.db.execute(select(User).where(User.id == user_id))
-            user = result_obj.scalar_one_or_none()
+            user = users.get(user_id)
             if user:
                 result.append({
                     "rank": rank,
@@ -104,8 +104,7 @@ class GamificationService:
     async def check_and_award_badges(self, user_id: str, action: str) -> list[str]:
         """Check badge criteria and award any newly earned badges. Returns badge names earned."""
         earned = []
-        result = await self.db.execute(select(Badge))
-        badges = result.scalars().all()
+        badges = await Badge.find_all().to_list()
 
         for badge in badges:
             if not badge.criteria:
@@ -114,19 +113,14 @@ class GamificationService:
                 continue
 
             # Check if already earned
-            existing = await self.db.execute(
-                select(UserBadge).where(
-                    UserBadge.user_id == user_id,
-                    UserBadge.badge_id == badge.id,
-                )
+            existing = await UserBadge.find_one(
+                UserBadge.user_id == user_id,
+                UserBadge.badge_id == badge.id,
             )
-            if existing.scalar_one_or_none():
+            if existing:
                 continue
 
-            ub = UserBadge(user_id=user_id, badge_id=badge.id)
-            self.db.add(ub)
+            await UserBadge(user_id=user_id, badge_id=badge.id).insert()
             earned.append(badge.name)
 
-        if earned:
-            await self.db.commit()
         return earned

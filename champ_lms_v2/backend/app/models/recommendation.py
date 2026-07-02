@@ -1,18 +1,19 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
-from app.core.db import Base
+from beanie import Document
+from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
-class Recommendation(Base):
-    __tablename__ = "recommendations"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True)
+class Recommendation(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str  # references users.id
     # [{row_title, module_ids[]}]
-    rows: Mapped[list] = mapped_column(JSONB, nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    rows: list
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "recommendations"
+        indexes = [
+            IndexModel([("user_id", ASCENDING)], unique=True),
+        ]

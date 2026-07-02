@@ -4,7 +4,7 @@ This is the canonical v2 plan. If any other doc, comment, or script disagrees
 with this file, this file wins.
 
 **One line:** Railway hosts the entire app as **one service, one container**
-(SvelteKit + FastAPI together, Postgres + Redis as plugins). Bunny hosts only
+(SvelteKit + FastAPI together, MongoDB + Redis as plugins). Bunny hosts only
 video and thumbnails. No VPS, no custom domain, no DNS, no VPN/Caddy layer —
 all of that was part of an earlier v1 plan and does not apply to v2.
 
@@ -13,9 +13,9 @@ all of that was part of an earlier v1 plan and does not apply to v2.
 | Concern | Host | Why |
 |---|---|---|
 | SvelteKit + FastAPI (combined) | Railway, **one service** (Docker) | Single free `*.up.railway.app` HTTPS domain, one deploy, no CORS between frontend/backend |
-| Postgres | Railway plugin | Managed, backed up, injects `DATABASE_URL` automatically |
-| Redis | Railway plugin | Managed, injects `REDIS_URL` automatically |
-| Video (raw + transcoded) | Bunny Stream | Auto-transcodes to HLS, token-authenticated playback, ~8x cheaper than CloudFront |
+| MongoDB | Railway plugin | Managed, backed up, injects `MONGO_URL` automatically. App data layer (Beanie ODM over Motor) — users, modules, episodes, progress, badges, assessments, etc. |
+| Redis | Railway plugin | Managed, injects `REDIS_URL` automatically. Leaderboard sorted sets, streak counters, a short-lived progress cache — not the source of truth for app data. |
+| Video (raw + transcoded) | Bunny Stream | Auto-transcodes to HLS, token-authenticated playback, ~8x cheaper than CloudFront. Video bytes never touch MongoDB or Redis — the DB only stores the Bunny video GUID/status pointer. |
 | Thumbnails | Bunny Storage + CDN pull zone | Cheap object storage + edge caching, image optimization via URL params |
 
 No custom domain is purchased or required anywhere in this setup. Railway's
@@ -56,7 +56,8 @@ reintroduce them without a deliberate decision to change the architecture:
 - **No VPN CIDR allowlisting** — access control is JWT-based at the app layer, not network-based.
 - **No frontend deploy to Bunny Storage** — the frontend is a Node server bundled into the same container as the backend, not a static build pushed to a CDN.
 - **No separate frontend/backend Railway services** — one Railway service, one Dockerfile, one container. Don't recreate `backend/railway.json` / `frontend/railway.json` / per-directory Dockerfiles; the root `Dockerfile` and `railway.json` are the only ones that exist.
-- **No AWS (S3 / CloudFront / MediaConvert / MongoDB)** — fully replaced by Bunny (video/thumbnails) and Railway (Postgres/Redis).
+- **No AWS (S3 / CloudFront / MediaConvert)** — fully replaced by Bunny (video/thumbnails) and Railway (MongoDB/Redis).
+- **No PostgreSQL / SQLAlchemy / Alembic** — the app migrated (2026-07-02) from Postgres to MongoDB via Beanie/Motor. There is no `alembic/` directory, no `DATABASE_URL`, no `asyncpg` — don't reintroduce them. Schema is defined by the Beanie `Document` classes in `backend/app/models/`; indexes are created automatically by `init_beanie()` on startup, no separate migration step.
 
 ## Bunny Services Used
 
@@ -105,7 +106,7 @@ USERS
          │              │
 ┌────────▼───┐  ┌───────▼────────┐
 │ Railway     │  │ Railway         │
-│ Postgres    │  │ Redis           │
+│ MongoDB     │  │ Redis           │
 │ (plugin)    │  │ (plugin)        │
 └─────────────┘  └─────────────────┘
 
@@ -128,7 +129,7 @@ USERS
 
 | Service | Config | ~Monthly |
 |---|---|---|
-| Railway (one service + Postgres + Redis) | Hobby/starter usage | ~$5–15 (usage-based) |
+| Railway (one service + MongoDB + Redis) | Hobby/starter usage | ~$5–15 (usage-based) |
 | Bunny CDN | 500 GB transfer | ~$5 |
 | Bunny Stream | 100 GB storage + 500 GB transfer | ~$12 |
 | Bunny Storage | ~5 GB (thumbnails) | ~$0.10 |
@@ -149,16 +150,15 @@ No domain registration cost — everything runs on free provider subdomains.
 
 1. **Bunny dashboard**: create a Bunny Stream video library manually (no API for library creation) → note its ID and `vz-xxxxx.b-cdn.net` hostname → enable Token Authentication → copy the secret.
 2. **Bunny setup script**: `make setup-bunny` — creates the thumbnail storage zone + CDN pull zone, verifies the Stream library, prints the values to copy into env vars.
-3. **Railway project**: create one Railway project with three services — the app (Docker, root `Dockerfile`), `Postgres` (plugin), `Redis` (plugin).
+3. **Railway project**: create one Railway project with three services — the app (Docker, root `Dockerfile`), `MongoDB` (plugin), `Redis` (plugin).
 4. **Env vars** — set on the app service (see `backend/.env.example`):
-   - `DATABASE_URL` → reference `${{Postgres.DATABASE_URL}}`
+   - `MONGODB_URL` → reference `${{MongoDB.MONGO_URL}}` (or leave unset — `config.py` falls back to Railway's `MONGO_URL` automatically)
    - `REDIS_URL` → reference `${{Redis.REDIS_URL}}`
    - All `BUNNY_*` values from steps 1–2
    - `CORS_ORIGINS` → `http://localhost:5173` (production doesn't need it — same origin)
    - `OPENROUTER_API_KEY`, `ZOOM_*` as needed
-5. **Deploy**: `railway link` this directory to the Railway service, then `make deploy`.
-6. **Migrate**: `make migrate` (or run once via `railway run` against the service) to apply Alembic migrations against the Railway Postgres instance.
-7. **Bunny Stream webhook**: point it at `<railway-domain>/api/webhooks/bunny-stream`.
+5. **Deploy**: `railway link` this directory to the Railway service, then `make deploy`. No migration step needed — `init_beanie()` creates indexes automatically against the Railway MongoDB instance on startup.
+6. **Bunny Stream webhook**: point it at `<railway-domain>/api/webhooks/bunny-stream`.
 
 ## Deploying (day-to-day)
 

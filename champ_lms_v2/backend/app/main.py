@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
-from app.core.db import engine, Base
+from app.core.db import init_db, close_db
 from app.core.redis import close_redis
 from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks
 
@@ -11,11 +11,10 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables on startup (use Alembic in production)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await init_db()
     yield
     await close_redis()
+    close_db()
 
 
 app = FastAPI(

@@ -1,23 +1,21 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column
-from app.core.db import Base
+from beanie import Document
+from pydantic import Field
 
 
-class ZoomSession(Base):
-    __tablename__ = "zoom_sessions"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    zoom_meeting_id: Mapped[str | None] = mapped_column(String(255))
-    topic: Mapped[str | None] = mapped_column(String(500))
-    summary: Mapped[str | None] = mapped_column(Text)
-    transcript: Mapped[str | None] = mapped_column(Text)
-    recording_download_url: Mapped[str | None] = mapped_column(Text)
+class ZoomSession(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    zoom_meeting_id: str | None = None
+    topic: str | None = None
+    summary: str | None = None
+    transcript: str | None = None
+    recording_download_url: str | None = None
     # Bunny Stream video ID after download + upload to Bunny
-    bunny_video_id: Mapped[str | None] = mapped_column(String(255))
-    processed: Mapped[bool] = mapped_column(Boolean, default=False)
-    module_id: Mapped[str | None] = mapped_column(ForeignKey("modules.id"))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    bunny_video_id: str | None = None
+    processed: bool = False
+    module_id: str | None = None  # references modules.id
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "zoom_sessions"

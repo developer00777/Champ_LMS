@@ -5,10 +5,8 @@ Replaces S3 presigned upload + MediaConvert trigger from v1.
 from typing import Annotated
 import io
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from beanie.operators import Inc
 from pydantic import BaseModel
-from app.core.db import get_db
 from app.core.auth import require_admin
 from app.models.user import User
 from app.models.module import Module
@@ -40,7 +38,6 @@ class CreateEpisodeBody(BaseModel):
 async def create_module(
     body: CreateModuleBody,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     module = Module(
         title=body.title,
@@ -50,9 +47,7 @@ async def create_module(
         target_roles=body.target_roles,
         created_by=admin.id,
     )
-    db.add(module)
-    await db.commit()
-    await db.refresh(module)
+    await module.insert()
     return {"id": module.id, "title": module.title}
 
 
@@ -60,14 +55,12 @@ async def create_module(
 async def publish_module(
     module_id: str,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    result = await db.execute(select(Module).where(Module.id == module_id))
-    module = result.scalar_one_or_none()
+    module = await Module.get(module_id)
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
     module.is_published = True
-    await db.commit()
+    await module.save()
     return {"published": True}
 
 
@@ -76,13 +69,11 @@ async def add_episode(
     module_id: str,
     body: CreateEpisodeBody,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
     Create episode record. Video upload is a separate step via /admin/episodes/{id}/upload.
     """
-    result = await db.execute(select(Module).where(Module.id == module_id))
-    module = result.scalar_one_or_none()
+    module = await Module.get(module_id)
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
 
@@ -93,10 +84,8 @@ async def add_episode(
         sequence_order=body.sequence_order,
         status="pending",
     )
-    db.add(ep)
-    module.total_episodes = (module.total_episodes or 0) + 1
-    await db.commit()
-    await db.refresh(ep)
+    await ep.insert()
+    await module.update(Inc({Module.total_episodes: 1}))
     return {"id": ep.id, "title": ep.title}
 
 
@@ -104,7 +93,6 @@ async def add_episode(
 async def upload_episode_video(
     episode_id: str,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     video: UploadFile = File(...),
 ):
     """
@@ -112,8 +100,7 @@ async def upload_episode_video(
     Bunny auto-transcodes to 360p/720p/1080p HLS on receipt.
     No MediaConvert, no S3 raw bucket needed.
     """
-    result = await db.execute(select(Episode).where(Episode.id == episode_id))
-    ep = result.scalar_one_or_none()
+    ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
 
@@ -129,7 +116,7 @@ async def upload_episode_video(
     ep.bunny_video_id = video_guid
     ep.bunny_video_guid = video_guid
     ep.status = "processing"
-    await db.commit()
+    await ep.save()
 
     return {
         "episode_id": episode_id,
@@ -143,12 +130,10 @@ async def upload_episode_video(
 async def upload_episode_thumbnail(
     episode_id: str,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     image: UploadFile = File(...),
 ):
     """Upload thumbnail to Bunny Storage. Served via CDN with Optimizer (auto-WebP)."""
-    result = await db.execute(select(Episode).where(Episode.id == episode_id))
-    ep = result.scalar_one_or_none()
+    ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
 
@@ -158,7 +143,7 @@ async def upload_episode_thumbnail(
     await bunny_storage.upload_thumbnail(path, data, filename)
 
     ep.thumbnail_bunny_path = path
-    await db.commit()
+    await ep.save()
 
     return {
         "thumbnail_url": bunny_storage.thumbnail_url(path),
@@ -170,10 +155,8 @@ async def upload_episode_thumbnail(
 async def generate_quiz(
     episode_id: str,
     admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    result = await db.execute(select(Episode).where(Episode.id == episode_id))
-    ep = result.scalar_one_or_none()
+    ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
     if not ep.transcript:
@@ -184,14 +167,11 @@ async def generate_quiz(
 
 
 @router.get("/analytics")
-async def analytics(
-    admin: Annotated[User, Depends(require_admin)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    total_users = await db.scalar(select(func.count(User.id)))
-    total_modules = await db.scalar(select(func.count(Module.id)).where(Module.is_published == True))
-    completions = await db.scalar(select(func.count(WatchProgress.id)).where(WatchProgress.completed == True))
-    enrollments = await db.scalar(select(func.count(Enrollment.id)))
+async def analytics(admin: Annotated[User, Depends(require_admin)]):
+    total_users = await User.find_all().count()
+    total_modules = await Module.find(Module.is_published == True).count()
+    completions = await WatchProgress.find(WatchProgress.completed == True).count()
+    enrollments = await Enrollment.find_all().count()
 
     return {
         "total_users": total_users,

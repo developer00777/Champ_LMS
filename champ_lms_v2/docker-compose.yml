@@ -1,16 +1,15 @@
 services:
   db:
-    image: postgres:17-alpine
+    image: mongo:7
     environment:
-      POSTGRES_DB: champlmsv2
-      POSTGRES_USER: dev
-      POSTGRES_PASSWORD: dev
+      MONGO_INITDB_ROOT_USERNAME: dev
+      MONGO_INITDB_ROOT_PASSWORD: dev
     ports:
-      - "5432:5432"
+      - "27017:27017"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mongo_data:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dev -d champlmsv2"]
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -31,7 +30,7 @@ services:
       - "8000:8000"
     env_file: ./backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://dev:dev@db/champlmsv2
+      MONGODB_URL: mongodb://dev:dev@db:27017/?authSource=admin
       REDIS_URL: redis://redis:6379
     depends_on:
       db:
@@ -43,4 +42,4 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
-  postgres_data:
+  mongo_data:

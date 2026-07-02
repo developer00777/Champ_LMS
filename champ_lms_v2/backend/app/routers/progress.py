@@ -1,15 +1,11 @@
 from typing import Annotated
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from pydantic import BaseModel
-from app.core.db import get_db
 from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from app.models.user import User
 from app.models.progress import WatchProgress
-from app.models.episode import Episode
 from app.services.gamification_service import GamificationService
 import redis.asyncio as aioredis
 
@@ -26,7 +22,6 @@ class ProgressUpdate(BaseModel):
 async def upsert_progress(
     body: ProgressUpdate,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ):
     # Cache progress in Redis (key expires in 2 min — flushed by 30s player sync)
@@ -36,13 +31,10 @@ async def upsert_progress(
     # Determine completion (≥90% watched)
     completed = body.watched_seconds >= body.total_seconds * 0.9
 
-    result = await db.execute(
-        select(WatchProgress).where(
-            WatchProgress.user_id == user.id,
-            WatchProgress.episode_id == body.episode_id,
-        )
+    wp = await WatchProgress.find_one(
+        WatchProgress.user_id == user.id,
+        WatchProgress.episode_id == body.episode_id,
     )
-    wp = result.scalar_one_or_none()
 
     if wp:
         wp.watched_seconds = max(wp.watched_seconds, body.watched_seconds)
@@ -52,10 +44,11 @@ async def upsert_progress(
             wp.completed = True
             wp.completed_at = datetime.now(timezone.utc)
             # Award points on first completion
-            gamification = GamificationService(redis, db)
+            gamification = GamificationService(redis)
             await gamification.award_points(user.id, "complete_episode", user.department or "")
             await gamification.record_activity(user.id)
             await gamification.check_and_award_badges(user.id, "complete_episode")
+        await wp.save()
     else:
         wp = WatchProgress(
             user_id=user.id,
@@ -65,26 +58,18 @@ async def upsert_progress(
             completed=completed,
             completed_at=datetime.now(timezone.utc) if completed else None,
         )
-        db.add(wp)
+        await wp.insert()
         if completed:
-            gamification = GamificationService(redis, db)
+            gamification = GamificationService(redis)
             await gamification.award_points(user.id, "complete_episode", user.department or "")
             await gamification.record_activity(user.id)
 
-    await db.commit()
     return {"completed": completed, "watched_seconds": body.watched_seconds}
 
 
 @router.get("/me")
-async def my_progress(
-    user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-):
-    result = await db.execute(
-        select(WatchProgress).where(WatchProgress.user_id == user.id)
-        .order_by(WatchProgress.last_watched_at.desc())
-    )
-    progress = result.scalars().all()
+async def my_progress(user: Annotated[User, Depends(get_current_user)]):
+    progress = await WatchProgress.find(WatchProgress.user_id == user.id).sort(-WatchProgress.last_watched_at).to_list()
     return [
         {
             "episode_id": p.episode_id,
@@ -101,7 +86,6 @@ async def my_progress(
 async def episode_progress(
     episode_id: str,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ):
     # Check Redis cache first
@@ -111,13 +95,10 @@ async def episode_progress(
         watched, total = cached.split(":")
         return {"episode_id": episode_id, "watched_seconds": int(watched), "total_seconds": int(total)}
 
-    result = await db.execute(
-        select(WatchProgress).where(
-            WatchProgress.user_id == user.id,
-            WatchProgress.episode_id == episode_id,
-        )
+    wp = await WatchProgress.find_one(
+        WatchProgress.user_id == user.id,
+        WatchProgress.episode_id == episode_id,
     )
-    wp = result.scalar_one_or_none()
     if not wp:
         return {"episode_id": episode_id, "watched_seconds": 0, "total_seconds": 0}
     return {

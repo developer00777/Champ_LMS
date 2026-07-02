@@ -1,12 +1,11 @@
 """
 Content / Browse router — home feed and stream URL generation via Bunny Stream.
 """
+import re
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from beanie.operators import In, Or, RegEx
 from pydantic import BaseModel
-from app.core.db import get_db
 from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from app.models.user import User
@@ -19,6 +18,11 @@ from app.services.bunny_storage import bunny_storage
 import redis.asyncio as aioredis
 
 router = APIRouter(tags=["content"])
+
+
+def _ci_regex(q: str) -> str:
+    """Case-insensitive substring match, escaped — mirrors the old ILIKE %q% pattern."""
+    return re.escape(q)
 
 
 class EpisodeOut(BaseModel):
@@ -62,39 +66,29 @@ def _thumbnail_url(bunny_path: str | None) -> str | None:
 @router.get("/feed", response_model=list[FeedRow])
 async def get_feed(
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ):
     """Personalized home feed rows. Uses cached recommendations if fresh."""
-    rec_result = await db.execute(
-        select(Recommendation).where(Recommendation.user_id == user.id)
-    )
-    rec = rec_result.scalar_one_or_none()
+    rec = await Recommendation.find_one(Recommendation.user_id == user.id)
 
     # Fallback: build basic rows if no recommendations yet
-    all_modules_result = await db.execute(
-        select(Module).where(Module.is_published == True).order_by(Module.created_at.desc()).limit(40)
-    )
-    all_modules = all_modules_result.scalars().all()
+    all_modules = await Module.find(Module.is_published == True).sort(-Module.created_at).limit(40).to_list()
 
     rows: list[FeedRow] = []
 
     # Continue Watching — find episodes in progress
-    progress_result = await db.execute(
-        select(WatchProgress)
-        .where(WatchProgress.user_id == user.id, WatchProgress.completed == False)
-        .order_by(WatchProgress.last_watched_at.desc())
+    in_progress = await (
+        WatchProgress.find(WatchProgress.user_id == user.id, WatchProgress.completed == False)
+        .sort(-WatchProgress.last_watched_at)
         .limit(8)
+        .to_list()
     )
-    in_progress = progress_result.scalars().all()
 
     if in_progress:
         ep_ids = [p.episode_id for p in in_progress]
-        ep_result = await db.execute(select(Episode).where(Episode.id.in_(ep_ids)))
-        episodes = ep_result.scalars().all()
+        episodes = await Episode.find(In(Episode.id, ep_ids)).to_list()
         module_ids = list({e.module_id for e in episodes})
-        mods_result = await db.execute(select(Module).where(Module.id.in_(module_ids)))
-        mods = mods_result.scalars().all()
+        mods = await Module.find(In(Module.id, module_ids)).to_list()
         if mods:
             rows.append(FeedRow(
                 row_title="Continue Watching",
@@ -117,8 +111,7 @@ async def get_feed(
     if rec and rec.rows:
         for row_data in rec.rows:
             module_ids = row_data.get("module_ids", [])
-            mods_result = await db.execute(select(Module).where(Module.id.in_(module_ids)))
-            mods = mods_result.scalars().all()
+            mods = await Module.find(In(Module.id, module_ids)).to_list()
             if mods:
                 rows.append(FeedRow(
                     row_title=row_data["row_title"],
@@ -182,19 +175,16 @@ async def get_feed(
 @router.get("/modules", response_model=list[ModuleOut])
 async def list_modules(
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     category: str | None = None,
     q: str | None = None,
 ):
-    query = select(Module).where(Module.is_published == True)
+    filters = [Module.is_published == True]
     if category:
-        query = query.where(Module.category == category)
+        filters.append(Module.category == category)
     if q:
-        query = query.where(
-            or_(Module.title.ilike(f"%{q}%"), Module.description.ilike(f"%{q}%"))
-        )
-    result = await db.execute(query.order_by(Module.created_at.desc()))
-    modules = result.scalars().all()
+        pattern = _ci_regex(q)
+        filters.append(Or(RegEx(Module.title, pattern, "i"), RegEx(Module.description, pattern, "i")))
+    modules = await Module.find(*filters).sort(-Module.created_at).to_list()
     return [
         ModuleOut(
             id=m.id,
@@ -214,17 +204,12 @@ async def list_modules(
 async def get_module(
     module_id: str,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    result = await db.execute(select(Module).where(Module.id == module_id))
-    module = result.scalar_one_or_none()
+    module = await Module.get(module_id)
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
 
-    ep_result = await db.execute(
-        select(Episode).where(Episode.module_id == module_id).order_by(Episode.sequence_order)
-    )
-    episodes = ep_result.scalars().all()
+    episodes = await Episode.find(Episode.module_id == module_id).sort(+Episode.sequence_order).to_list()
 
     return {
         "id": module.id,
@@ -254,14 +239,12 @@ async def get_module(
 async def get_stream_url(
     episode_id: str,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
     Returns a Bunny Stream token-authenticated HLS URL for the episode.
     Replaces CloudFront signed URL generation from v1.
     """
-    result = await db.execute(select(Episode).where(Episode.id == episode_id))
-    ep = result.scalar_one_or_none()
+    ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
     if ep.status != "ready":
@@ -283,28 +266,29 @@ async def get_stream_url(
 async def search(
     q: str,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    mod_result = await db.execute(
-        select(Module).where(
-            Module.is_published == True,
-            or_(Module.title.ilike(f"%{q}%"), Module.description.ilike(f"%{q}%")),
-        ).limit(20)
+    pattern = _ci_regex(q)
+    title_or_desc = lambda title_field, desc_field: Or(
+        RegEx(title_field, pattern, "i"), RegEx(desc_field, pattern, "i")
     )
-    ep_result = await db.execute(
-        select(Episode).where(
-            or_(Episode.title.ilike(f"%{q}%"), Episode.description.ilike(f"%{q}%")),
-            Episode.status == "ready",
-        ).limit(20)
+    modules = await (
+        Module.find(Module.is_published == True, title_or_desc(Module.title, Module.description))
+        .limit(20)
+        .to_list()
+    )
+    episodes = await (
+        Episode.find(title_or_desc(Episode.title, Episode.description), Episode.status == "ready")
+        .limit(20)
+        .to_list()
     )
     return {
         "modules": [
             {"id": m.id, "title": m.title, "category": m.category,
              "thumbnail_url": _thumbnail_url(m.thumbnail_bunny_path)}
-            for m in mod_result.scalars().all()
+            for m in modules
         ],
         "episodes": [
             {"id": e.id, "title": e.title, "module_id": e.module_id}
-            for e in ep_result.scalars().all()
+            for e in episodes
         ],
     }

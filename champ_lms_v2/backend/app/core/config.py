@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import model_validator
 from functools import lru_cache
 
 
@@ -9,17 +9,11 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-prod"
     access_token_expire_minutes: int = 480
 
-    # Database — Railway's Postgres plugin injects DATABASE_URL as
-    # postgres:// or postgresql://; asyncpg needs the +asyncpg driver prefix.
-    database_url: str = "postgresql+asyncpg://dev:dev@localhost/champlmsv2"
-
-    @field_validator("database_url", mode="before")
-    @classmethod
-    def _normalize_database_url(cls, v: str) -> str:
-        for prefix in ("postgres://", "postgresql://"):
-            if v.startswith(prefix):
-                return "postgresql+asyncpg://" + v[len(prefix):]
-        return v
+    # Database — set MONGODB_URL directly, or rely on Railway's MongoDB
+    # plugin, which injects MONGO_URL instead (picked up as a fallback
+    # below since the plugin's variable name isn't ours to control).
+    mongodb_url: str = "mongodb://dev:dev@localhost:27017"
+    mongodb_db_name: str = "champlmsv2"
 
     # Redis — Railway's Redis plugin injects REDIS_URL directly.
     redis_url: str = "redis://localhost:6379"
@@ -57,6 +51,18 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fallback_to_mongo_url(cls, values: dict) -> dict:
+        """Railway's MongoDB plugin injects MONGO_URL, not MONGODB_URL."""
+        if isinstance(values, dict) and not values.get("mongodb_url") and not values.get("MONGODB_URL"):
+            import os
+
+            fallback = os.environ.get("MONGO_URL")
+            if fallback:
+                values["mongodb_url"] = fallback
+        return values
 
     class Config:
         env_file = ".env"

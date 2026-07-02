@@ -13,3 +13,9 @@ __all__ = [
     "ZoomSession", "Badge", "UserBadge", "Assessment", "AssessmentAttempt",
     "Recommendation",
 ]
+
+DOCUMENT_MODELS = [
+    User, Module, Episode, WatchProgress, Enrollment,
+    ZoomSession, Badge, UserBadge, Assessment, AssessmentAttempt,
+    Recommendation,
+]

@@ -1,21 +1,23 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
-from app.core.db import Base
+from beanie import Document
+from pydantic import Field
+from pymongo import IndexModel, ASCENDING
 
 
-class WatchProgress(Base):
-    __tablename__ = "watch_progress"
-    __table_args__ = (UniqueConstraint("user_id", "episode_id"),)
+class WatchProgress(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str  # references users.id — cascade delete handled in app code
+    episode_id: str  # references episodes.id — cascade delete handled in app code
+    watched_seconds: int = 0
+    total_seconds: int | None = None
+    completed: bool = False
+    completed_at: datetime | None = None
+    last_watched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    episode_id: Mapped[str] = mapped_column(ForeignKey("episodes.id", ondelete="CASCADE"))
-    watched_seconds: Mapped[int] = mapped_column(Integer, default=0)
-    total_seconds: Mapped[int | None] = mapped_column(Integer)
-    completed: Mapped[bool] = mapped_column(Boolean, default=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_watched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    class Settings:
+        name = "watch_progress"
+        indexes = [
+            IndexModel([("user_id", ASCENDING), ("episode_id", ASCENDING)], unique=True),
+            IndexModel([("user_id", ASCENDING), ("completed", ASCENDING), ("last_watched_at", ASCENDING)]),
+        ]

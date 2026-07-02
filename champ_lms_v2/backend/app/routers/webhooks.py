@@ -6,8 +6,6 @@ Bunny calls POST /webhooks/bunny-stream when video encoding completes.
 We update the episode status to 'ready' and set duration_seconds.
 """
 from fastapi import APIRouter, Request, HTTPException
-from sqlalchemy import select, update
-from app.core.db import AsyncSessionLocal
 from app.models.episode import Episode
 from app.services.bunny_stream import bunny_stream
 
@@ -38,21 +36,17 @@ async def bunny_stream_webhook(request: Request):
     if not video_guid:
         return {"ignored": True}
 
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Episode).where(Episode.bunny_video_guid == video_guid)
-        )
-        ep = result.scalar_one_or_none()
-        if not ep:
-            return {"ignored": True, "reason": "no episode found for guid"}
+    ep = await Episode.find_one(Episode.bunny_video_guid == video_guid)
+    if not ep:
+        return {"ignored": True, "reason": "no episode found for guid"}
 
-        if status == 4:  # Finished
-            ep.status = "ready"
-            if duration:
-                ep.duration_seconds = int(duration)
-        elif status == 5:  # Failed
-            ep.status = "failed"
+    if status == 4:  # Finished
+        ep.status = "ready"
+        if duration:
+            ep.duration_seconds = int(duration)
+    elif status == 5:  # Failed
+        ep.status = "failed"
 
-        await db.commit()
+    await ep.save()
 
     return {"processed": True, "video_guid": video_guid, "new_status": ep.status}

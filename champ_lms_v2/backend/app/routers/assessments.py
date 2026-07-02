@@ -1,9 +1,6 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from pydantic import BaseModel
-from app.core.db import get_db
 from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from app.models.user import User
@@ -22,15 +19,11 @@ class AttemptBody(BaseModel):
 async def get_assessment(
     module_id: str,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    result = await db.execute(
-        select(Assessment).where(
-            Assessment.module_id == module_id,
-            Assessment.episode_id == None,
-        )
+    assessment = await Assessment.find_one(
+        Assessment.module_id == module_id,
+        Assessment.episode_id == None,
     )
-    assessment = result.scalar_one_or_none()
     if not assessment:
         raise HTTPException(status_code=404, detail="No assessment for this module")
     # Don't reveal correct answers to client
@@ -46,11 +39,9 @@ async def submit_attempt(
     assessment_id: str,
     body: AttemptBody,
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
     redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ):
-    result = await db.execute(select(Assessment).where(Assessment.id == assessment_id))
-    assessment = result.scalar_one_or_none()
+    assessment = await Assessment.get(assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
 
@@ -72,11 +63,10 @@ async def submit_attempt(
         passed=passed,
         answers=body.answers,
     )
-    db.add(attempt)
-    await db.commit()
+    await attempt.insert()
 
     if passed:
-        gamification = GamificationService(redis, db)
+        gamification = GamificationService(redis)
         await gamification.award_points(user.id, "pass_quiz", user.department or "")
         await gamification.check_and_award_badges(user.id, "pass_quiz")
 
