@@ -40,10 +40,11 @@ async def create_storage_zone(client: httpx.AsyncClient, name: str, region: str 
         data = resp.json()
         print(f"  ✓ Storage zone '{name}' created — Password: {data.get('Password')}")
         return data
-    elif resp.status_code == 400 and "already exists" in resp.text.lower():
+    elif resp.status_code == 400 and ("already exists" in resp.text.lower() or "name_taken" in resp.text.lower()):
         print(f"  ↩ Storage zone '{name}' already exists")
         list_resp = await client.get(f"{BUNNY_API}/storagezone", headers=HEADERS)
-        zones = list_resp.json().get("Items", [])
+        body = list_resp.json()
+        zones = body if isinstance(body, list) else body.get("Items", [])
         for z in zones:
             if z["Name"] == name:
                 return z
@@ -71,7 +72,7 @@ async def create_pull_zone(client: httpx.AsyncClient, name: str, origin_url: str
         hostname = data.get("Hostnames", [{}])[0].get("Value")
         print(f"  ✓ Pull zone '{name}' created — hostname: {hostname}")
         return data
-    elif resp.status_code == 400 and "already exists" in resp.text.lower():
+    elif resp.status_code == 400 and ("already exists" in resp.text.lower() or "name_taken" in resp.text.lower()):
         print(f"  ↩ Pull zone '{name}' already exists")
         list_resp = await client.get(f"{BUNNY_API}/pullzone", headers=HEADERS)
         zones = list_resp.json() if isinstance(list_resp.json(), list) else list_resp.json().get("Items", [])
@@ -165,7 +166,7 @@ async def main() -> None:
     print("  1. Bunny dashboard → Stream → create a video library (if not already done)")
     print("  2. Stream library → Security → Enable Token Authentication → copy the secret")
     print("  3. Pull Zones → champ-lms-cdn → Optimizer → Enable Image Optimization")
-    print("  4. Stream → Webhooks → set URL to <your-railway-backend-domain>/webhooks/bunny")
+    print("  4. Stream → Webhooks → set URL to <your-railway-domain>/api/webhooks/bunny-stream")
 
 
 if __name__ == "__main__":
