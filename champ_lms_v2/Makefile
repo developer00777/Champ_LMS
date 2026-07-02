@@ -11,7 +11,8 @@ dev-api:
 dev-fe:
 	cd frontend && npm install && npm run dev
 
-# Build frontend (Node server via adapter-node, deployed as-is to Railway)
+# Build frontend only (local check — Railway builds it as part of the
+# combined image via the root Dockerfile, not via this target)
 build:
 	cd frontend && npm run build
 
@@ -23,7 +24,7 @@ setup-bunny:
 migrate:
 	cd backend && alembic upgrade head
 
-# Deploy both services to Railway (requires Railway CLI: `railway login` first)
+# Deploy the combined service to Railway (requires Railway CLI: `railway login`
+# and this directory linked via `railway link` first)
 deploy:
-	cd backend && railway up --service backend
-	cd frontend && railway up --service frontend
+	railway up

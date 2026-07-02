@@ -17,6 +17,10 @@
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
 
+  function pickedFile(e: Event): File | null {
+    return (e.target as HTMLInputElement).files?.[0] ?? null;
+  }
+
   async function createModule() {
     if (!moduleTitle) { error = 'Title required'; return; }
     uploading = true; error = '';
@@ -128,11 +132,11 @@
       <h2>Upload Video File</h2>
       <p class="info">Bunny Stream accepts MP4, MOV, AVI. Max recommended: 10 GB.</p>
       <label>Video File *
-        <input type="file" accept="video/*" on:change={e => videoFile = (e.target as HTMLInputElement).files?.[0] ?? null} />
+        <input type="file" accept="video/*" on:change={e => videoFile = pickedFile(e)} />
       </label>
       <label>Thumbnail Image (optional)
         <p class="hint">Served via Bunny CDN with Optimizer (auto-WebP, resized to 480×270)</p>
-        <input type="file" accept="image/*" on:change={e => thumbnailFile = (e.target as HTMLInputElement).files?.[0] ?? null} />
+        <input type="file" accept="image/*" on:change={e => thumbnailFile = pickedFile(e)} />
       </label>
       {#if statusMsg}<p class="status">{statusMsg}</p>{/if}
       {#if error}<p class="error">{error}</p>{/if}
