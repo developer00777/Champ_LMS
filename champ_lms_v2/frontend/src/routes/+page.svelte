@@ -36,9 +36,39 @@
 <svelte:head><title>Champ LMS — Home</title></svelte:head>
 
 {#if loading}
-  <div class="loading">Loading your feed...</div>
+  <!-- Skeleton loading state -->
+  <div class="hero-skeleton">
+    <div class="skeleton-content">
+      <div class="skeleton-badge"></div>
+      <div class="skeleton-title"></div>
+      <div class="skeleton-desc"></div>
+      <div class="skeleton-buttons">
+        <div class="skeleton-btn"></div>
+        <div class="skeleton-btn ghost"></div>
+      </div>
+    </div>
+  </div>
+  
+  {#each [1, 2, 3] as _}
+    <div class="row-skeleton">
+      <div class="skeleton-row-title"></div>
+      <div class="skeleton-cards">
+        {#each [1, 2, 3, 4, 5] as __}
+          <div class="skeleton-card">
+            <div class="skeleton-thumb"></div>
+            <div class="skeleton-text"></div>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/each}
 {:else if error}
-  <div class="error">{error}</div>
+  <div class="error-state">
+    <div class="error-icon">⚠️</div>
+    <h2>Something went wrong</h2>
+    <p>{error}</p>
+    <button class="btn-primary" on:click={() => window.location.reload()}>Retry</button>
+  </div>
 {:else}
   <HeroTrailer module={heroModule} />
 
@@ -51,17 +81,180 @@
   {/each}
 
   {#if rows.length === 0}
-    <div class="empty">
-      <p>No content yet.</p>
+    <div class="empty-state">
+      <div class="empty-icon">🎬</div>
+      <h2>No content yet</h2>
+      <p>Upload your first video to get started.</p>
       <a href="/admin/upload" class="btn-primary">Upload First Video</a>
     </div>
   {/if}
 {/if}
 
 <style>
-  .loading, .error, .empty {
-    text-align: center; padding: 4rem; color: var(--muted);
+  /* Skeleton loading animations */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
-  .error { color: var(--accent); }
-  .empty { display: flex; flex-direction: column; align-items: center; gap: 1.5rem; }
+  
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+  }
+  
+  .hero-skeleton {
+    width: 100%;
+    min-height: 450px;
+    border-radius: 16px;
+    background: var(--surface);
+    margin-bottom: 3rem;
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+  }
+  
+  .skeleton-content {
+    padding: 3rem 2.5rem;
+    width: 100%;
+    max-width: 600px;
+  }
+  
+  .skeleton-badge {
+    width: 80px;
+    height: 20px;
+    @extend .skeleton;
+    margin-bottom: 1rem;
+  }
+  
+  .skeleton-title {
+    width: 70%;
+    height: 40px;
+    @extend .skeleton;
+    margin-bottom: 1rem;
+  }
+  
+  .skeleton-desc {
+    width: 90%;
+    height: 60px;
+    @extend .skeleton;
+    margin-bottom: 1.5rem;
+  }
+  
+  .skeleton-buttons {
+    display: flex;
+    gap: 1rem;
+  }
+  
+  .skeleton-btn {
+    width: 120px;
+    height: 40px;
+    @extend .skeleton;
+    border-radius: 8px;
+  }
+  
+  .skeleton-btn.ghost {
+    width: 100px;
+    opacity: 0.5;
+  }
+  
+  .row-skeleton {
+    margin-bottom: 2.5rem;
+  }
+  
+  .skeleton-row-title {
+    width: 200px;
+    height: 24px;
+    @extend .skeleton;
+    margin-bottom: 0.75rem;
+  }
+  
+  .skeleton-cards {
+    display: flex;
+    gap: 0.75rem;
+    overflow: hidden;
+  }
+  
+  .skeleton-card {
+    width: 240px;
+    flex-shrink: 0;
+  }
+  
+  .skeleton-thumb {
+    aspect-ratio: 16/9;
+    @extend .skeleton;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+  }
+  
+  .skeleton-text {
+    width: 80%;
+    height: 16px;
+    @extend .skeleton;
+  }
+  
+  /* Error state */
+  .error-state {
+    text-align: center;
+    padding: 6rem 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+  
+  .error-icon {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+  }
+  
+  .error-state h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+  
+  .error-state p {
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+  
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 6rem 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+  
+  .empty-icon {
+    font-size: 4rem;
+    margin-bottom: 0.5rem;
+  }
+  
+  .empty-state h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+  
+  .empty-state p {
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+  
+  @media (max-width: 768px) {
+    .hero-skeleton {
+      min-height: 350px;
+    }
+    
+    .skeleton-content {
+      padding: 2rem 1.5rem;
+    }
+    
+    .skeleton-card {
+      width: 160px;
+    }
+  }
 </style>
