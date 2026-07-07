@@ -177,13 +177,20 @@ class BunnyStreamService:
             resp.raise_for_status()
             return resp.json()
 
+    def _cdn_hostname(self) -> str:
+        """Return the CDN hostname, falling back to Bunny's default pattern."""
+        configured = self.settings.bunny_stream_cdn_hostname
+        if configured:
+            return configured
+        # Bunny Stream default: {library_id}.mediadelivery.net
+        return f"{self._library_id}.mediadelivery.net"
+
     def get_hls_url(self, video_guid: str) -> str:
         """
         Return the plain (no token) HLS manifest URL.
         Only use this if token auth is disabled on the library.
         """
-        cdn_host = self.settings.bunny_stream_cdn_hostname
-        return f"https://{cdn_host}/{video_guid}/playlist.m3u8"
+        return f"https://{self._cdn_hostname()}/{video_guid}/playlist.m3u8"
 
     def get_token_auth_url(self, video_guid: str, expires_in_seconds: int = 14400) -> str:
         """
@@ -196,9 +203,12 @@ class BunnyStreamService:
                     ?token={token}&expires={expires}
         """
         secret = self.settings.bunny_stream_token_secret
-        cdn_host = self.settings.bunny_stream_cdn_hostname
+        cdn_host = self._cdn_hostname()
         expires = int(time.time()) + expires_in_seconds
         path = f"/{video_guid}/playlist.m3u8"
+
+        if not secret:
+            raise RuntimeError("BUNNY_STREAM_TOKEN_SECRET is not configured — cannot generate authenticated URLs")
 
         token_raw = secret + path + str(expires)
         token = hashlib.sha256(token_raw.encode()).hexdigest()

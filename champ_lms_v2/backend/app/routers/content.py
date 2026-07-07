@@ -1,6 +1,7 @@
 """
 Content / Browse router — home feed and stream URL generation via Bunny Stream.
 """
+import logging
 import re
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +17,8 @@ from app.models.recommendation import Recommendation
 from app.services.bunny_stream import bunny_stream
 from app.services.bunny_storage import bunny_storage
 import redis.asyncio as aioredis
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["content"])
 
@@ -269,13 +272,23 @@ async def get_stream_url(
     if not ep.bunny_video_guid:
         raise HTTPException(status_code=503, detail="Video not available")
 
-    stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
+    # Generate stream URL with fallback options
+    try:
+        stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
+    except RuntimeError as e:
+        logger.warning(f"Token auth URL failed for {ep.bunny_video_guid}: {e}")
+        # Fallback to plain HLS URL (only works if token auth is disabled in Bunny dashboard)
+        stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
+        logger.info(f"Falling back to plain HLS URL: {stream_url}")
+
     embed_url = bunny_stream.get_embed_url(ep.bunny_video_guid)
 
     return {
         "stream_url": stream_url,    # HLS manifest — use with Video.js / HLS.js
         "embed_url": embed_url,       # Bunny iframe player fallback
         "expires_in": 14400,
+        "episode_status": ep.status,
+        "bunny_video_guid": ep.bunny_video_guid,
     }
 
 
