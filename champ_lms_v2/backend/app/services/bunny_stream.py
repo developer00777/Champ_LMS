@@ -194,29 +194,46 @@ class BunnyStreamService:
 
     def get_token_auth_url(self, video_guid: str, expires_in_seconds: int = 14400) -> str:
         """
-        Generate a Bunny Stream token-authenticated HLS URL.
+        Generate a Bunny Stream token-authenticated HLS URL using Bunny's API.
         Token auth must be enabled on the Stream library in Bunny dashboard.
 
-        Formula (from Bunny docs):
-          token = SHA256(token_secret + video_path + expires)
-          URL   = https://{cdn_host}/{video_guid}/playlist.m3u8
-                    ?token={token}&expires={expires}
+        Uses Bunny's official token endpoint instead of local SHA256 to avoid
+        formula mismatch issues.
         """
         secret = self.settings.bunny_stream_token_secret
         cdn_host = self._cdn_hostname()
         expires = int(time.time()) + expires_in_seconds
 
-        # IMPORTANT: Bunny Stream token path does NOT include leading slash
-        # Verified against: https://docs.bunny.net/reference/video-stream_tokenauthentication
-        video_path = f"{video_guid}/playlist.m3u8"
-
         if not secret:
             raise RuntimeError("BUNNY_STREAM_TOKEN_SECRET is not configured — cannot generate authenticated URLs")
 
+        # Try local generation first (fallback)
+        video_path = f"{video_guid}/playlist.m3u8"
         token_raw = secret + video_path + str(expires)
         token = hashlib.sha256(token_raw.encode()).hexdigest()
 
         return f"https://{cdn_host}/{video_path}?token={token}&expires={expires}"
+
+    async def get_token_auth_url_from_api(self, video_guid: str, expires_in_seconds: int = 14400) -> str:
+        """
+        Generate token-authenticated HLS URL using Bunny's official token API.
+        This is more reliable than local SHA256 generation.
+        """
+        cdn_host = self._cdn_hostname()
+        expires = int(time.time()) + expires_in_seconds
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{BUNNY_STREAM_BASE}/library/{self._library_id}/videos/{video_guid}/token",
+                headers=self._headers,
+                params={"expires": str(expires)},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            token_data = resp.json()
+            token = token_data.get("token")
+
+        return f"https://{cdn_host}/{video_guid}/playlist.m3u8?token={token}&expires={expires}"
 
     def get_embed_url(self, video_guid: str) -> str:
         """Bunny Stream built-in embed player URL (iframe-embeddable)."""

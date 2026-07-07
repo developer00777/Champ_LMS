@@ -272,14 +272,18 @@ async def get_stream_url(
     if not ep.bunny_video_guid:
         raise HTTPException(status_code=503, detail="Video not available")
 
-    # Generate stream URL with fallback options
+    # Generate stream URL — try Bunny's API first for correct tokens
     try:
-        stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
-    except RuntimeError as e:
-        logger.warning(f"Token auth URL failed for {ep.bunny_video_guid}: {e}")
-        # Fallback to plain HLS URL (only works if token auth is disabled in Bunny dashboard)
-        stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
-        logger.info(f"Falling back to plain HLS URL: {stream_url}")
+        stream_url = await bunny_stream.get_token_auth_url_from_api(ep.bunny_video_guid, expires_in_seconds=14400)
+    except Exception as e:
+        logger.warning(f"Bunny token API failed, falling back to local generation: {e}")
+        try:
+            stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
+        except RuntimeError as e:
+            logger.warning(f"Token auth URL failed for {ep.bunny_video_guid}: {e}")
+            # Fallback to plain HLS URL (only works if token auth is disabled in Bunny dashboard)
+            stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
+            logger.info(f"Falling back to plain HLS URL: {stream_url}")
 
     embed_url = bunny_stream.get_embed_url(ep.bunny_video_guid)
 
