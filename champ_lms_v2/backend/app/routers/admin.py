@@ -115,7 +115,10 @@ async def prepare_upload(
     logger.info(f"Creating Bunny Stream video object for episode {episode_id}")
     video_obj = await bunny_stream.create_video(ep.title)
     video_guid = video_obj["guid"]
-    upload_url = video_obj.get("uploadUrl")
+    
+    # Bunny Stream TUS upload endpoint
+    # Client sends POST with TUS headers to initiate, then PATCH chunks
+    upload_url = f"https://video.bunnycdn.com/library/{bunny_stream._library_id}/videos/{video_guid}"
 
     # Update episode record
     ep.bunny_video_id = video_guid
@@ -128,7 +131,7 @@ async def prepare_upload(
         "bunny_video_guid": video_guid,
         "upload_url": upload_url,
         "status": "processing",
-        "message": "Upload the video file directly to 'upload_url' via PUT. Bunny will webhook when encoding finishes.",
+        "message": "TUS upload: POST to upload_url with TUS headers to initiate, then PATCH chunks.",
     }
 
 
