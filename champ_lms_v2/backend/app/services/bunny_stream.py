@@ -57,6 +57,54 @@ class BunnyStreamService:
             resp.raise_for_status()
             return resp.json()
 
+    async def create_tus_upload_session(
+        self, 
+        video_guid: str, 
+        file_size: int, 
+        file_name: str,
+        file_type: str = "video/mp4"
+    ) -> str:
+        """
+        Create a TUS upload session for direct browser upload.
+        
+        Returns the Location URL that the browser can use to upload chunks
+        WITHOUT needing the API key. This enables fast, resumable, direct uploads.
+        
+        Args:
+            video_guid: Bunny Stream video GUID
+            file_size: Total file size in bytes
+            file_name: Original filename
+            file_type: MIME type of the file
+            
+        Returns:
+            Location URL for TUS chunk uploads (browser-safe, no auth needed)
+        """
+        import base64
+        
+        # Encode metadata for TUS
+        filename_b64 = base64.b64encode(file_name.encode()).decode()
+        filetype_b64 = base64.b64encode(file_type.encode()).decode()
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{BUNNY_STREAM_BASE}/library/{self._library_id}/videos/{video_guid}",
+                headers={
+                    **self._headers,
+                    "Tus-Resumable": "1.0.0",
+                    "Upload-Length": str(file_size),
+                    "Upload-Metadata": f"filename {filename_b64},filetype {filetype_b64}",
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            
+            # The Location header contains the upload endpoint
+            location = resp.headers.get("Location")
+            if not location:
+                raise RuntimeError("Bunny Stream did not return Location header for TUS upload")
+            
+            return location
+
     async def upload_video_bytes(self, video_guid: str, data: bytes) -> None:
         """
         Upload raw video bytes to a Bunny Stream video object.

@@ -28,6 +28,12 @@ class CreateModuleBody(BaseModel):
     target_roles: list[str] | None = None
 
 
+class TusUploadRequest(BaseModel):
+    file_size: int
+    file_name: str
+    file_type: str = "video/mp4"
+
+
 class CreateEpisodeBody(BaseModel):
     title: str
     description: str | None = None
@@ -92,17 +98,23 @@ async def add_episode(
 @router.post("/episodes/{episode_id}/prepare-upload")
 async def prepare_upload(
     episode_id: str,
+    body: TusUploadRequest,
     admin: Annotated[User, Depends(require_admin)],
 ):
     """
-    Create a Bunny Stream video object and return a presigned upload URL.
-    The client uploads the video file DIRECTLY to Bunny Stream using this URL,
-    bypassing our server entirely. This is 10x faster for large files.
-
-    Client flow:
-      1. Call this endpoint → receive {upload_url, bunny_video_guid}
-      2. PUT the video file directly to upload_url (Content-Type: application/octet-stream)
-      3. Bunny Stream webhooks /webhooks/bunny-stream when encoding finishes
+    Create a TUS upload session for direct browser-to-Bunny upload.
+    
+    This enables fast, resumable uploads without server bottleneck:
+      1. Frontend calls this endpoint with file metadata (size, name, type)
+      2. Backend creates TUS session with Bunny (requires API key)
+      3. Backend returns 'tus_upload_url' - browser-safe, no auth needed
+      4. Frontend uploads chunks via PATCH to tus_upload_url
+      5. Bunny webhooks when encoding finishes
+    
+    The TUS protocol enables:
+      - Resumable uploads (if connection drops, resume from last byte)
+      - Progress tracking (after each chunk)
+      - Direct upload (no bytes through Railway server)
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -116,9 +128,19 @@ async def prepare_upload(
     video_obj = await bunny_stream.create_video(ep.title)
     video_guid = video_obj["guid"]
     
-    # Bunny Stream TUS upload endpoint
-    # Client sends POST with TUS headers to initiate, then PATCH chunks
-    upload_url = f"https://video.bunnycdn.com/library/{bunny_stream._library_id}/videos/{video_guid}"
+    # Create TUS upload session (requires API key, done server-side)
+    logger.info(f"Creating TUS session for {body.file_name} ({body.file_size} bytes)")
+    try:
+        tus_upload_url = await bunny_stream.create_tus_upload_session(
+            video_guid=video_guid,
+            file_size=body.file_size,
+            file_name=body.file_name,
+            file_type=body.file_type,
+        )
+        logger.info(f"TUS session created: {tus_upload_url}")
+    except Exception as e:
+        logger.error(f"Failed to create TUS session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create upload session: {str(e)}")
 
     # Update episode record
     ep.bunny_video_id = video_guid
@@ -129,9 +151,10 @@ async def prepare_upload(
     return {
         "episode_id": episode_id,
         "bunny_video_guid": video_guid,
-        "upload_url": upload_url,
+        "tus_upload_url": tus_upload_url,
+        "file_size": body.file_size,
         "status": "processing",
-        "message": "TUS upload: POST to upload_url with TUS headers to initiate, then PATCH chunks.",
+        "message": "Upload chunks via PATCH to 'tus_upload_url'. No authentication needed for subsequent requests.",
     }
 
 
