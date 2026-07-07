@@ -18,10 +18,7 @@
   </div>
 {:else if $isLoggedIn}
   <nav class="nav">
-    <a href="/" class="logo">
-      <span class="logo-icon">🏆</span>
-      CHAMP<span>LMS</span>
-    </a>
+    <a href="/" class="logo">CHAMP<span>LMS</span></a>
     <div class="nav-links">
       <a href="/" class:active={$page.url.pathname === '/'}>
         <span class="nav-icon">🏠</span> Home
@@ -102,17 +99,10 @@
   }
   
   .logo {
-    font-size: 1.3rem;
+    font-size: 1.4rem;
     font-weight: 900;
     letter-spacing: -0.02em;
     color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .logo-icon {
-    font-size: 1.4rem;
   }
   
   .logo span { 
