@@ -97,13 +97,6 @@
     100% { background-position: 200% 0; }
   }
   
-  .skeleton {
-    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-    border-radius: 4px;
-  }
-  
   .hero-skeleton {
     width: 100%;
     min-height: 450px;
@@ -124,74 +117,93 @@
   .skeleton-badge {
     width: 80px;
     height: 20px;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
     margin-bottom: 1rem;
   }
-  
+
   .skeleton-title {
     width: 70%;
     height: 40px;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
     margin-bottom: 1rem;
   }
-  
+
   .skeleton-desc {
     width: 90%;
     height: 60px;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
     margin-bottom: 1.5rem;
   }
-  
+
   .skeleton-buttons {
     display: flex;
     gap: 1rem;
   }
-  
+
   .skeleton-btn {
     width: 120px;
     height: 40px;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
     border-radius: 8px;
   }
-  
+
   .skeleton-btn.ghost {
     width: 100px;
     opacity: 0.5;
   }
-  
+
   .row-skeleton {
     margin-bottom: 2.5rem;
   }
-  
+
   .skeleton-row-title {
     width: 200px;
     height: 24px;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
     margin-bottom: 0.75rem;
   }
-  
+
   .skeleton-cards {
     display: flex;
     gap: 0.75rem;
     overflow: hidden;
   }
-  
+
   .skeleton-card {
     width: 240px;
     flex-shrink: 0;
   }
-  
+
   .skeleton-thumb {
     aspect-ratio: 16/9;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
     border-radius: 8px;
     margin-bottom: 0.5rem;
   }
-  
+
   .skeleton-text {
     width: 80%;
     height: 16px;
-    @extend .skeleton;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
   }
   
   /* Error state */
