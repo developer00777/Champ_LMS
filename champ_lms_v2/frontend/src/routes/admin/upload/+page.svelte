@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api/client';
+  import { uploadVideoHybrid, uploadThumbnail } from '$lib/utils/upload-client';
 
   let moduleTitle = '';
   let moduleCategory = '';
@@ -14,11 +15,21 @@
   let uploading = false;
   let error = '';
   let statusMsg = '';
+  let uploadMethod: string | null = null;
+  let uploadProgress = 0; // 0-100
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
 
   function pickedFile(e: Event): File | null {
     return (e.target as HTMLInputElement).files?.[0] ?? null;
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
   async function createModule() {
@@ -46,45 +57,41 @@
   async function uploadVideo() {
     if (!videoFile) { error = 'Select a video file'; return; }
     uploading = true; error = ''; statusMsg = '';
-    const token = localStorage.getItem('champ_token');
+    uploadProgress = 0;
+    const token = localStorage.getItem('champ_token') || '';
 
     try {
-      // Step 1: Get presigned upload URL from Bunny Stream (via our backend)
-      statusMsg = 'Preparing direct upload to Bunny Stream...';
-      const prepareRes = await fetch(`/api/admin/episodes/${episodeId}/prepare-upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+      // Upload video using hybrid client (TUS first, server fallback)
+      const result = await uploadVideoHybrid({
+        file: videoFile,
+        episodeId,
+        token,
+        onProgress: (loaded, total) => {
+          uploadProgress = Math.round((loaded / total) * 100);
+        },
+        onStatus: (msg) => {
+          statusMsg = msg;
+        },
       });
-      if (!prepareRes.ok) throw new Error(await prepareRes.text());
-      const { upload_url } = await prepareRes.json();
 
-      // Step 2: Upload video file DIRECTLY to Bunny Stream (bypasses our server)
-      statusMsg = 'Uploading video directly to Bunny Stream...';
-      const uploadRes = await fetch(upload_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: videoFile,
-      });
-      if (!uploadRes.ok) throw new Error(`Bunny upload failed: ${uploadRes.status}`);
-      statusMsg = 'Video uploaded. Bunny Stream is transcoding (360p/720p/1080p)...';
+      uploadMethod = result.method;
+      statusMsg = `Video uploaded via ${result.method === 'tus' ? 'direct upload' : 'server relay'}. Bunny Stream is transcoding...`;
 
-      // Step 3: Upload thumbnail if provided (still goes through our server for Bunny Storage)
+      // Upload thumbnail if provided
       if (thumbnailFile) {
-        const thumbForm = new FormData();
-        thumbForm.append('image', thumbnailFile);
-        statusMsg = 'Uploading thumbnail to Bunny Storage...';
-        const tr = await fetch(`/api/admin/episodes/${episodeId}/thumbnail`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          body: thumbForm,
-        });
-        if (!tr.ok) throw new Error(await tr.text());
+        statusMsg = 'Uploading thumbnail...';
+        await uploadThumbnail({ episodeId, file: thumbnailFile, token });
       }
 
       await api.publishModule(moduleId);
       step = 'done';
-    } catch (e: any) { error = e.message; }
-    finally { uploading = false; }
+    } catch (e: any) {
+      error = e.message;
+      statusMsg = '';
+    } finally {
+      uploading = false;
+      uploadProgress = 0;
+    }
   }
 </script>
 
@@ -140,13 +147,25 @@
       <p class="info">Bunny Stream accepts MP4, MOV, AVI. Max recommended: 10 GB.</p>
       <label>Video File *
         <input type="file" accept="video/*" on:change={e => videoFile = pickedFile(e)} />
+        {#if videoFile}
+          <span class="file-info">{videoFile.name} ({formatBytes(videoFile.size)})</span>
+        {/if}
       </label>
       <label>Thumbnail Image (optional)
         <p class="hint">Served via Bunny CDN with Optimizer (auto-WebP, resized to 480×270)</p>
         <input type="file" accept="image/*" on:change={e => thumbnailFile = pickedFile(e)} />
       </label>
+
+      {#if uploading && uploadProgress > 0}
+        <div class="progress-container">
+          <div class="progress-bar" style="width: {uploadProgress}%"></div>
+          <span class="progress-text">{uploadProgress}%</span>
+        </div>
+      {/if}
+
       {#if statusMsg}<p class="status">{statusMsg}</p>{/if}
       {#if error}<p class="error">{error}</p>{/if}
+
       <button class="btn-primary" on:click={uploadVideo} disabled={uploading || !videoFile}>
         {uploading ? 'Uploading...' : 'Upload to Bunny Stream →'}
       </button>
@@ -156,6 +175,9 @@
       <div class="checkmark">✓</div>
       <h2>Upload Complete</h2>
       <p>Video is being transcoded by Bunny Stream. Episode will be ready once encoding finishes (webhook auto-updates status).</p>
+      {#if uploadMethod}
+        <p class="method-info">Uploaded via: {uploadMethod === 'tus' ? 'Direct upload (fast)' : 'Server relay (fallback)'}</p>
+      {/if}
       <div class="done-actions">
         <a href="/admin" class="btn-ghost">Back to Dashboard</a>
         <a href="/module/{moduleId}" class="btn-primary">View Module</a>
@@ -192,8 +214,34 @@
   .info { font-size: 0.83rem; color: var(--muted); background: var(--surface2); padding: 0.6rem 0.8rem; border-radius: 6px; }
   .status { color: var(--gold); font-size: 0.85rem; }
   .error { color: var(--accent); font-size: 0.85rem; }
+  .file-info { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+  .progress-container {
+    width: 100%;
+    height: 24px;
+    background: var(--surface2);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-bar {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.3s ease;
+    border-radius: 12px;
+  }
+  .progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  }
   .done-card { text-align: center; padding: 3rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
   .checkmark { font-size: 3rem; color: var(--success); margin-bottom: 0.75rem; }
   .done-card p { color: var(--muted); margin: 0.5rem 0 2rem; line-height: 1.5; }
+  .method-info { font-size: 0.85rem; color: var(--accent); margin-bottom: 1rem; }
   .done-actions { display: flex; gap: 0.75rem; justify-content: center; }
 </style>
