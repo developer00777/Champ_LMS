@@ -24,6 +24,11 @@
 
   $: hasThumbnail = !!module.thumbnail_url && module.thumbnail_url !== '/placeholder-thumb.svg';
   $: gradientStyle = !hasThumbnail ? getGradient(module.title) : '';
+
+  function handleImageError(e: Event) {
+    const img = e.target as HTMLImageElement;
+    if (img) img.style.display = 'none';
+  }
 </script>
 
 <a href="/module/{module.id}" class="card">
@@ -34,7 +39,7 @@
         alt={module.title} 
         class="thumb" 
         loading="lazy"
-        on:error={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        on:error={handleImageError}
       />
     {:else}
       <div class="thumb-placeholder">
