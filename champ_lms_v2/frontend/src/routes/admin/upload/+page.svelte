@@ -8,6 +8,7 @@
   let episodeOrder = 1;
   let videoFile: File | null = null;
   let thumbnailFile: File | null = null;
+  let externalVideoUrl = '';
 
   let step: 'module' | 'episode' | 'video' | 'done' = 'module';
   let moduleId = '';
@@ -16,9 +17,11 @@
   let error = '';
   let statusMsg = '';
   let uploadMethod: string | null = null;
-  let uploadProgress = 0; // 0-100
+  let uploadProgress = 0;
+  let uploadMode: 'direct' | 'url' = 'direct'; // direct = file upload, url = external URL
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
+  const MAX_DIRECT_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB limit for direct upload
 
   function pickedFile(e: Event): File | null {
     return (e.target as HTMLInputElement).files?.[0] ?? null;
@@ -30,6 +33,17 @@
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  function handleVideoFileChange(e: Event) {
+    videoFile = pickedFile(e);
+    if (videoFile && videoFile.size > MAX_DIRECT_UPLOAD_SIZE) {
+      // Auto-switch to URL mode for large files
+      uploadMode = 'url';
+      error = `File is ${formatBytes(videoFile.size)}. Files larger than ${formatBytes(MAX_DIRECT_UPLOAD_SIZE)} must use external URL upload.`;
+    } else {
+      error = '';
+    }
   }
 
   async function createModule() {
@@ -54,14 +68,18 @@
     finally { uploading = false; }
   }
 
-  async function uploadVideo() {
+  async function uploadVideoDirect() {
     if (!videoFile) { error = 'Select a video file'; return; }
+    if (videoFile.size > MAX_DIRECT_UPLOAD_SIZE) {
+      error = `File too large (${formatBytes(videoFile.size)}). Use external URL upload instead.`;
+      return;
+    }
+
     uploading = true; error = ''; statusMsg = '';
     uploadProgress = 0;
     const token = localStorage.getItem('champ_token') || '';
 
     try {
-      // Upload video using hybrid client (TUS first, server fallback)
       const result = await uploadVideoHybrid({
         file: videoFile,
         episodeId,
@@ -75,9 +93,8 @@
       });
 
       uploadMethod = result.method;
-      statusMsg = `Video uploaded via ${result.method === 'tus' ? 'direct upload' : 'server relay'}. Bunny Stream is transcoding...`;
+      statusMsg = `Video uploaded. Bunny Stream is transcoding...`;
 
-      // Upload thumbnail if provided
       if (thumbnailFile) {
         statusMsg = 'Uploading thumbnail...';
         await uploadThumbnail({ episodeId, file: thumbnailFile, token });
@@ -91,6 +108,48 @@
     } finally {
       uploading = false;
       uploadProgress = 0;
+    }
+  }
+
+  async function uploadVideoFromUrl() {
+    if (!externalVideoUrl.trim()) { error = 'Enter a video URL'; return; }
+    
+    uploading = true; error = ''; statusMsg = '';
+    const token = localStorage.getItem('champ_token') || '';
+
+    try {
+      statusMsg = 'Sending URL to Bunny Stream...';
+      
+      // Call API to fetch from URL
+      const res = await fetch(`/api/admin/episodes/${episodeId}/upload-from-url`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ video_url: externalVideoUrl.trim() }),
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Failed to queue video fetch: ${err}`);
+      }
+
+      uploadMethod = 'url';
+      statusMsg = 'Bunny Stream is downloading and transcoding video...';
+
+      if (thumbnailFile) {
+        statusMsg = 'Uploading thumbnail...';
+        await uploadThumbnail({ episodeId, file: thumbnailFile, token });
+      }
+
+      await api.publishModule(moduleId);
+      step = 'done';
+    } catch (e: any) {
+      error = e.message;
+      statusMsg = '';
+    } finally {
+      uploading = false;
     }
   }
 </script>
@@ -144,31 +203,93 @@
   {:else if step === 'video'}
     <div class="form-card">
       <h2>Upload Video File</h2>
-      <p class="info">Bunny Stream accepts MP4, MOV, AVI. Max recommended: 10 GB.</p>
-      <label>Video File *
-        <input type="file" accept="video/*" on:change={e => videoFile = pickedFile(e)} />
-        {#if videoFile}
-          <span class="file-info">{videoFile.name} ({formatBytes(videoFile.size)})</span>
+      
+      <!-- Upload Mode Toggle -->
+      <div class="upload-mode-toggle">
+        <button 
+          class="mode-btn" 
+          class:active={uploadMode === 'direct'}
+          on:click={() => uploadMode = 'direct'}
+        >
+          Upload File
+        </button>
+        <button 
+          class="mode-btn" 
+          class:active={uploadMode === 'url'}
+          on:click={() => uploadMode = 'url'}
+        >
+          External URL
+        </button>
+      </div>
+
+      {#if uploadMode === 'direct'}
+        <p class="info">Direct file upload. Max: {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}. For larger files, use External URL.</p>
+        <label>Video File *
+          <input type="file" accept="video/*" on:change={handleVideoFileChange} />
+          {#if videoFile}
+            <span class="file-info">{videoFile.name} ({formatBytes(videoFile.size)})</span>
+          {/if}
+        </label>
+
+        {#if videoFile && videoFile.size > MAX_DIRECT_UPLOAD_SIZE}
+          <div class="warning-card">
+            <strong>⚠️ File too large</strong>
+            <p>This file is {formatBytes(videoFile.size)}. Please switch to <strong>External URL</strong> mode and upload to a temporary file host first.</p>
+          </div>
         {/if}
-      </label>
+
+        {#if uploading && uploadProgress > 0}
+          <div class="progress-container">
+            <div class="progress-bar" style="width: {uploadProgress}%"></div>
+            <span class="progress-text">{uploadProgress}%</span>
+          </div>
+        {/if}
+
+        {#if statusMsg}<p class="status">{statusMsg}</p>{/if}
+        {#if error}<p class="error">{error}</p>{/if}
+
+        <button 
+          class="btn-primary" 
+          on:click={uploadVideoDirect} 
+          disabled={uploading || !videoFile || (videoFile?.size || 0) > MAX_DIRECT_UPLOAD_SIZE}
+        >
+          {uploading ? 'Uploading...' : 'Upload to Bunny Stream →'}
+        </button>
+
+      {:else}
+        <p class="info">For files larger than {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}, use a temporary file host:</p>
+        <ul class="host-list">
+          <li><a href="https://file.io" target="_blank">file.io</a> — upload file, paste URL here</li>
+          <li><a href="https://transfer.sh" target="_blank">transfer.sh</a> — command line: <code>curl --upload-file vid.mp4 https://transfer.sh/vid.mp4</code></li>
+          <li><a href="https://tmp.link" target="_blank">tmp.link</a> — upload and get direct URL</li>
+        </ul>
+        
+        <label>Video URL *
+          <input 
+            bind:value={externalVideoUrl} 
+            placeholder="https://file.io/xxxxx or https://transfer.sh/xxxxx/vid.mp4" 
+          />
+        </label>
+        <p class="hint">Bunny Stream will download directly from this URL. Make sure the link is public and doesn't expire immediately.</p>
+
+        {#if statusMsg}<p class="status">{statusMsg}</p>{/if}
+        {#if error}<p class="error">{error}</p>{/if}
+
+        <button 
+          class="btn-primary" 
+          on:click={uploadVideoFromUrl} 
+          disabled={uploading || !externalVideoUrl.trim()}
+        >
+          {uploading ? 'Queuing...' : 'Fetch from URL →'}
+        </button>
+      {/if}
+
+      <hr class="divider-line" />
+      
       <label>Thumbnail Image (optional)
         <p class="hint">Served via Bunny CDN with Optimizer (auto-WebP, resized to 480×270)</p>
         <input type="file" accept="image/*" on:change={e => thumbnailFile = pickedFile(e)} />
       </label>
-
-      {#if uploading && uploadProgress > 0}
-        <div class="progress-container">
-          <div class="progress-bar" style="width: {uploadProgress}%"></div>
-          <span class="progress-text">{uploadProgress}%</span>
-        </div>
-      {/if}
-
-      {#if statusMsg}<p class="status">{statusMsg}</p>{/if}
-      {#if error}<p class="error">{error}</p>{/if}
-
-      <button class="btn-primary" on:click={uploadVideo} disabled={uploading || !videoFile}>
-        {uploading ? 'Uploading...' : 'Upload to Bunny Stream →'}
-      </button>
     </div>
   {:else if step === 'done'}
     <div class="done-card">
@@ -176,7 +297,7 @@
       <h2>Upload Complete</h2>
       <p>Video is being transcoded by Bunny Stream. Episode will be ready once encoding finishes (webhook auto-updates status).</p>
       {#if uploadMethod}
-        <p class="method-info">Uploaded via: {uploadMethod === 'tus' ? 'Direct upload (fast)' : 'Server relay (fallback)'}</p>
+        <p class="method-info">Uploaded via: {uploadMethod === 'url' ? 'External URL (fast)' : 'Direct upload'}</p>
       {/if}
       <div class="done-actions">
         <a href="/admin" class="btn-ghost">Back to Dashboard</a>
@@ -215,6 +336,61 @@
   .status { color: var(--gold); font-size: 0.85rem; }
   .error { color: var(--accent); font-size: 0.85rem; }
   .file-info { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+  
+  .upload-mode-toggle {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .mode-btn {
+    flex: 1;
+    padding: 0.6rem 1rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+  .mode-btn:hover { background: var(--surface); }
+  .mode-btn.active { 
+    background: var(--accent); 
+    color: #fff; 
+    border-color: var(--accent); 
+  }
+  
+  .warning-card {
+    background: rgba(255, 193, 7, 0.1);
+    border: 1px solid #ffc107;
+    border-radius: 6px;
+    padding: 1rem;
+    color: #ffc107;
+  }
+  .warning-card strong { display: block; margin-bottom: 0.5rem; }
+  .warning-card p { margin: 0; font-size: 0.85rem; }
+  
+  .host-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .host-list li { margin-bottom: 0.4rem; }
+  .host-list a { color: var(--accent); }
+  .host-list code {
+    background: var(--surface2);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+  }
+  
+  .divider-line {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+  }
+  
   .progress-container {
     width: 100%;
     height: 24px;
