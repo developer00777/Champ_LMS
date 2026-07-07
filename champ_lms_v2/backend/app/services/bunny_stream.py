@@ -10,11 +10,17 @@ Bunny Stream handles:
 import hashlib
 import hmac
 import time
+from typing import AsyncIterator
 from urllib.parse import quote
 import httpx
 from app.core.config import get_settings
 
 BUNNY_STREAM_BASE = "https://video.bunnycdn.com"
+
+
+def _chunked_reader(file_iterator: AsyncIterator[bytes], chunk_size: int = 8192) -> AsyncIterator[bytes]:
+    """Async generator that yields chunks from a file iterator."""
+    return file_iterator
 
 
 class BunnyStreamService:
@@ -65,6 +71,53 @@ class BunnyStreamService:
                 },
                 content=data,
                 timeout=600,  # large uploads need long timeout
+            )
+            resp.raise_for_status()
+
+    async def upload_video_stream(
+        self,
+        video_guid: str,
+        file_iterator: AsyncIterator[bytes],
+        total_size: int | None = None,
+        chunk_size: int = 65536,
+    ) -> None:
+        """
+        Stream upload video chunks to Bunny Stream — much faster for large files
+        and uses constant memory instead of loading the entire file.
+
+        Args:
+            video_guid: Bunny Stream video GUID
+            file_iterator: Async iterator yielding byte chunks
+            total_size: Total file size in bytes (for Content-Length header)
+            chunk_size: Size of each chunk to read
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        headers = {
+            "AccessKey": self.settings.bunny_stream_api_key,
+            "Content-Type": "application/octet-stream",
+        }
+        if total_size:
+            headers["Content-Length"] = str(total_size)
+
+        url = f"{BUNNY_STREAM_BASE}/library/{self._library_id}/videos/{video_guid}"
+
+        async def stream_chunks() -> AsyncIterator[bytes]:
+            bytes_uploaded = 0
+            async for chunk in file_iterator:
+                bytes_uploaded += len(chunk)
+                if bytes_uploaded % (1024 * 1024) < chunk_size:  # Log every ~1MB
+                    logger.info(f"Uploading {video_guid}: {bytes_uploaded / 1024 / 1024:.1f} MB...")
+                yield chunk
+            logger.info(f"Upload complete: {bytes_uploaded / 1024 / 1024:.1f} MB")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.put(
+                url,
+                headers=headers,
+                content=stream_chunks(),
+                timeout=600,
             )
             resp.raise_for_status()
 

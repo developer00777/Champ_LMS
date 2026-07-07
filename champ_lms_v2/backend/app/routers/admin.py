@@ -2,7 +2,7 @@
 Admin router — module/episode CRUD, video upload to Bunny Stream, analytics.
 Replaces S3 presigned upload + MediaConvert trigger from v1.
 """
-from typing import Annotated
+from typing import Annotated, AsyncIterator
 import io
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from beanie.operators import Inc
@@ -97,20 +97,38 @@ async def upload_episode_video(
 ):
     """
     Upload a video file for an episode directly to Bunny Stream.
+    Uses streaming upload for better performance with large files.
     Bunny auto-transcodes to 360p/720p/1080p HLS on receipt.
-    No MediaConvert, no S3 raw bucket needed.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
 
     # 1. Create video object in Bunny Stream library
+    logger.info(f"Creating Bunny Stream video object for episode {episode_id}")
     video_obj = await bunny_stream.create_video(ep.title)
     video_guid = video_obj["guid"]
 
-    # 2. Upload bytes to Bunny Stream
-    data = await video.read()
-    await bunny_stream.upload_video_bytes(video_guid, data)
+    # 2. Stream upload to Bunny Stream (constant memory, chunked)
+    logger.info(f"Starting stream upload for {video.filename} ({video.size or 'unknown'} bytes)")
+
+    async def file_chunks(chunk_size: int = 65536) -> AsyncIterator[bytes]:
+        """Async generator yielding chunks from UploadFile."""
+        while True:
+            chunk = await video.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+    await bunny_stream.upload_video_stream(
+        video_guid,
+        file_chunks(),
+        total_size=video.size,
+        chunk_size=65536,
+    )
 
     # 3. Update episode record — status stays "processing" until webhook fires
     ep.bunny_video_id = video_guid
@@ -164,6 +182,60 @@ async def generate_quiz(
 
     questions = await ai_service.generate_quiz(ep.transcript)
     return {"questions": questions}
+
+
+class UploadFromUrlBody(BaseModel):
+    video_url: str
+
+
+@router.post("/episodes/{episode_id}/upload-from-url")
+async def upload_episode_video_from_url(
+    episode_id: str,
+    body: UploadFromUrlBody,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Tell Bunny Stream to fetch a video from an external URL directly.
+    This is 10x faster than uploading through your server — Bunny pulls
+    the video directly from the source URL.
+
+    Example video_url sources:
+      - Temporary file hosting: https://file.io/xxxxx
+      - Cloud storage presigned URL: https://s3.amazonaws.com/...
+      - Another CDN: https://cdn.example.com/video.mp4
+      - Zoom recording download URL
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    ep = await Episode.get(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    # 1. Create video object in Bunny Stream library
+    logger.info(f"Creating Bunny Stream video object for episode {episode_id}")
+    video_obj = await bunny_stream.create_video(ep.title)
+    video_guid = video_obj["guid"]
+
+    # 2. Tell Bunny Stream to fetch from URL directly
+    logger.info(f"Requesting Bunny Stream to fetch from: {body.video_url[:60]}...")
+    fetch_result = await bunny_stream.upload_video_from_url(video_guid, body.video_url)
+
+    logger.info(f"Fetch initiated: {fetch_result}")
+
+    # 3. Update episode record — status stays "processing" until webhook fires
+    ep.bunny_video_id = video_guid
+    ep.bunny_video_guid = video_guid
+    ep.status = "processing"
+    await ep.save()
+
+    return {
+        "episode_id": episode_id,
+        "bunny_video_guid": video_guid,
+        "status": "processing",
+        "fetch_initiated": True,
+        "message": "Video fetch initiated — Bunny Stream is pulling the video from the provided URL. Webhook will update status to 'ready' when complete.",
+    }
 
 
 @router.get("/analytics")
