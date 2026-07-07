@@ -42,7 +42,7 @@
      │                            │  AWS MediaConvert            │
 ┌────▼────────────────────────┐   │  - Transcode raw MP4→HLS    │
 │  RDS PostgreSQL             │   │  - 360p / 720p / 1080p      │
-│  t3.micro (MVP)             │   │  - Auto-trigger via Lambda  │
+│  t3.micro (MVP)             │   │  - Auto-triggerso  via Lambda  │
 │  Multi-AZ NOT needed MVP    │   │    on S3 upload event       │
 └────────────────────────────┘   └─────────────────────────────┘
 

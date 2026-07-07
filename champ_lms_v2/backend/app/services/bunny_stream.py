@@ -205,15 +205,18 @@ class BunnyStreamService:
         secret = self.settings.bunny_stream_token_secret
         cdn_host = self._cdn_hostname()
         expires = int(time.time()) + expires_in_seconds
-        path = f"/{video_guid}/playlist.m3u8"
+
+        # IMPORTANT: Bunny Stream token path does NOT include leading slash
+        # Verified against: https://docs.bunny.net/reference/video-stream_tokenauthentication
+        video_path = f"{video_guid}/playlist.m3u8"
 
         if not secret:
             raise RuntimeError("BUNNY_STREAM_TOKEN_SECRET is not configured — cannot generate authenticated URLs")
 
-        token_raw = secret + path + str(expires)
+        token_raw = secret + video_path + str(expires)
         token = hashlib.sha256(token_raw.encode()).hexdigest()
 
-        return f"https://{cdn_host}{path}?token={token}&expires={expires}"
+        return f"https://{cdn_host}/{video_path}?token={token}&expires={expires}"
 
     def get_embed_url(self, video_guid: str) -> str:
         """Bunny Stream built-in embed player URL (iframe-embeddable)."""
