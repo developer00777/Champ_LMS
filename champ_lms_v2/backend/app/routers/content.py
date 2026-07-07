@@ -272,27 +272,31 @@ async def get_stream_url(
     if not ep.bunny_video_guid:
         raise HTTPException(status_code=503, detail="Video not available")
 
-    # Generate stream URL — try Bunny's API first for correct tokens
+    # Bunny Stream playback options:
+    # 1. EMBED URL (recommended) — Works with Token Auth enabled. Uses Bunny's iframe player.
+    # 2. DIRECT HLS — Requires Token Authentication to be DISABLED in Bunny dashboard,
+    #    or requires fetching a fresh token from Bunny API on each request.
+    embed_url = bunny_stream.get_embed_url(ep.bunny_video_guid)
+
+    # Try to get direct stream URL for native players (Video.js, HLS.js, etc.)
+    # This may return 403 if Token Authentication is enabled in Bunny Stream dashboard.
+    stream_url = None
     try:
         stream_url = await bunny_stream.get_token_auth_url_from_api(ep.bunny_video_guid, expires_in_seconds=14400)
     except Exception as e:
-        logger.warning(f"Bunny token API failed, falling back to local generation: {e}")
+        logger.warning(f"Bunny token API failed for {ep.bunny_video_guid}: {e}")
         try:
             stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
-        except RuntimeError as e:
-            logger.warning(f"Token auth URL failed for {ep.bunny_video_guid}: {e}")
-            # Fallback to plain HLS URL (only works if token auth is disabled in Bunny dashboard)
+        except RuntimeError:
             stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
-            logger.info(f"Falling back to plain HLS URL: {stream_url}")
-
-    embed_url = bunny_stream.get_embed_url(ep.bunny_video_guid)
 
     return {
-        "stream_url": stream_url,    # HLS manifest — use with Video.js / HLS.js
-        "embed_url": embed_url,       # Bunny iframe player fallback
+        "embed_url": embed_url,          # Bunny iframe player — works with Token Auth enabled
+        "stream_url": stream_url,        # Direct HLS manifest — may 403 if Token Auth enabled
         "expires_in": 14400,
         "episode_status": ep.status,
         "bunny_video_guid": ep.bunny_video_guid,
+        "note": "If stream_url returns 403, use embed_url (iframe) or disable Token Authentication in Bunny Stream dashboard.",
     }
 
 
