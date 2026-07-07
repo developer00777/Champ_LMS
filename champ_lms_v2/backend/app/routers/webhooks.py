@@ -44,6 +44,16 @@ async def bunny_stream_webhook(request: Request):
         ep.status = "ready"
         if duration:
             ep.duration_seconds = int(duration)
+        
+        # Fetch thumbnail from Bunny Stream auto-generated thumbnail
+        try:
+            video_info = await bunny_stream.get_video(video_guid)
+            thumbnail_file = video_info.get("thumbnailFileName")
+            if thumbnail_file:
+                ep.thumbnail_url = bunny_stream.get_thumbnail_url(video_guid, thumbnail_file)
+        except Exception:
+            pass  # Thumbnail fetch is non-critical
+            
     elif status == 5:  # Failed
         ep.status = "failed"
 

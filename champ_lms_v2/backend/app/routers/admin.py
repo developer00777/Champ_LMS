@@ -346,6 +346,10 @@ async def get_episode_status(
                 ep.status = "ready"
                 if video.get("length"):
                     ep.duration_seconds = int(video["length"])
+                # Fetch auto-generated thumbnail from Bunny Stream
+                thumbnail_file = video.get("thumbnailFileName")
+                if thumbnail_file and not ep.thumbnail_url:
+                    ep.thumbnail_url = bunny_stream.get_thumbnail_url(ep.bunny_video_guid, thumbnail_file)
                 await ep.save()
             elif bunny_status in (5, 6):  # Error / UploadFailed
                 ep.status = "failed"
@@ -357,6 +361,7 @@ async def get_episode_status(
                 "bunny_status": bunny_status,
                 "bunny_video_guid": ep.bunny_video_guid,
                 "duration_seconds": ep.duration_seconds,
+                "thumbnail_url": ep.thumbnail_url,
                 "title": ep.title,
             }
         except Exception:
@@ -367,5 +372,6 @@ async def get_episode_status(
         "status": ep.status,
         "bunny_video_guid": ep.bunny_video_guid,
         "duration_seconds": ep.duration_seconds,
+        "thumbnail_url": ep.thumbnail_url,
         "title": ep.title,
     }

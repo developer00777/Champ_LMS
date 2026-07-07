@@ -195,6 +195,19 @@ class BunnyStreamService:
             resp.raise_for_status()
             return resp.json()
 
+    def get_thumbnail_url(self, video_guid: str, thumbnail_file_name: str | None = None) -> str:
+        """
+        Generate Bunny Stream thumbnail URL.
+        
+        Bunny auto-generates thumbnails when transcoding finishes.
+        URL format: https://{cdn_host}/{video_guid}/{thumbnail_file_name}
+        Default thumbnail is usually the first frame: {video_guid}/thumbnail.jpg
+        """
+        cdn_host = self._cdn_hostname()
+        if thumbnail_file_name:
+            return f"https://{cdn_host}/{video_guid}/{thumbnail_file_name}"
+        return f"https://{cdn_host}/{video_guid}/thumbnail.jpg"
+
     async def delete_video(self, video_guid: str) -> None:
         async with httpx.AsyncClient() as client:
             resp = await client.delete(

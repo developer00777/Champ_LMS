@@ -25,8 +25,10 @@ class Episode(Document):
     transcript: str | None = None
     ai_summary: str | None = None
 
-    # Bunny Storage path for episode thumbnail
+    # Bunny Storage path for episode thumbnail (manually uploaded)
     thumbnail_bunny_path: str | None = None
+    # Bunny Stream auto-generated thumbnail URL (set when transcoding finishes)
+    thumbnail_url: str | None = None
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

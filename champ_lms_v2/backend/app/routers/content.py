@@ -231,7 +231,7 @@ async def get_module(
                 "duration_seconds": ep.duration_seconds,
                 "sequence_order": ep.sequence_order,
                 "status": ep.status,
-                "thumbnail_url": _thumbnail_url(ep.thumbnail_bunny_path),
+                "thumbnail_url": ep.thumbnail_url or _thumbnail_url(ep.thumbnail_bunny_path),
             }
             for ep in episodes
         ],
