@@ -297,3 +297,52 @@ async def analytics(admin: Annotated[User, Depends(require_admin)]):
         "episode_completions": completions,
         "total_enrollments": enrollments,
     }
+
+
+@router.get("/episodes/{episode_id}/status")
+async def get_episode_status(
+    episode_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Check video processing status from Bunny Stream directly.
+    Use this for polling when webhook hasn't arrived yet.
+    """
+    ep = await Episode.get(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    # If processing, check Bunny Stream directly
+    if ep.status == "processing" and ep.bunny_video_guid:
+        try:
+            video = await bunny_stream.get_video(ep.bunny_video_guid)
+            bunny_status = video.get("status")
+            
+            # Update our record if Bunny says it's done
+            if bunny_status == 4:  # Finished
+                ep.status = "ready"
+                if video.get("length"):
+                    ep.duration_seconds = int(video["length"])
+                await ep.save()
+            elif bunny_status in (5, 6):  # Error / UploadFailed
+                ep.status = "failed"
+                await ep.save()
+                
+            return {
+                "episode_id": ep.id,
+                "status": ep.status,
+                "bunny_status": bunny_status,
+                "bunny_video_guid": ep.bunny_video_guid,
+                "duration_seconds": ep.duration_seconds,
+                "title": ep.title,
+            }
+        except Exception:
+            pass  # Return cached status if Bunny API fails
+
+    return {
+        "episode_id": ep.id,
+        "status": ep.status,
+        "bunny_video_guid": ep.bunny_video_guid,
+        "duration_seconds": ep.duration_seconds,
+        "title": ep.title,
+    }
