@@ -42,6 +42,8 @@ app.include_router(admin.router)
 app.include_router(zoom.router)
 app.include_router(assessments.router)
 app.include_router(webhooks.router)
+# Bunny dashboard may be configured with /api prefix — support both paths
+app.include_router(webhooks.router, prefix="/api")
 
 
 @app.get("/health")
