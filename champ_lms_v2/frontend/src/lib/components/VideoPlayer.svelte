@@ -78,7 +78,17 @@
 </script>
 
 <div bind:this={container} class="player-wrap">
-  {#if streamUrl}
+  {#if embedUrl}
+    <!-- Bunny Stream iframe embed player — works with Token Authentication enabled -->
+    <iframe
+      src={embedUrl}
+      class="bunny-embed"
+      title="Video player"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowfullscreen
+    ></iframe>
+  {:else if streamUrl}
+    <!-- Direct HLS playback — only works if Token Authentication is DISABLED in Bunny dashboard -->
     <video
       bind:this={videoEl}
       class="video"
@@ -87,15 +97,6 @@
       on:timeupdate={onTimeUpdate}
       on:ended={onEnded}
     ></video>
-  {:else if embedUrl}
-    <!-- Bunny Stream iframe embed player fallback -->
-    <iframe
-      src={embedUrl}
-      class="bunny-embed"
-      title="Video player"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-      allowfullscreen
-    ></iframe>
   {:else}
     <div class="placeholder">Loading video...</div>
   {/if}
