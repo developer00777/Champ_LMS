@@ -46,22 +46,29 @@
   async function uploadVideo() {
     if (!videoFile) { error = 'Select a video file'; return; }
     uploading = true; error = ''; statusMsg = '';
+    const token = localStorage.getItem('champ_token');
 
     try {
-      // Upload video directly to Bunny Stream via backend
-      const formData = new FormData();
-      formData.append('video', videoFile);
-      const token = localStorage.getItem('champ_token');
-      statusMsg = 'Uploading to Bunny Stream...';
-      const res = await fetch(`/api/admin/episodes/${episodeId}/upload`, {
+      // Step 1: Get presigned upload URL from Bunny Stream (via our backend)
+      statusMsg = 'Preparing direct upload to Bunny Stream...';
+      const prepareRes = await fetch(`/api/admin/episodes/${episodeId}/prepare-upload`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-        body: formData,
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!prepareRes.ok) throw new Error(await prepareRes.text());
+      const { upload_url } = await prepareRes.json();
+
+      // Step 2: Upload video file DIRECTLY to Bunny Stream (bypasses our server)
+      statusMsg = 'Uploading video directly to Bunny Stream...';
+      const uploadRes = await fetch(upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: videoFile,
+      });
+      if (!uploadRes.ok) throw new Error(`Bunny upload failed: ${uploadRes.status}`);
       statusMsg = 'Video uploaded. Bunny Stream is transcoding (360p/720p/1080p)...';
 
-      // Upload thumbnail if provided
+      // Step 3: Upload thumbnail if provided (still goes through our server for Bunny Storage)
       if (thumbnailFile) {
         const thumbForm = new FormData();
         thumbForm.append('image', thumbnailFile);

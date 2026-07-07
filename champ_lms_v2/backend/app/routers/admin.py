@@ -89,6 +89,49 @@ async def add_episode(
     return {"id": ep.id, "title": ep.title}
 
 
+@router.post("/episodes/{episode_id}/prepare-upload")
+async def prepare_upload(
+    episode_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Create a Bunny Stream video object and return a presigned upload URL.
+    The client uploads the video file DIRECTLY to Bunny Stream using this URL,
+    bypassing our server entirely. This is 10x faster for large files.
+
+    Client flow:
+      1. Call this endpoint → receive {upload_url, bunny_video_guid}
+      2. PUT the video file directly to upload_url (Content-Type: application/octet-stream)
+      3. Bunny Stream webhooks /webhooks/bunny-stream when encoding finishes
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    ep = await Episode.get(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    # Create video object in Bunny Stream library
+    logger.info(f"Creating Bunny Stream video object for episode {episode_id}")
+    video_obj = await bunny_stream.create_video(ep.title)
+    video_guid = video_obj["guid"]
+    upload_url = video_obj.get("uploadUrl")
+
+    # Update episode record
+    ep.bunny_video_id = video_guid
+    ep.bunny_video_guid = video_guid
+    ep.status = "processing"
+    await ep.save()
+
+    return {
+        "episode_id": episode_id,
+        "bunny_video_guid": video_guid,
+        "upload_url": upload_url,
+        "status": "processing",
+        "message": "Upload the video file directly to 'upload_url' via PUT. Bunny will webhook when encoding finishes.",
+    }
+
+
 @router.post("/episodes/{episode_id}/upload")
 async def upload_episode_video(
     episode_id: str,
