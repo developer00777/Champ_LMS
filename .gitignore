@@ -1,34 +1,21 @@
-# PDFs (reference docs, not code)
-*.pdf
-
 # Python
 __pycache__/
-*.py[cod]
-*.egg-info/
+*.pyc
 .venv/
 venv/
 env/
-dist/
-build/
-*.egg
-.pytest_cache/
-.mypy_cache/
+*.egg-info/
 
-# Node / SvelteKit
+# Node
 node_modules/
 .svelte-kit/
-.next/
-dist/
 build/
-*.local
+dist/
 
-# Environment files
+# Env
 .env
-.env.*
-!.env.example
-
-# Docker
-*.override.yml
+.env.local
+.env.*.local
 
 # OS
 .DS_Store
@@ -38,10 +25,13 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
-*.swo
-
-# Alembic versions (keep the folder, ignore nothing — migrations should be committed)
 
 # Logs
 *.log
-logs/
+
+# Docker
+docker-compose.override.yml
+
+# Temp
+tmp/
+.cache/

@@ -3,9 +3,15 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { auth, isLoggedIn, isAdmin } from '$lib/stores/auth';
+  import { gamification } from '$lib/stores/gamification';
+  import LevelBadge from '$lib/components/LevelBadge.svelte';
+  import RewardModal from '$lib/components/RewardModal.svelte';
   import '../app.css';
 
-  onMount(() => auth.init());
+  onMount(() => {
+    auth.init();
+    gamification.load();
+  });
 
   $: isAuthPage = $page.url.pathname.startsWith('/auth');
   $: if (!$isLoggedIn && !isAuthPage && !$auth.loading) goto('/auth/login');
@@ -25,6 +31,12 @@
       </a>
       <a href="/my-learning" class:active={$page.url.pathname === '/my-learning'}>
         <span class="nav-icon">📚</span> My Learning
+      </a>
+      <a href="/paths" class:active={$page.url.pathname === '/paths'}>
+        <span class="nav-icon">🥾</span> Paths
+      </a>
+      <a href="/challenges" class:active={$page.url.pathname === '/challenges'}>
+        <span class="nav-icon">🏁</span> Challenges
       </a>
       <a href="/leaderboard" class:active={$page.url.pathname === '/leaderboard'}>
         <span class="nav-icon">🏆</span> Leaderboard
@@ -46,9 +58,21 @@
           {$auth.user?.streak_days ?? 0}
         </span>
       </div>
+      {#if $gamification.levelInfo}
+        <a href="/my-learning" class="level-link" title="Level {$gamification.levelInfo.level}">
+          <LevelBadge
+            level={$gamification.levelInfo.level}
+            xp={$gamification.levelInfo.xp}
+            xpToNextLevel={$gamification.levelInfo.xp_to_next_level}
+            compact
+            size={36}
+          />
+        </a>
+      {/if}
       <button class="btn-signout" on:click={() => auth.logout()}>Sign Out</button>
     </div>
   </nav>
+  <RewardModal />
   <main class="main">
     <slot />
   </main>
@@ -183,6 +207,11 @@
     background: var(--surface2);
     color: var(--text);
     border-color: var(--muted);
+  }
+
+  .level-link {
+    display: flex;
+    align-items: center;
   }
   
   .main { 

@@ -52,7 +52,8 @@
     player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
   }
 
-  function onEnded() {
+  async function onEnded() {
+    await player.complete();
     onComplete?.();
     // Auto-advance
     showAutoAdvance = true;
