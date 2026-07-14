@@ -65,10 +65,31 @@ async def submit_attempt(
     )
     await attempt.insert()
 
+    rewards = None
     if passed:
         gamification = GamificationService(redis)
-        await gamification.award_points(user.id, "pass_quiz", user.department or "")
-        await gamification.check_and_award_badges(user.id, "pass_quiz")
+        pass_reward = await gamification.reward(
+            user.id, "pass_quiz", user.department or "",
+            ref_type="assessment", ref_id=assessment_id,
+        )
+        badges = await gamification.check_and_award_badges(user.id, "pass_quiz")
+
+        perfect_reward = None
+        perfect_badges: list[str] = []
+        if score == 100:
+            perfect_reward = await gamification.reward(
+                user.id, "perfect_quiz", user.department or "",
+                ref_type="assessment", ref_id=assessment_id,
+            )
+            perfect_badges = await gamification.check_and_award_badges(user.id, "perfect_quiz")
+
+        rewards = {
+            "action": "pass_quiz",
+            "pass": pass_reward,
+            "perfect_quiz": perfect_reward,
+            "badges_unlocked": badges,
+            "perfect_badges_unlocked": perfect_badges,
+        }
 
     feedback = [
         {
@@ -81,4 +102,4 @@ async def submit_attempt(
         for i, q in enumerate(questions)
     ]
 
-    return {"score": score, "passed": passed, "pass_threshold": assessment.pass_threshold, "feedback": feedback}
+    return {"score": score, "passed": passed, "pass_threshold": assessment.pass_threshold, "feedback": feedback, "rewards": rewards}
