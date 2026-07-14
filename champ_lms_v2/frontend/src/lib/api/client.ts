@@ -51,7 +51,7 @@ export const api = {
 
   // Progress
   updateProgress: (episodeId: string, watchedSeconds: number, totalSeconds: number) =>
-    request('/progress', {
+    request<RewardSummary | { rewards?: RewardSummary; level_up?: boolean; new_level?: number }>('/progress', {
       method: 'POST',
       body: JSON.stringify({ episode_id: episodeId, watched_seconds: watchedSeconds, total_seconds: totalSeconds }),
     }),
@@ -61,8 +61,20 @@ export const api = {
   // Gamification
   leaderboard: (department?: string) =>
     request<LeaderboardEntry[]>(`/leaderboard${department ? `?department=${department}` : ''}`),
+  moduleLeaderboard: (moduleId: string) =>
+    request<ModuleLeaderboard>(`/leaderboard/modules/${moduleId}`),
   myBadges: () => request<Badge[]>('/badges/me'),
   myStreak: () => request<StreakData>('/streaks/me'),
+  levelInfo: () => request<LevelInfo>('/me/level'),
+  xpHistory: (limit = 20) => request<XpEvent[]>(`/me/xp-history?limit=${limit}`),
+  quests: () => request<Quest[]>('/quests/me'),
+  upsellingTrack: () => request<UpskillingTrack>('/me/upselling-track'),
+  activityFeed: (limit = 20) => request<ActivityItem[]>(`/activity/recent?limit=${limit}`),
+  shareAchievement: (type: string, refId: string) =>
+    request<SharePayload>('/share/achievement', {
+      method: 'POST',
+      body: JSON.stringify({ type, ref_id: refId }),
+    }),
 
   // Admin
   createModule: (body: { title: string; description?: string; category?: string; tags?: string[] }) =>
@@ -87,12 +99,100 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ answers }),
     }),
+
+  // Learning Paths
+  paths: (params?: { department?: string; path_type?: string }) => {
+    const qs = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+    return request<PathSummary[]>(`/paths${qs}`);
+  },
+  path: (id: string) => request<PathDetail>(`/paths/${id}`),
+  enrollPath: (id: string) => request(`/paths/${id}/enroll`, { method: 'POST' }),
+  advancePath: (id: string) => request(`/paths/${id}/advance`, { method: 'POST' }),
+
+  // Challenges
+  challenges: (department?: string) =>
+    request<ChallengeSummary[]>(`/challenges${department ? `?department=${department}` : ''}`),
+  challenge: (id: string) => request<ChallengeDetail>(`/challenges/${id}`),
+  createTeam: (challengeId: string, name: string) =>
+    request<{ id: string }>(`/challenges/${challengeId}/teams`, { method: 'POST', body: JSON.stringify({ name }) }),
+  joinTeam: (challengeId: string, teamId: string) =>
+    request(`/challenges/${challengeId}/join`, { method: 'POST', body: JSON.stringify({ team_id: teamId }) }),
+  challengeLeaderboard: (challengeId: string) =>
+    request<{ challenge_id: string; entries: ChallengeLeaderboardEntry[] }>(`/challenges/${challengeId}/leaderboard`),
+
+  // Social
+  socialFeed: (department?: string, limit = 30) =>
+    request<SocialPostItem[]>(`/social/feed?limit=${limit}${department ? `&department=${department}` : ''}`),
+  createPost: (body: { post_type: string; body: string; team_id?: string; ref_type?: string; ref_id?: string }) =>
+    request<{ id: string }>('/social/posts', { method: 'POST', body: JSON.stringify(body) }),
+  toggleLike: (postId: string) =>
+    request<{ liked: boolean; like_count: number }>(`/social/posts/${postId}/like`, { method: 'POST' }),
+  notifications: (unreadOnly = false) =>
+    request<NotificationItem[]>(`/notifications${unreadOnly ? '?unread_only=true' : ''}`),
+  markNotificationRead: (id: string) =>
+    request(`/notifications/${id}/read`, { method: 'POST' }),
+  markAllNotificationsRead: () =>
+    request('/notifications/read-all', { method: 'POST' }),
 };
 
 // Types
 export interface User {
   id: string; email: string; full_name: string | null;
   role: string; department: string | null; points: number; streak_days: number;
+  xp: number; level: number;
+}
+export interface RewardEntry {
+  type: string;
+  points: number;
+  xp: number;
+  name: string;
+}
+export interface RewardSummary {
+  total_points: number;
+  total_xp: number;
+  episode?: RewardEntry;
+  module_completion?: RewardEntry & { bonus_points?: number };
+  first_to_complete?: RewardEntry;
+  module_mastery?: RewardEntry;
+  perfect_quiz?: RewardEntry;
+  badge?: { badge_id: string; name: string };
+  level_up?: boolean;
+  new_level?: number;
+}
+export interface LevelInfo {
+  level: number; xp: number; xp_to_next_level: number;
+  tier: string; next_tier: string | null;
+}
+export interface XpEvent {
+  id: string; reason: string; amount: number;
+  created_at: string; ref_id?: string | null;
+}
+export interface Quest {
+  quest_id: string; title: string; description: string | null;
+  scope: 'daily' | 'weekly' | 'monthly';
+  target: number; progress: number; completed: boolean;
+  xp_reward: number; points_reward: number;
+}
+export interface UpskillingTrack {
+  type: string; track: string;
+  total_modules: number; mastered_modules: number;
+  mastery_percentage: number;
+  modules: {
+    module_id: string; title: string;
+    status: 'not_started' | 'in_progress' | 'completed' | 'mastered';
+    progress: number;
+  }[];
+  rank_in_department: number;
+}
+export interface SharePayload {
+  type: string; ref_id: string; user_name: string;
+  share_text: string; share_url: string;
+  badge?: string;
+}
+export interface ActivityItem {
+  id: string; type: string; message: string;
+  points?: number; xp?: number; created_at: string;
+  metadata?: Record<string, any>;
 }
 export interface Module {
   id: string; title: string; description: string | null;
@@ -135,5 +235,68 @@ export interface AssessmentData {
 }
 export interface AttemptResult {
   score: number; passed: boolean; pass_threshold: number;
-  feedback: { question: string; correct: boolean; correct_answer: string; explanation: string | null }[];
+  feedback: { question: string; correct: boolean; correct_answer: string; explanation: string | null; your_answer?: string }[];
+  rewards?: RewardSummary;
+}
+export interface ModuleLeaderboard {
+  module_id: string; module_title: string; total_points: number;
+  entries: LeaderboardEntry[];
+}
+
+// * Learning Path types
+export interface PathSummary {
+  id: string; key: string; title: string; description: string | null;
+  department: string | null; path_type: string; variant: string;
+  total_modules: number; total_nodes: number;
+}
+export interface PathNode {
+  sequence: number; module_id: string; node_type: string;
+  unlock_rule: string; is_summit: boolean; title: string;
+  module_title: string | null; module_category: string | null;
+  thumbnail_url: string | null; total_episodes: number;
+  progress_pct: number; mastered: boolean;
+  status: 'locked' | 'unlocked' | 'in_progress' | 'completed' | 'mastered';
+}
+export interface PathDetail extends PathSummary {
+  nodes: PathNode[]; current_node: number;
+  unlocked_nodes: number[]; mastered_nodes: number[];
+  total_nodes: number; mastered_count: number;
+  completion_percentage: number;
+  started_at: string; completed_at: string | null;
+}
+
+// * Challenge types
+export interface ChallengeSummary {
+  id: string; key: string; title: string; description: string | null;
+  challenge_type: string; department: string | null; team_size: number;
+  criteria: Record<string, any>; reward_xp: number; reward_points: number;
+  start_at: string; end_at: string | null;
+  total_teams: number; my_team_id: string | null;
+}
+export interface ChallengeTeam {
+  id: string; name: string; department: string | null;
+  captain_id: string | null; member_count: number;
+  members: { id: string; name: string | null; department: string | null }[];
+  progress: number; target: number; completed: boolean; completed_at: string | null;
+}
+export interface ChallengeDetail extends ChallengeSummary {
+  teams: ChallengeTeam[];
+}
+export interface ChallengeLeaderboardEntry {
+  rank: number; team_id: string; team_name: string;
+  department: string | null; member_count: number;
+  progress: number; target: number; completed: boolean; completed_at: string | null;
+}
+
+// * Social types
+export interface SocialPostItem {
+  id: string; post_type: string; body: string;
+  user_id: string; user_name: string | null; user_department: string | null;
+  team_id: string | null; ref_type: string | null; ref_id: string | null;
+  likes: string[]; liked_by_me: boolean; created_at: string;
+}
+export interface NotificationItem {
+  id: string; type: string; title: string; body: string | null;
+  ref_type: string | null; ref_id: string | null;
+  read: boolean; created_at: string;
 }
