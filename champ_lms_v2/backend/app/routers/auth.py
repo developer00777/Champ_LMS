@@ -27,6 +27,8 @@ class UserOut(BaseModel):
     role: str
     department: str | None
     points: int
+    xp: int
+    level: int
     streak_days: int
 
     class Config:

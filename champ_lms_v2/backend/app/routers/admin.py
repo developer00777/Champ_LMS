@@ -34,6 +34,10 @@ class TusUploadRequest(BaseModel):
     file_type: str = "video/mp4"
 
 
+class ModuleScoringBody(BaseModel):
+    points_weight: float
+
+
 class CreateEpisodeBody(BaseModel):
     title: str
     description: str | None = None
@@ -68,6 +72,27 @@ async def publish_module(
     module.is_published = True
     await module.save()
     return {"published": True}
+
+
+@router.patch("/modules/{module_id}/scoring")
+async def update_module_scoring(
+    module_id: str,
+    body: ModuleScoringBody,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Admin-configurable point multiplier for a module.
+    A weight of 1.5 makes all point rewards tied to this module worth 1.5x.
+    """
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    module.points_weight = max(0.0, body.points_weight)
+    await module.save()
+    return {
+        "module_id": module.id,
+        "points_weight": module.points_weight,
+    }
 
 
 @router.post("/modules/{module_id}/episodes", status_code=201)
@@ -250,7 +275,27 @@ async def generate_quiz(
         raise HTTPException(status_code=422, detail="Episode has no transcript")
 
     questions = await ai_service.generate_quiz(ep.transcript)
-    return {"questions": questions}
+
+    # * Persist the assessment so /assessments/{module_id} can find it
+    from app.models.assessment import Assessment
+    existing = await Assessment.find_one(
+        Assessment.module_id == ep.module_id,
+        Assessment.episode_id == episode_id,
+    )
+    if existing:
+        existing.questions = questions
+        await existing.save()
+        assessment = existing
+    else:
+        assessment = Assessment(
+            module_id=ep.module_id,
+            episode_id=episode_id,
+            title=f"Quiz: {ep.title}",
+            questions=questions,
+        )
+        await assessment.insert()
+
+    return {"assessment_id": assessment.id, "questions": questions}
 
 
 class UploadFromUrlBody(BaseModel):

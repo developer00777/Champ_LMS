@@ -1,6 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { api, type AssessmentData, type AttemptResult } from '$lib/api/client';
+  import { handleReward, gamification } from '$lib/stores/gamification';
+  import ShareAchievement from './ShareAchievement.svelte';
 
   export let assessmentId: string;
   export let questions: AssessmentData['questions'];
@@ -18,6 +20,10 @@
     error = '';
     try {
       result = await api.submitAttempt(assessmentId, answers as number[]);
+      if (result.rewards) {
+        handleReward(result.rewards);
+        gamification.rehydrate();
+      }
       if (result.passed) dispatch('passed');
     } catch (e: any) {
       error = e.message;
@@ -52,6 +58,12 @@
             </div>
           {/each}
         </div>
+
+        {#if result.passed}
+          <div class="share-wrap">
+            <ShareAchievement type="module_mastery" refId={assessmentId} buttonText="Share this win" />
+          </div>
+        {/if}
 
         <button class="btn-primary" on:click={() => dispatch('close')}>Continue Learning</button>
       </div>
@@ -143,5 +155,6 @@
   .fb-a, .fb-correct, .fb-exp { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
   .fb-correct { color: var(--success); }
   .error { color: var(--accent); font-size: 0.85rem; margin-bottom: 0.75rem; }
+  .share-wrap { margin: 1rem 0 1.5rem; }
   .btn-primary { width: 100%; }
 </style>

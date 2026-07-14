@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, type FeedRow, type ProgressEntry } from '$lib/api/client';
+  import { gamification } from '$lib/stores/gamification';
   import ContentRow from '$lib/components/ContentRow.svelte';
   import HeroTrailer from '$lib/components/HeroTrailer.svelte';
+  import UpskillingTrack from '$lib/components/UpskillingTrack.svelte';
+  import QuestList from '$lib/components/QuestList.svelte';
 
   let rows: FeedRow[] = [];
   let progressMap: Record<string, number> = {};
@@ -70,15 +73,22 @@
     <button class="btn-primary" on:click={() => window.location.reload()}>Retry</button>
   </div>
 {:else}
-  <HeroTrailer module={heroModule} />
-
-  {#each rows as row}
-    <ContentRow
-      title={row.row_title}
-      modules={row.modules}
-      {progressMap}
-    />
-  {/each}
+  <div class="home-grid">
+    <div class="home-main">
+      <HeroTrailer module={heroModule} />
+      {#each rows as row}
+        <ContentRow
+          title={row.row_title}
+          modules={row.modules}
+          {progressMap}
+        />
+      {/each}
+    </div>
+    <aside class="home-sidebar">
+      <UpskillingTrack track={$gamification.upselling} />
+      <QuestList quests={$gamification.quests} title="Quests" />
+    </aside>
+  </div>
 
   {#if rows.length === 0}
     <div class="empty-state">
@@ -256,6 +266,40 @@
     margin-bottom: 1rem;
   }
   
+  .home-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 2rem;
+    align-items: start;
+  }
+  .home-main {
+    min-width: 0;
+  }
+  .home-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    position: sticky;
+    top: 80px;
+  }
+
+  @media (max-width: 1024px) {
+    .home-grid {
+      grid-template-columns: 1fr;
+    }
+    .home-sidebar {
+      position: static;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 640px) {
+      .home-sidebar {
+        grid-template-columns: 1fr;
+      }
+    }
+  }
+
   @media (max-width: 768px) {
     .hero-skeleton {
       min-height: 350px;

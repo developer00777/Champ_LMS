@@ -1,0 +1,170 @@
+- generic [ref=e2]:
+  - navigation [ref=e19]:
+    - link "CHAMPLMS" [ref=e20] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e21]:
+      - link "🏠 Home" [ref=e22] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e23]: 🏠
+        - text: Home
+      - link "📚 My Learning" [ref=e24] [cursor=pointer]:
+        - /url: /my-learning
+        - generic [ref=e25]: 📚
+        - text: My Learning
+      - link "🏆 Leaderboard" [ref=e26] [cursor=pointer]:
+        - /url: /leaderboard
+        - generic [ref=e27]: 🏆
+        - text: Leaderboard
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - generic [ref=e30]:
+          - generic [ref=e31]: ⭐
+          - text: "10"
+        - generic [ref=e32]:
+          - generic [ref=e33]: 🔥
+          - text: "1"
+      - button "Sign Out" [ref=e34] [cursor=pointer]
+  - main [ref=e35]:
+    - generic [ref=e39]:
+      - generic [ref=e40]: finance
+      - heading "Reading a P&L in Ten Minutes" [level=1] [ref=e41]
+      - paragraph [ref=e42]: A finance micro-series. Short, binge-worthy lessons you finish on a coffee break.
+      - generic [ref=e43]:
+        - link "▶ Play" [ref=e44] [cursor=pointer]:
+          - /url: /module/42086995-675b-482e-830a-b451348436ef
+          - generic [ref=e45]: ▶
+          - text: Play
+        - link "More Info" [ref=e46] [cursor=pointer]:
+          - /url: /module/42086995-675b-482e-830a-b451348436ef
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - heading "Continue Watching" [level=2] [ref=e49]
+        - generic [ref=e50]:
+          - button "Scroll left" [ref=e51]: ‹
+          - button "Scroll right" [ref=e52] [cursor=pointer]: ›
+      - link "▶ 3 episodes ▶ finance Reading a P&L in Ten Minutes" [ref=e55] [cursor=pointer]:
+        - /url: /module/42086995-675b-482e-830a-b451348436ef
+        - generic [ref=e56]:
+          - generic [ref=e57]: ▶
+          - generic [ref=e59]: 3 episodes
+          - generic [ref=e60]: ▶
+        - generic [ref=e62]:
+          - generic [ref=e63]: finance
+          - paragraph [ref=e64]: Reading a P&L in Ten Minutes
+    - generic [ref=e65]:
+      - generic [ref=e66]:
+        - heading "Trending in Sales" [level=2] [ref=e67]
+        - generic [ref=e68]:
+          - button "Scroll left" [ref=e69]: ‹
+          - button "Scroll right" [ref=e70] [cursor=pointer]: ›
+      - generic [ref=e72]:
+        - link "▶ 3 episodes ▶ sales Prospecting That Actually Converts" [ref=e73] [cursor=pointer]:
+          - /url: /module/8fab69d7-3960-4cd0-bca2-a17f3efe1c1e
+          - generic [ref=e74]:
+            - generic [ref=e75]: ▶
+            - generic [ref=e77]: 3 episodes
+            - generic [ref=e78]: ▶
+          - generic [ref=e80]:
+            - generic [ref=e81]: sales
+            - paragraph [ref=e82]: Prospecting That Actually Converts
+        - 'link "▶ 3 episodes ▶ sales Closing the Deal: Objection Handling" [ref=e83] [cursor=pointer]':
+          - /url: /module/a9fa0a43-1710-4269-84a8-16dddbe7b312
+          - generic [ref=e84]:
+            - generic [ref=e85]: ▶
+            - generic [ref=e87]: 3 episodes
+            - generic [ref=e88]: ▶
+          - generic [ref=e90]:
+            - generic [ref=e91]: sales
+            - paragraph [ref=e92]: "Closing the Deal: Objection Handling"
+    - generic [ref=e93]:
+      - generic [ref=e94]:
+        - heading "Trending in Finance" [level=2] [ref=e95]
+        - generic [ref=e96]:
+          - button "Scroll left" [ref=e97]: ‹
+          - button "Scroll right" [ref=e98] [cursor=pointer]: ›
+      - link "▶ 3 episodes ▶ finance Reading a P&L in Ten Minutes" [ref=e101] [cursor=pointer]:
+        - /url: /module/42086995-675b-482e-830a-b451348436ef
+        - generic [ref=e102]:
+          - generic [ref=e103]: ▶
+          - generic [ref=e105]: 3 episodes
+          - generic [ref=e106]: ▶
+        - generic [ref=e108]:
+          - generic [ref=e109]: finance
+          - paragraph [ref=e110]: Reading a P&L in Ten Minutes
+    - generic [ref=e111]:
+      - generic [ref=e112]:
+        - heading "Trending in Onboarding" [level=2] [ref=e113]
+        - generic [ref=e114]:
+          - button "Scroll left" [ref=e115]: ‹
+          - button "Scroll right" [ref=e116] [cursor=pointer]: ›
+      - 'link "▶ 3 episodes ▶ onboarding Your First Week: Company 101" [ref=e119] [cursor=pointer]':
+        - /url: /module/8c0aaa51-8bd7-4c76-8250-77ab010a28c9
+        - generic [ref=e120]:
+          - generic [ref=e121]: ▶
+          - generic [ref=e123]: 3 episodes
+          - generic [ref=e124]: ▶
+        - generic [ref=e126]:
+          - generic [ref=e127]: onboarding
+          - paragraph [ref=e128]: "Your First Week: Company 101"
+    - generic [ref=e129]:
+      - generic [ref=e130]:
+        - heading "New Releases" [level=2] [ref=e131]
+        - generic [ref=e132]:
+          - button "Scroll left" [ref=e133] [cursor=pointer]: ‹
+          - button "Scroll right" [ref=e134] [cursor=pointer]: ›
+      - generic [ref=e136]:
+        - link "▶ 3 episodes ▶ finance Reading a P&L in Ten Minutes" [ref=e137] [cursor=pointer]:
+          - /url: /module/42086995-675b-482e-830a-b451348436ef
+          - generic [ref=e138]:
+            - generic [ref=e139]: ▶
+            - generic [ref=e141]: 3 episodes
+            - generic [ref=e142]: ▶
+          - generic [ref=e144]:
+            - generic [ref=e145]: finance
+            - paragraph [ref=e146]: Reading a P&L in Ten Minutes
+        - link "▶ 3 episodes ▶ engineering Async Communication Mastery" [ref=e147] [cursor=pointer]:
+          - /url: /module/0f3641d4-62a2-4114-8138-d30369bdb0d0
+          - generic [ref=e148]:
+            - generic [ref=e149]: ▶
+            - generic [ref=e151]: 3 episodes
+            - generic [ref=e152]: ▶
+          - generic [ref=e154]:
+            - generic [ref=e155]: engineering
+            - paragraph [ref=e156]: Async Communication Mastery
+        - link "▶ 3 episodes ▶ leadership Coaching Your Team to Ownership" [ref=e157] [cursor=pointer]:
+          - /url: /module/7e5ea001-5900-40a5-ab8c-ca269f607baa
+          - generic [ref=e158]:
+            - generic [ref=e159]: ▶
+            - generic [ref=e161]: 3 episodes
+            - generic [ref=e162]: ▶
+          - generic [ref=e164]:
+            - generic [ref=e165]: leadership
+            - paragraph [ref=e166]: Coaching Your Team to Ownership
+        - 'link "▶ 3 episodes ▶ onboarding Your First Week: Company 101" [ref=e167] [cursor=pointer]':
+          - /url: /module/8c0aaa51-8bd7-4c76-8250-77ab010a28c9
+          - generic [ref=e168]:
+            - generic [ref=e169]: ▶
+            - generic [ref=e171]: 3 episodes
+            - generic [ref=e172]: ▶
+          - generic [ref=e174]:
+            - generic [ref=e175]: onboarding
+            - paragraph [ref=e176]: "Your First Week: Company 101"
+        - link "▶ 3 episodes ▶ sales Prospecting That Actually Converts" [ref=e177] [cursor=pointer]:
+          - /url: /module/8fab69d7-3960-4cd0-bca2-a17f3efe1c1e
+          - generic [ref=e178]:
+            - generic [ref=e179]: ▶
+            - generic [ref=e181]: 3 episodes
+            - generic [ref=e182]: ▶
+          - generic [ref=e184]:
+            - generic [ref=e185]: sales
+            - paragraph [ref=e186]: Prospecting That Actually Converts
+        - 'link "▶ 3 episodes ▶ sales Closing the Deal: Objection Handling" [ref=e187] [cursor=pointer]':
+          - /url: /module/a9fa0a43-1710-4269-84a8-16dddbe7b312
+          - generic [ref=e188]:
+            - generic [ref=e189]: ▶
+            - generic [ref=e191]: 3 episodes
+            - generic [ref=e192]: ▶
+          - generic [ref=e194]:
+            - generic [ref=e195]: sales
+            - paragraph [ref=e196]: "Closing the Deal: Objection Handling"
+  - generic [ref=e18]: Champ LMS — Home
