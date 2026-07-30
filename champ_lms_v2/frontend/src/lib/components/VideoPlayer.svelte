@@ -14,6 +14,26 @@
   let showAutoAdvance = false;
   let countdown = 5;
 
+  // * Playback-path selection. The native <video> + hls.js path is the ONLY one
+  // * that emits timeupdate/ended, so it is the only path that records watch
+  // * progress. The Bunny iframe embed cannot report progress at all.
+  // * Previously the template tested `{#if embedUrl}` first and the backend
+  // * always supplied an embedUrl, so the native path was unreachable and every
+  // * learner's progress was posted as 0 seconds forever.
+  // * Now: prefer streamUrl, and fall back to the iframe only if HLS actually
+  // * fails (e.g. the token is rejected), so a broken token degrades to
+  // * playback-without-tracking instead of a black screen.
+  let hlsFailed = false;
+  $: useNative = !!streamUrl && !hlsFailed;
+
+  function fallbackToEmbed(reason: string) {
+    if (!embedUrl) return; // nothing to fall back to; leave the error visible
+    console.warn(`[VideoPlayer] HLS failed (${reason}) — falling back to embed; progress tracking disabled`);
+    hls?.destroy();
+    hls = null;
+    hlsFailed = true;
+  }
+
   export let onComplete: (() => void) | undefined = undefined;
   export let onAutoAdvance: (() => void) | undefined = undefined;
 
@@ -31,13 +51,21 @@
         lowLatencyMode: false,
         backBufferLength: 90,
       });
+      // Surface fatal errors instead of leaving a silent black player — a
+      // rejected token is the likely cause and the iframe still works.
+      hls.on(Hls.Events.ERROR, (_e: unknown, data: any) => {
+        if (data?.fatal) fallbackToEmbed(data?.details ?? 'fatal');
+      });
       hls.loadSource(streamUrl);
       hls.attachMedia(videoEl);
       hls.on(Hls.Events.MANIFEST_PARSED, () => videoEl.play());
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
       videoEl.src = streamUrl;
+      videoEl.addEventListener('error', () => fallbackToEmbed('safari-native'));
       videoEl.play();
+    } else {
+      fallbackToEmbed('hls-unsupported');
     }
   });
 
@@ -79,17 +107,10 @@
 </script>
 
 <div bind:this={container} class="player-wrap">
-  {#if embedUrl}
-    <!-- Bunny Stream iframe embed player — works with Token Authentication enabled -->
-    <iframe
-      src={embedUrl}
-      class="bunny-embed"
-      title="Video player"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-      allowfullscreen
-    ></iframe>
-  {:else if streamUrl}
-    <!-- Direct HLS playback — only works if Token Authentication is DISABLED in Bunny dashboard -->
+  {#if useNative}
+    <!-- Preferred: token-authenticated HLS in a native player. This is the ONLY
+         path that fires timeupdate/ended, so it is the only one that records
+         watch progress. -->
     <video
       bind:this={videoEl}
       class="video"
@@ -98,6 +119,16 @@
       on:timeupdate={onTimeUpdate}
       on:ended={onEnded}
     ></video>
+  {:else if embedUrl}
+    <!-- Fallback: Bunny's iframe embed. Plays reliably but reports NO progress,
+         so a learner watching here will not have completion recorded. -->
+    <iframe
+      src={embedUrl}
+      class="bunny-embed"
+      title="Video player"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowfullscreen
+    ></iframe>
   {:else}
     <div class="placeholder">Loading video...</div>
   {/if}

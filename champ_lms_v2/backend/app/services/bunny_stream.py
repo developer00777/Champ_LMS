@@ -9,11 +9,31 @@ Bunny Stream handles:
 """
 import hashlib
 import hmac
+import logging
 import time
 from typing import AsyncIterator
 from urllib.parse import quote
 import httpx
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def _rounded_expiry(expires_in_seconds: int) -> int:
+    """Expiry timestamp rounded UP to a shared boundary.
+
+    A per-request `now + N` gives every viewer a unique URL. Bunny excludes
+    token/expires from the CDN cache key so that doesn't fragment the edge
+    cache, but it does defeat *browser* caching and makes two requests for the
+    same video look like different objects in logs. Rounding to a common
+    boundary means all viewers in a window share one URL.
+
+    The window is the requested lifetime capped at 1h granularity, so a token
+    is valid for between (window) and (window + requested) seconds.
+    """
+    window = min(max(expires_in_seconds, 60), 3600)
+    now = int(time.time())
+    return ((now + expires_in_seconds) // window + 1) * window
 
 BUNNY_STREAM_BASE = "https://video.bunnycdn.com"
 
@@ -296,9 +316,36 @@ class BunnyStreamService:
 
         return f"https://{cdn_host}/{video_guid}/playlist.m3u8?token={token}&expires={expires}"
 
-    def get_embed_url(self, video_guid: str) -> str:
-        """Bunny Stream built-in embed player URL (iframe-embeddable)."""
-        return f"https://iframe.mediadelivery.net/embed/{self._library_id}/{video_guid}"
+    def get_embed_url(self, video_guid: str, expires_in_seconds: int = 14400) -> str:
+        """Bunny Stream embed player URL, token-signed when a secret is set.
+
+        The unsigned form (library id + guid, nothing else) is world-playable:
+        anyone who sees one URL can stream that video indefinitely, and the
+        library id is shared across every video you own. That is uncapped
+        bandwidth billed to you, so the signed form is the default.
+
+        The embed player signs a different path than the HLS manifest — the
+        token covers `/embed/{library_id}/{guid}` — which is why this can't
+        just reuse get_token_auth_url().
+
+        Falls back to the unsigned URL only when no token secret is configured
+        (local dev), and logs that fact rather than failing silently.
+        """
+        base = f"https://iframe.mediadelivery.net/embed/{self._library_id}/{video_guid}"
+
+        secret = self.settings.bunny_stream_token_secret
+        if not secret:
+            logger.warning(
+                "BUNNY_STREAM_TOKEN_SECRET unset — returning UNSIGNED embed URL for %s. "
+                "Anyone with this URL can stream the video. Do not use in production.",
+                video_guid,
+            )
+            return base
+
+        expires = _rounded_expiry(expires_in_seconds)
+        path = f"{self._library_id}/{video_guid}"
+        token = hashlib.sha256(f"{secret}{path}{expires}".encode()).hexdigest()
+        return f"{base}?token={token}&expires={expires}"
 
     def verify_webhook_signature(self, payload: bytes, signature_header: str) -> bool:
         """
@@ -313,7 +360,24 @@ class BunnyStreamService:
         """
         secret = self.settings.bunny_stream_webhook_secret
         if not secret:
-            return True  # dev mode — skip verification
+            # * Was `return True` unconditionally, so an unset secret meant any
+            # * caller could POST the webhook and flip episodes to "ready".
+            # * Fail OPEN only in an explicitly non-production environment;
+            # * anywhere else an unset secret is a misconfiguration, not a
+            # * licence to skip auth.
+            if getattr(self.settings, "debug", False):
+                logger.warning(
+                    "BUNNY_STREAM_WEBHOOK_SECRET unset — skipping webhook "
+                    "verification because DEBUG=true. Never run production with this."
+                )
+                return True
+            logger.error(
+                "BUNNY_STREAM_WEBHOOK_SECRET is not set — rejecting webhook. "
+                "Set the secret (Bunny sends the library API key in the AccessKey header)."
+            )
+            return False
+        if not signature_header:
+            return False
         return hmac.compare_digest(secret, signature_header)
 
 
