@@ -38,6 +38,9 @@
       <a href="/challenges" class:active={$page.url.pathname === '/challenges'}>
         <span class="nav-icon">🏁</span> Challenges
       </a>
+      <a href="/tests" class:active={$page.url.pathname.startsWith('/tests')}>
+        <span class="nav-icon">📝</span> Tests
+      </a>
       <a href="/leaderboard" class:active={$page.url.pathname === '/leaderboard'}>
         <span class="nav-icon">🏆</span> Leaderboard
       </a>

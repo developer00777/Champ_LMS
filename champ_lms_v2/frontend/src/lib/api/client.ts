@@ -120,6 +120,62 @@ export const api = {
   challengeLeaderboard: (challengeId: string) =>
     request<{ challenge_id: string; entries: ChallengeLeaderboardEntry[] }>(`/challenges/${challengeId}/leaderboard`),
 
+  // Test Series — admin
+  parseTestPdf: async (file: File, useAi = false): Promise<ParsedPdf> => {
+    // multipart: let the browser set Content-Type so the boundary is correct
+    const form = new FormData();
+    form.append('file', file);
+    form.append('use_ai', String(useAi));
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/test-series/parse-pdf`, {
+      method: 'POST',
+      body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+    }
+    return res.json();
+  },
+  createTestSeries: (body: TestSeriesCreate, source?: { filename?: string; parser?: string }) => {
+    const qs = new URLSearchParams();
+    if (source?.filename) qs.set('source_filename', source.filename);
+    if (source?.parser) qs.set('source_parser', source.parser);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return request<AdminTest>(`/admin/test-series${suffix}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  adminTestList: () => request<AdminTestSummary[]>('/admin/test-series'),
+  adminTest: (id: string) => request<AdminTest>(`/admin/test-series/${id}`),
+  updateTestSeries: (id: string, body: Partial<TestSeriesCreate> & { shuffle_questions?: boolean }) =>
+    request<AdminTest>(`/admin/test-series/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  publishTestSeries: (id: string, publish = true) =>
+    request<{ id: string; is_published: boolean }>(
+      `/admin/test-series/${id}/publish?publish=${publish}`, { method: 'PATCH' }),
+  deleteTestSeries: (id: string) =>
+    request<{ deleted: string }>(`/admin/test-series/${id}`, { method: 'DELETE' }),
+  testResults: (id: string) => request<TestResults>(`/admin/test-series/${id}/results`),
+  analyzeAttemptAdmin: (attemptId: string) =>
+    request<{ attempt_id: string; ai_analysis: AiAnalysis }>(
+      `/admin/test-series/attempts/${attemptId}/analyze`, { method: 'POST' }),
+
+  // Test Series — learner
+  testSeries: () => request<LearnerTest[]>('/test-series'),
+  takeTest: (id: string) => request<TestPaper>(`/test-series/${id}/take`),
+  submitTest: (id: string, answers: Record<string, number | null>) =>
+    request<TestResult>(`/test-series/${id}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    }),
+  myTestAttempts: () => request<MyAttempt[]>('/test-series/attempts/me'),
+  testAttempt: (attemptId: string) => request<AttemptDetail>(`/test-series/attempts/${attemptId}`),
+  attemptAnalysis: (attemptId: string) =>
+    request<{ attempt_id: string; ai_analysis: AiAnalysis }>(
+      `/test-series/attempts/${attemptId}/analysis`, { method: 'POST' }),
+
   // Social
   socialFeed: (department?: string, limit = 30) =>
     request<SocialPostItem[]>(`/social/feed?limit=${limit}${department ? `&department=${department}` : ''}`),
@@ -286,6 +342,120 @@ export interface ChallengeLeaderboardEntry {
   rank: number; team_id: string; team_name: string;
   department: string | null; member_count: number;
   progress: number; target: number; completed: boolean; completed_at: string | null;
+}
+
+// * Test Series types
+export interface TestQuestionDraft {
+  id?: string;
+  question: string;
+  options: string[];
+  correct_index: number | null;
+  explanation: string | null;
+  topic: string | null;
+  marks: number;
+  scorable?: boolean;
+}
+export interface ParsedPdf {
+  source_filename: string | null;
+  source_parser: string;
+  extracted_characters: number;
+  detected_questions: number;
+  unscorable_count: number;
+  warnings: string[];
+  questions: TestQuestionDraft[];
+}
+export interface TestSeriesCreate {
+  title: string;
+  description?: string | null;
+  category?: string | null;
+  department?: string | null;
+  pass_threshold?: number;
+  duration_minutes?: number | null;
+  max_attempts?: number | null;
+  questions: TestQuestionDraft[];
+}
+export interface AdminTest {
+  id: string; title: string; description: string | null;
+  category: string | null; department: string | null;
+  pass_threshold: number; duration_minutes: number | null;
+  max_attempts: number | null; shuffle_questions: boolean;
+  is_published: boolean; is_ready: boolean;
+  unscorable_count: number; total_marks: number; total_questions: number;
+  source_filename: string | null; source_parser: string | null;
+  created_at: string; questions: TestQuestionDraft[];
+}
+export interface AdminTestSummary {
+  id: string; title: string; category: string | null; department: string | null;
+  is_published: boolean; is_ready: boolean; unscorable_count: number;
+  total_questions: number; pass_threshold: number; duration_minutes: number | null;
+  source_filename: string | null; created_at: string;
+  attempt_count: number; average_score: number | null; pass_rate: number | null;
+}
+export interface LearnerTest {
+  id: string; title: string; description: string | null;
+  category: string | null; department: string | null;
+  total_questions: number; total_marks: number; pass_threshold: number;
+  duration_minutes: number | null; max_attempts: number | null;
+  my_attempts: number; attempts_left: number | null;
+  my_best_score: number | null; passed: boolean;
+}
+export interface TestPaper {
+  id: string; title: string; description: string | null;
+  duration_minutes: number | null; pass_threshold: number; total_marks: number;
+  attempt_number: number; max_attempts: number | null;
+  questions: { id: string; question: string; options: string[]; topic: string | null; marks: number }[];
+}
+export interface BreakdownRow {
+  question_id: string; question: string; options: string[];
+  your_index: number | null; your_answer: string | null;
+  correct_index: number; correct_answer: string;
+  correct: boolean; explanation: string | null;
+  topic: string | null; marks: number;
+}
+export interface TopicStat { correct: number; total: number; accuracy: number; }
+export interface TestResult {
+  attempt_id: string; score: number; passed: boolean; pass_threshold: number;
+  marks_earned: number; marks_total: number;
+  correct_count: number; total_questions: number;
+  breakdown: BreakdownRow[]; topic_stats: Record<string, TopicStat>;
+  rewards?: { pass?: RewardEntry; perfect_quiz?: RewardEntry | null; badges_unlocked?: string[] } | null;
+}
+export interface AiAnalysis {
+  summary: string;
+  weak_areas: { topic: string; accuracy: number; why: string; action: string }[];
+  strengths: string[];
+  recommendations: string[];
+  suggested_focus: string;
+  generated_by?: string;
+}
+export interface AttemptDetail {
+  attempt_id: string; test_id: string; test_title: string;
+  score: number; passed: boolean; pass_threshold: number | null;
+  marks_earned: number; marks_total: number;
+  correct_count: number; total_questions: number; submitted_at: string;
+  breakdown: BreakdownRow[]; topic_stats: Record<string, TopicStat>;
+  ai_analysis: AiAnalysis | null;
+}
+export interface MyAttempt {
+  attempt_id: string; test_id: string; test_title: string;
+  score: number; passed: boolean;
+  correct_count: number; total_questions: number; submitted_at: string;
+}
+export interface TestResultRow {
+  attempt_id: string; user_id: string;
+  full_name: string | null; email: string | null; department: string | null;
+  score: number; marks_earned: number; marks_total: number;
+  correct_count: number; total_questions: number; passed: boolean;
+  submitted_at: string; breakdown: BreakdownRow[];
+  topic_stats: Record<string, TopicStat>;
+  has_ai_analysis: boolean; ai_analysis: AiAnalysis | null;
+}
+export interface TestResults {
+  test_id: string; title: string; pass_threshold: number;
+  total_questions: number; attempt_count: number;
+  average_score: number | null; pass_rate: number | null;
+  cohort_topic_stats: Record<string, TopicStat>;
+  attempts: TestResultRow[];
 }
 
 // * Social types

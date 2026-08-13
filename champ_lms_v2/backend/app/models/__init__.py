@@ -12,6 +12,7 @@ from app.models.quest import Quest, UserQuest
 from app.models.learning_path import LearningPath, UserPathProgress
 from app.models.team import Team, TeamChallenge, TeamProgress
 from app.models.social import SocialPost, Notification
+from app.models.test_series import TestSeries, TestAttempt, TestQuestion
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -20,6 +21,7 @@ __all__ = [
     "LearningPath", "UserPathProgress",
     "Team", "TeamChallenge", "TeamProgress",
     "SocialPost", "Notification",
+    "TestSeries", "TestAttempt", "TestQuestion",
 ]
 
 DOCUMENT_MODELS = [
@@ -29,4 +31,6 @@ DOCUMENT_MODELS = [
     LearningPath, UserPathProgress,
     Team, TeamChallenge, TeamProgress,
     SocialPost, Notification,
+    # * TestQuestion is an embedded BaseModel, not a Document — not registered here
+    TestSeries, TestAttempt,
 ]

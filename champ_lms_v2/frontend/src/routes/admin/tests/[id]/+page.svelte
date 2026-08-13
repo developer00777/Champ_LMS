@@ -1,0 +1,235 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { page } from '$app/stores';
+  import { api, type AdminTest, type TestQuestionDraft } from '$lib/api/client';
+
+  const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
+  const id = $page.params.id;
+
+  let test: AdminTest | null = null;
+  let questions: TestQuestionDraft[] = [];
+  let loading = true;
+  let busy = false;
+  let error = '';
+  let saved = '';
+
+  onMount(load);
+
+  async function load() {
+    loading = true;
+    try {
+      test = await api.adminTest(id);
+      questions = test.questions.map((q) => ({ ...q }));
+      error = '';
+    } catch (e: any) { error = e.message; }
+    finally { loading = false; }
+  }
+
+  function scorable(q: TestQuestionDraft): boolean {
+    return q.correct_index !== null && q.correct_index >= 0
+      && q.correct_index < q.options.length && q.options.length >= 2;
+  }
+  $: unscorable = questions.filter((q) => !scorable(q)).length;
+
+  function setAnswer(qi: number, oi: number) { questions[qi].correct_index = oi; questions = questions; }
+  function removeQuestion(qi: number) { questions = questions.filter((_, i) => i !== qi); }
+  function addOption(qi: number) { questions[qi].options = [...questions[qi].options, '']; questions = questions; }
+  function removeOption(qi: number, oi: number) {
+    const q = questions[qi];
+    q.options = q.options.filter((_, i) => i !== oi);
+    if (q.correct_index === oi) q.correct_index = null;
+    else if (q.correct_index !== null && q.correct_index > oi) q.correct_index -= 1;
+    questions = questions;
+  }
+  function addQuestion() {
+    questions = [...questions, { question: '', options: ['', ''], correct_index: null,
+      explanation: null, topic: null, marks: 1 }];
+  }
+
+  async function save() {
+    if (!test) return;
+    busy = true; error = ''; saved = '';
+    try {
+      test = await api.updateTestSeries(id, {
+        title: test.title,
+        description: test.description,
+        category: test.category,
+        department: test.department,
+        pass_threshold: test.pass_threshold,
+        duration_minutes: test.duration_minutes,
+        max_attempts: test.max_attempts,
+        shuffle_questions: test.shuffle_questions,
+        questions,
+      });
+      questions = test.questions.map((q) => ({ ...q }));
+      saved = 'Saved.';
+      setTimeout(() => (saved = ''), 2500);
+    } catch (e: any) { error = e.message; }
+    finally { busy = false; }
+  }
+
+  async function togglePublish() {
+    if (!test) return;
+    busy = true; error = '';
+    try {
+      const r = await api.publishTestSeries(id, !test.is_published);
+      test.is_published = r.is_published;
+      test = test;
+    } catch (e: any) { error = e.message; }
+    finally { busy = false; }
+  }
+</script>
+
+<div class="page">
+  <p class="breadcrumb"><a href="/admin/tests">← Test Series</a></p>
+
+  {#if loading}
+    <div class="skeleton big"></div>
+  {:else if !test}
+    <p class="error">{error || 'Test not found'}</p>
+  {:else}
+    <div class="head">
+      <div>
+        <h1>{test.title}</h1>
+        <p class="sub">
+          {test.total_questions} questions · {test.total_marks} marks
+          {#if test.source_filename}· from {test.source_filename} ({test.source_parser}){/if}
+        </p>
+      </div>
+      <div class="head-actions">
+        <span class="status" class:live={test.is_published}>{test.is_published ? 'Published' : 'Draft'}</span>
+        <a href="/admin/tests/{id}/results" class="btn">Results</a>
+      </div>
+    </div>
+
+    {#if error}<p class="error">{error}</p>{/if}
+    {#if saved}<p class="ok">{saved}</p>{/if}
+
+    <div class="form-card">
+      <h2>Settings</h2>
+      <label>Title<input bind:value={test.title} /></label>
+      <label>Description<input bind:value={test.description} placeholder="Optional" /></label>
+      <div class="row">
+        <label>Category
+          <select bind:value={test.category}>
+            <option value={null}>—</option>
+            {#each CATEGORIES as c}<option value={c}>{c}</option>{/each}
+          </select>
+        </label>
+        <label>Department<input bind:value={test.department} placeholder="blank = everyone" /></label>
+      </div>
+      <div class="row">
+        <label>Pass mark %<input type="number" min="1" max="100" bind:value={test.pass_threshold} /></label>
+        <label>Time limit (min)<input type="number" min="1" bind:value={test.duration_minutes} placeholder="none" /></label>
+        <label>Max attempts<input type="number" min="1" bind:value={test.max_attempts} placeholder="unlimited" /></label>
+      </div>
+      <label class="check">
+        <input type="checkbox" bind:checked={test.shuffle_questions} />
+        <span>Shuffle question order for each learner</span>
+      </label>
+    </div>
+
+    {#if unscorable > 0}
+      <p class="warn">{unscorable} question(s) have no correct answer marked — set them to publish.</p>
+    {/if}
+
+    <div class="q-list">
+      {#each questions as q, qi (qi)}
+        <div class="q-card" class:incomplete={!scorable(q)}>
+          <div class="q-head">
+            <span class="q-num">Q{qi + 1}</span>
+            <button class="link danger" on:click={() => removeQuestion(qi)}>Remove</button>
+          </div>
+          <textarea class="q-text" rows="2" bind:value={q.question}></textarea>
+          <p class="hint">Click the circle to mark the correct answer</p>
+          {#each q.options as _, oi}
+            <div class="opt" class:chosen={q.correct_index === oi}>
+              <button class="radio" class:on={q.correct_index === oi} on:click={() => setAnswer(qi, oi)}>
+                {q.correct_index === oi ? '✓' : String.fromCharCode(65 + oi)}
+              </button>
+              <input bind:value={q.options[oi]} />
+              <button class="link danger" on:click={() => removeOption(qi, oi)}>×</button>
+            </div>
+          {/each}
+          <button class="link" on:click={() => addOption(qi)}>+ add option</button>
+          <div class="row">
+            <label>Topic<input bind:value={q.topic} placeholder="e.g. Objection Handling" /></label>
+            <label>Marks<input type="number" min="1" bind:value={q.marks} /></label>
+          </div>
+          <label>Explanation<input bind:value={q.explanation} placeholder="Optional" /></label>
+        </div>
+      {/each}
+    </div>
+
+    <button class="link add-q" on:click={addQuestion}>+ add a question</button>
+
+    <div class="save-bar">
+      <button class="btn primary" disabled={busy} on:click={save}>{busy ? 'Saving…' : 'Save changes'}</button>
+      <button class="btn" disabled={busy || (!test.is_published && unscorable > 0)} on:click={togglePublish}>
+        {test.is_published ? 'Unpublish' : 'Publish'}
+      </button>
+    </div>
+  {/if}
+</div>
+
+<style>
+  .page { max-width: 780px; margin: 0 auto; padding-bottom: 4rem; }
+  .breadcrumb { font-size: 0.83rem; margin-bottom: 1rem; }
+  .breadcrumb a { color: var(--accent); text-decoration: none; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .head-actions { display: flex; align-items: center; gap: 0.6rem; }
+  h1 { font-size: 1.5rem; font-weight: 800; margin-bottom: 0.3rem; }
+  .sub { color: var(--muted); font-size: 0.85rem; }
+  .status { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--muted);
+            border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.6rem; }
+  .status.live { color: var(--success); border-color: var(--success); }
+
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+               padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.25rem; }
+  h2 { font-size: 1.1rem; font-weight: 700; }
+  label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.82rem; color: var(--muted); flex: 1; }
+  input, select, textarea { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 0.55rem 0.75rem; font-size: 0.88rem; outline: none; font-family: inherit; width: 100%; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  .row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .check { flex-direction: row; align-items: center; gap: 0.55rem; }
+  .check input { width: auto; }
+
+  .error { color: var(--accent); font-size: 0.85rem; margin-bottom: 1rem; }
+  .ok { color: var(--success); font-size: 0.85rem; margin-bottom: 1rem; }
+  .warn { font-size: 0.82rem; color: #ffc107; background: rgba(255,193,7,0.1);
+          border: 1px solid rgba(255,193,7,0.35); border-radius: 6px; padding: 0.6rem 0.8rem; margin-bottom: 1rem; }
+
+  .q-list { display: flex; flex-direction: column; gap: 1rem; }
+  .q-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+            padding: 1.15rem; display: flex; flex-direction: column; gap: 0.7rem; }
+  .q-card.incomplete { border-color: rgba(255,193,7,0.55); }
+  .q-head { display: flex; justify-content: space-between; align-items: center; }
+  .q-num { font-size: 0.78rem; font-weight: 700; color: var(--muted); }
+  .q-text { font-size: 0.92rem; resize: vertical; }
+  .hint { font-size: 0.72rem; color: var(--muted); }
+  .opt { display: flex; align-items: center; gap: 0.5rem; }
+  .opt.chosen input { border-color: var(--success); }
+  .radio { flex-shrink: 0; width: 27px; height: 27px; border-radius: 50%; border: 1px solid var(--border);
+           background: var(--surface2); color: var(--muted); font-size: 0.75rem; font-weight: 700; cursor: pointer; }
+  .radio.on { background: var(--success); border-color: var(--success); color: #fff; }
+
+  .link { background: none; border: none; color: var(--accent); font-size: 0.78rem; cursor: pointer;
+          padding: 0; text-align: left; font-weight: 600; }
+  .link.danger { color: var(--muted); }
+  .link.danger:hover { color: #e05260; }
+  .add-q { margin: 1rem 0; display: block; }
+
+  .save-bar { display: flex; gap: 0.6rem; position: sticky; bottom: 0; background: var(--bg);
+              padding: 1rem 0; border-top: 1px solid var(--border); }
+  .btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+         padding: 0.6rem 1.1rem; font-size: 0.88rem; font-weight: 600; cursor: pointer; text-decoration: none; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  .skeleton { border-radius: 10px; background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
+              background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+  .skeleton.big { height: 320px; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+</style>

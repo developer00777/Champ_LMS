@@ -50,6 +50,11 @@
       <h3>Zoom → Module Builder</h3>
       <p>Convert Zoom recordings into AI-structured modules</p>
     </a>
+    <a href="/admin/tests" class="link-card">
+      <div class="icon">📝</div>
+      <h3>Test Series</h3>
+      <p>Turn a Q&amp;A PDF into a scored test with AI improvement insights</p>
+    </a>
     <a href="/leaderboard" class="link-card">
       <div class="icon">🏆</div>
       <h3>Leaderboard</h3>

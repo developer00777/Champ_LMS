@@ -97,6 +97,64 @@ Return ONLY a valid JSON array (no markdown):
 
 Each row needs 4-8 module IDs. Use only IDs from the list above."""
 
+PDF_QUESTIONS_PROMPT = """You are an exam digitisation assistant. The text below was extracted from a PDF of quiz/exam questions. Convert it into structured multiple-choice questions.
+
+Rules:
+- Extract ONLY questions that are actually present. Never invent questions.
+- correct_index is the 0-based index into options. If the document does not
+  indicate the answer anywhere (inline or in an answer key), use null.
+- Preserve the original wording of questions and options.
+- If the document marks a topic/section/subject for a question, put it in "topic".
+  Otherwise infer a short (1-3 word) topic from the question itself.
+- If a question is true/false, use exactly ["True", "False"] as options.
+- "marks" defaults to 1 unless the document states a mark/point value.
+
+Document text:
+{text}
+
+Return ONLY a valid JSON array (no markdown, no commentary):
+[
+  {{
+    "question": "string",
+    "options": ["A", "B", "C", "D"],
+    "correct_index": 0,
+    "explanation": "string or null",
+    "topic": "string",
+    "marks": 1
+  }}
+]"""
+
+IMPROVEMENT_PROMPT = """You are a performance coach reviewing a learner's test result. Identify concrete areas of improvement.
+
+Test: {test_title}
+Learner: {learner_name} ({role} in {department})
+Score: {score}% ({correct_count} of {total_questions} correct) — {verdict}
+
+Per-question results (topic | correct? | question | their answer | correct answer):
+{results_block}
+
+Topic accuracy summary:
+{topic_block}
+
+Rules:
+- Ground every claim in the questions they actually got wrong. Never invent weaknesses.
+- "weak_areas" must be ordered worst-first, and only include topics with real errors.
+- "recommendations" are specific and actionable ("Practice discounting scripts
+  where the buyer anchors first"), never generic ("study more").
+- "summary" is 2-3 sentences, addressed to the learner as "you", honest but constructive.
+- If they scored perfectly, say so, leave weak_areas empty, and suggest stretch goals.
+
+Return ONLY a valid JSON object (no markdown, no commentary):
+{{
+  "summary": "string",
+  "weak_areas": [
+    {{"topic": "string", "accuracy": 50, "why": "string", "action": "string"}}
+  ],
+  "strengths": ["string"],
+  "recommendations": ["string"],
+  "suggested_focus": "string"
+}}"""
+
 
 def _extract_json_object(text: str) -> dict:
     """Extract first JSON object from model output, handling markdown fences."""
@@ -179,6 +237,101 @@ class AIService:
         )
         text = await self._chat(prompt, max_tokens=1024)
         return _extract_json_array(text)
+
+    @property
+    def enabled(self) -> bool:
+        """False when no OpenRouter key is configured — callers fall back."""
+        return bool(self.settings.openrouter_api_key)
+
+    async def parse_questions_from_text(self, text: str) -> list[dict]:
+        """
+        Fallback PDF parser for layouts the deterministic parser can't handle.
+        Returns raw dicts; the caller validates them into TestQuestion.
+        """
+        prompt = PDF_QUESTIONS_PROMPT.format(text=text[:14000])
+        out = await self._chat(prompt, max_tokens=8192)
+        return _extract_json_array(out)
+
+    async def analyze_test_performance(
+        self,
+        test_title: str,
+        learner: dict,
+        score: int,
+        correct_count: int,
+        total_questions: int,
+        passed: bool,
+        breakdown: list[dict],
+        topic_stats: dict[str, dict],
+    ) -> dict:
+        """
+        Turn a graded attempt into areas-of-improvement guidance.
+        Only the questions matter here, so the payload stays small and cheap.
+        """
+        results_block = "\n".join(
+            f"- {b.get('topic') or 'General'} | "
+            f"{'correct' if b.get('correct') else 'WRONG'} | "
+            f"{b.get('question', '')[:160]} | "
+            f"theirs: {b.get('your_answer') or '(skipped)'} | "
+            f"correct: {b.get('correct_answer')}"
+            for b in breakdown[:60]
+        )
+        topic_block = "\n".join(
+            f"- {topic}: {s['correct']}/{s['total']} correct ({s['accuracy']}%)"
+            for topic, s in sorted(topic_stats.items(), key=lambda kv: kv[1]["accuracy"])
+        ) or "- (no topics tagged)"
+
+        prompt = IMPROVEMENT_PROMPT.format(
+            test_title=test_title,
+            learner_name=learner.get("full_name") or "the learner",
+            role=learner.get("role") or "learner",
+            department=learner.get("department") or "unspecified department",
+            score=score,
+            correct_count=correct_count,
+            total_questions=total_questions,
+            verdict="PASSED" if passed else "DID NOT PASS",
+            results_block=results_block,
+            topic_block=topic_block,
+        )
+        out = await self._chat(prompt, max_tokens=2048)
+        return _extract_json_object(out)
+
+
+def fallback_analysis(
+    score: int, passed: bool, topic_stats: dict[str, dict]
+) -> dict:
+    """
+    Deterministic stand-in for analyze_test_performance when the AI is
+    unavailable (no key, model error). Weakest topics by accuracy, so the
+    learner always gets *something* actionable rather than an error.
+    """
+    ranked = sorted(topic_stats.items(), key=lambda kv: kv[1]["accuracy"])
+    weak = [
+        {
+            "topic": topic,
+            "accuracy": s["accuracy"],
+            "why": f"You answered {s['correct']} of {s['total']} correctly in this area.",
+            "action": f"Review the material on {topic} and retake the test.",
+        }
+        for topic, s in ranked
+        if s["accuracy"] < 100
+    ]
+    strengths = [t for t, s in topic_stats.items() if s["accuracy"] == 100]
+    return {
+        "summary": (
+            f"You scored {score}%{' and passed' if passed else ' and did not reach the pass mark'}. "
+            + (
+                f"Your weakest area was {weak[0]['topic']} ({weak[0]['accuracy']}%)."
+                if weak
+                else "You answered every question correctly."
+            )
+        ),
+        "weak_areas": weak[:5],
+        "strengths": strengths[:5],
+        "recommendations": [w["action"] for w in weak[:3]]
+        or ["Try a harder test series to keep progressing."],
+        "suggested_focus": weak[0]["topic"] if weak else "Advanced material",
+        "generated_by": "fallback",
+    }
 
 
 ai_service = AIService()
