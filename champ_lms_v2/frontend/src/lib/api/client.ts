@@ -120,6 +120,20 @@ export const api = {
   challengeLeaderboard: (challengeId: string) =>
     request<{ challenge_id: string; entries: ChallengeLeaderboardEntry[] }>(`/challenges/${challengeId}/leaderboard`),
 
+  // Admin — content library + permanent deletion
+  adminContent: () => request<AdminContent>('/admin/content'),
+  previewEpisodeDelete: (episodeId: string) =>
+    request<EpisodeDeletePreview>(`/admin/episodes/${episodeId}/delete-preview`),
+  previewModuleDelete: (moduleId: string) =>
+    request<ModuleDeletePreview>(`/admin/modules/${moduleId}/delete-preview`),
+  // confirm must equal the id — a guard against an accidental DELETE
+  deleteEpisodePermanently: (episodeId: string) =>
+    request<PurgeResult>(`/admin/episodes/${episodeId}?confirm=${encodeURIComponent(episodeId)}`,
+      { method: 'DELETE' }),
+  deleteModulePermanently: (moduleId: string) =>
+    request<PurgeResult>(`/admin/modules/${moduleId}?confirm=${encodeURIComponent(moduleId)}`,
+      { method: 'DELETE' }),
+
   // Test Series — admin
   parseTestPdf: async (file: File, useAi = false): Promise<ParsedPdf> => {
     // multipart: let the browser set Content-Type so the boundary is correct
@@ -342,6 +356,51 @@ export interface ChallengeLeaderboardEntry {
   rank: number; team_id: string; team_name: string;
   department: string | null; member_count: number;
   progress: number; target: number; completed: boolean; completed_at: string | null;
+}
+
+// * Admin content library / permanent deletion types
+export interface AdminEpisodeRow {
+  id: string; title: string; sequence_order: number; status: string;
+  duration_seconds: number | null;
+  bunny_video_guid: string | null; has_remote_video: boolean;
+  thumbnail_bunny_path: string | null; thumbnail_url: string | null;
+}
+export interface AdminModuleRow {
+  id: string; title: string; category: string | null;
+  is_published: boolean; total_episodes: number; live_episode_count: number;
+  created_at: string; episodes: AdminEpisodeRow[];
+}
+export interface AdminContent {
+  modules: AdminModuleRow[];
+  orphan_episodes: { id: string; title: string; module_id: string; bunny_video_guid: string | null }[];
+}
+export interface EpisodeDeletePreview {
+  scope: 'episode'; episode_id: string; title: string;
+  module_id: string; module_title: string | null;
+  bunny_video_guid: string | null; has_remote_video: boolean;
+  thumbnail_bunny_path: string | null;
+  episodes: number; watch_progress: number;
+  assessments: number; assessment_attempts: number;
+  xp_events_preserved: boolean;
+}
+export interface ModuleDeletePreview {
+  scope: 'module'; module_id: string; module_title: string;
+  is_published: boolean; episodes: number; remote_videos: number;
+  episode_titles: string[]; enrollments: number;
+  watch_progress: number; assessments: number; assessment_attempts: number;
+  xp_events_preserved: boolean;
+}
+export interface PurgeResult {
+  scope: 'episode' | 'module';
+  episode_id?: string; module_id?: string;
+  remote: { episode_id: string; asset: string; guid?: string | null; path?: string; status: string; detail?: string }[];
+  deleted: {
+    episodes: number; watch_progress: number;
+    assessments: number; assessment_attempts: number;
+    redis_keys?: number; enrollments?: number;
+  };
+  enrollments_recomputed?: number;
+  xp_events_preserved: boolean;
 }
 
 // * Test Series types

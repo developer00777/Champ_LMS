@@ -1,6 +1,6 @@
 from typing import Annotated
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.core.auth import get_current_user
 from app.core.redis import get_redis
@@ -90,6 +90,15 @@ async def upsert_progress(
     user: Annotated[User, Depends(get_current_user)],
     redis: Annotated[aioredis.Redis, Depends(get_redis)],
 ):
+    # * Reject progress for an episode that doesn't exist. Without this a stale
+    # * player tab (or a replayed request) after an admin deletes a video would
+    # * insert a fresh orphan WatchProgress row AND award complete_episode XP for
+    # * content that is gone — the reward block below runs before the episode is
+    # * ever fetched. 404 lets the client stop syncing instead of retrying.
+    episode = await Episode.get(body.episode_id)
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
     # Cache progress in Redis (key expires in 2 min, flushed by the 30s player sync)
     cache_key = f"progress:{user.id}:{body.episode_id}"
     await redis.setex(cache_key, 120, f"{body.watched_seconds}:{body.total_seconds}")
@@ -144,7 +153,7 @@ async def upsert_progress(
         module_badges: list[str] = []
         completion_info: dict | None = None
 
-        episode = await Episode.get(body.episode_id)
+        # episode is guaranteed non-None — validated at the top of this handler
         if episode:
             module = await Module.get(episode.module_id)
             module_weight = module.points_weight if module else 1.0

@@ -55,6 +55,11 @@
       <h3>Test Series</h3>
       <p>Turn a Q&amp;A PDF into a scored test with AI improvement insights</p>
     </a>
+    <a href="/admin/content" class="link-card">
+      <div class="icon">🗂️</div>
+      <h3>Content Library</h3>
+      <p>Browse every module and video — and permanently delete from Bunny/CDN</p>
+    </a>
     <a href="/leaderboard" class="link-card">
       <div class="icon">🏆</div>
       <h3>Leaderboard</h3>

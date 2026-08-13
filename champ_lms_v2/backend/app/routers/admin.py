@@ -4,10 +4,13 @@ Replaces S3 presigned upload + MediaConvert trigger from v1.
 """
 from typing import Annotated, AsyncIterator
 import io
+import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from beanie.operators import Inc
 from pydantic import BaseModel
+import redis.asyncio as aioredis
 from app.core.auth import require_admin
+from app.core.redis import get_redis
 from app.models.user import User
 from app.models.module import Module
 from app.models.episode import Episode
@@ -16,6 +19,15 @@ from app.models.enrollment import Enrollment
 from app.services.bunny_stream import bunny_stream
 from app.services.bunny_storage import bunny_storage
 from app.services.ai_service import ai_service
+from app.services.purge_service import (
+    PurgeError,
+    plan_episode_purge,
+    plan_module_purge,
+    purge_episode,
+    purge_module,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -420,3 +432,153 @@ async def get_episode_status(
         "thumbnail_url": ep.thumbnail_url,
         "title": ep.title,
     }
+
+
+# ==========================================================================
+# CONTENT LIBRARY + PERMANENT DELETION
+# ==========================================================================
+@router.get("/content")
+async def list_content(admin: Annotated[User, Depends(require_admin)]):
+    """
+    Every module with its episodes and where each video actually lives.
+    Backs the admin content manager, so deletion targets are picked from real
+    data rather than guessed ids.
+    """
+    modules = await Module.find_all().sort(-Module.created_at).to_list()
+    episodes = await Episode.find_all().sort(+Episode.sequence_order).to_list()
+
+    by_module: dict[str, list] = {}
+    for ep in episodes:
+        by_module.setdefault(ep.module_id, []).append(ep)
+
+    out = []
+    for m in modules:
+        eps = by_module.get(m.id, [])
+        out.append({
+            "id": m.id,
+            "title": m.title,
+            "category": m.category,
+            "is_published": m.is_published,
+            "total_episodes": m.total_episodes,
+            "live_episode_count": len(eps),
+            "created_at": m.created_at,
+            "episodes": [
+                {
+                    "id": ep.id,
+                    "title": ep.title,
+                    "sequence_order": ep.sequence_order,
+                    "status": ep.status,
+                    "duration_seconds": ep.duration_seconds,
+                    "bunny_video_guid": ep.bunny_video_guid or ep.bunny_video_id,
+                    "has_remote_video": bool(ep.bunny_video_guid or ep.bunny_video_id),
+                    "thumbnail_bunny_path": ep.thumbnail_bunny_path,
+                    "thumbnail_url": ep.thumbnail_url,
+                }
+                for ep in eps
+            ],
+        })
+    # * orphaned episodes whose module row is already gone — surfaced so they
+    # * can be cleaned up rather than lingering invisibly
+    known = {m.id for m in modules}
+    orphans = [ep for ep in episodes if ep.module_id not in known]
+    return {
+        "modules": out,
+        "orphan_episodes": [
+            {"id": ep.id, "title": ep.title, "module_id": ep.module_id,
+             "bunny_video_guid": ep.bunny_video_guid or ep.bunny_video_id}
+            for ep in orphans
+        ],
+    }
+
+
+@router.get("/episodes/{episode_id}/delete-preview")
+async def preview_episode_delete(
+    episode_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Dry run — what permanently deleting this episode would destroy."""
+    ep = await Episode.get(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    return await plan_episode_purge(ep)
+
+
+@router.get("/modules/{module_id}/delete-preview")
+async def preview_module_delete(
+    module_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Dry run — what permanently deleting this module would destroy."""
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    return await plan_module_purge(module)
+
+
+@router.delete("/episodes/{episode_id}")
+async def delete_episode(
+    episode_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
+    confirm: str = "",
+):
+    """
+    PERMANENTLY delete an episode: the Bunny Stream video, its Bunny Storage
+    thumbnail, and every local row referencing it. Irreversible.
+
+    Requires ?confirm=<episode_id> so a stray DELETE cannot destroy a video.
+    XP already earned is preserved.
+    """
+    ep = await Episode.get(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    if confirm != episode_id:
+        raise HTTPException(
+            status_code=428,
+            detail="Confirmation required: pass ?confirm=<episode_id> to permanently delete.",
+        )
+    try:
+        result = await purge_episode(ep, redis=redis)
+    except PurgeError as exc:
+        # 502: the remote asset is the source of truth and it refused. Nothing
+        # local was touched, so a retry is safe.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    logger.warning(
+        "PERMANENT DELETE episode %s (%r) by admin %s — %s",
+        episode_id, ep.title, admin.email, result["deleted"],
+    )
+    return result
+
+
+@router.delete("/modules/{module_id}")
+async def delete_module(
+    module_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
+    confirm: str = "",
+):
+    """
+    PERMANENTLY delete a module and EVERY episode inside it — all Bunny videos,
+    thumbnails, enrollments and local rows. Irreversible.
+
+    Requires ?confirm=<module_id>. XP already earned is preserved.
+    """
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    if confirm != module_id:
+        raise HTTPException(
+            status_code=428,
+            detail="Confirmation required: pass ?confirm=<module_id> to permanently delete.",
+        )
+    try:
+        result = await purge_module(module, redis=redis)
+    except PurgeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    logger.warning(
+        "PERMANENT DELETE module %s (%r) by admin %s — %s",
+        module_id, module.title, admin.email, result["deleted"],
+    )
+    return result
