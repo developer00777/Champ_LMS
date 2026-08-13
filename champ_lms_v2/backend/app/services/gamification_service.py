@@ -114,10 +114,12 @@ async def seed_gamification() -> None:
     for spec in SEED_BADGES:
         existing = await Badge.find_one(Badge.name == spec["name"])
         if existing:
-            # * keep the seeded criteria/description in sync if the catalog changes
-            if existing.criteria != spec["criteria"] or existing.description != spec["description"]:
-                existing.criteria = spec["criteria"]
-                existing.description = spec["description"]
+            # * keep the seeded fields in sync if the catalog changes; only the
+            # * fields this spec declares, so omitting an optional one is safe
+            sync_fields = [f for f in ("description", "criteria", "icon_bunny_path") if f in spec]
+            if any(getattr(existing, f) != spec[f] for f in sync_fields):
+                for f in sync_fields:
+                    setattr(existing, f, spec[f])
                 await existing.save()
             continue
         await Badge(**spec).insert()
@@ -126,7 +128,11 @@ async def seed_gamification() -> None:
     for spec in SEED_QUESTS:
         existing = await Quest.find_one(Quest.key == spec["key"])
         if existing:
-            sync_fields = {"title", "criteria", "reward_xp", "reward_points", "active"}
+            # * only sync fields this spec actually declares — a spec that omits an
+            # * optional field (e.g. "active") leaves the stored value alone rather
+            # * than blowing up on a missing key
+            sync_fields = [f for f in ("title", "scope", "criteria", "reward_xp", "reward_points", "active")
+                           if f in spec]
             changed = any(getattr(existing, f) != spec[f] for f in sync_fields)
             if changed:
                 for f in sync_fields:
