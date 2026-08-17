@@ -6,7 +6,6 @@ from typing import Annotated, AsyncIterator
 import io
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from beanie.operators import Inc
 from pydantic import BaseModel
 import redis.asyncio as aioredis
 from app.core.auth import require_admin
@@ -53,7 +52,32 @@ class ModuleScoringBody(BaseModel):
 class CreateEpisodeBody(BaseModel):
     title: str
     description: str | None = None
-    sequence_order: int
+    # * optional: omit to append at the end of the module (the common case when
+    # * an admin extends an existing module long after creating it)
+    sequence_order: int | None = None
+
+
+class UpdateModuleBody(BaseModel):
+    """Every field optional — a PATCH only touches what was sent."""
+    title: str | None = None
+    description: str | None = None
+    category: str | None = None
+    tags: list[str] | None = None
+    target_roles: list[str] | None = None
+    module_type: str | None = None
+    target_department: str | None = None
+    is_published: bool | None = None
+
+
+class UpdateEpisodeBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    sequence_order: int | None = None
+
+
+class ReorderEpisodesBody(BaseModel):
+    # episode ids in the order they should play
+    episode_ids: list[str]
 
 
 @router.post("/modules", status_code=201)
@@ -73,17 +97,115 @@ async def create_module(
     return {"id": module.id, "title": module.title}
 
 
+async def _get_module_or_404(module_id: str) -> Module:
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    return module
+
+
+async def _get_episode_or_404(episode_id: str) -> Episode:
+    ep = await Episode.get(episode_id)
+    if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    return ep
+
+
+async def _sync_episode_count(module: Module) -> int:
+    """
+    Recount episodes from the collection instead of trusting the counter.
+    The stored total drifts whenever an episode is added or purged outside the
+    happy path, and progress percentages divide by it — so every write that can
+    change the count settles it from real data.
+    """
+    live = await Episode.find(Episode.module_id == module.id).count()
+    if module.total_episodes != live:
+        module.total_episodes = live
+        await module.save()
+    return live
+
+
+def _module_view(module: Module, episodes: list[Episode]) -> dict:
+    return {
+        "id": module.id,
+        "title": module.title,
+        "description": module.description,
+        "category": module.category,
+        "tags": module.tags,
+        "target_roles": module.target_roles,
+        "module_type": module.module_type,
+        "target_department": module.target_department,
+        "points_weight": module.points_weight,
+        "is_published": module.is_published,
+        "total_episodes": module.total_episodes,
+        "source_type": module.source_type,
+        "created_at": module.created_at,
+        "episodes": [
+            {
+                "id": ep.id,
+                "title": ep.title,
+                "description": ep.description,
+                "sequence_order": ep.sequence_order,
+                "status": ep.status,
+                "duration_seconds": ep.duration_seconds,
+                "bunny_video_guid": ep.bunny_video_guid or ep.bunny_video_id,
+                "has_remote_video": bool(ep.bunny_video_guid or ep.bunny_video_id),
+                "thumbnail_url": ep.thumbnail_url,
+                "created_at": ep.created_at,
+            }
+            for ep in episodes
+        ],
+    }
+
+
+@router.get("/modules/{module_id}")
+async def get_module_admin(
+    module_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Full module for the admin editor, including unpublished/failed episodes that
+    the learner-facing /modules/{id} would hide.
+    """
+    module = await _get_module_or_404(module_id)
+    episodes = await Episode.find(Episode.module_id == module_id).sort(
+        +Episode.sequence_order
+    ).to_list()
+    await _sync_episode_count(module)
+    return _module_view(module, episodes)
+
+
+@router.patch("/modules/{module_id}")
+async def update_module(
+    module_id: str,
+    body: UpdateModuleBody,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Edit module details after creation. Only the fields sent are changed."""
+    module = await _get_module_or_404(module_id)
+    data = body.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(module, field, value)
+    await module.save()
+
+    episodes = await Episode.find(Episode.module_id == module_id).sort(
+        +Episode.sequence_order
+    ).to_list()
+    await _sync_episode_count(module)
+    return _module_view(module, episodes)
+
+
 @router.patch("/modules/{module_id}/publish")
 async def publish_module(
     module_id: str,
     admin: Annotated[User, Depends(require_admin)],
+    publish: bool = True,
 ):
-    module = await Module.get(module_id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-    module.is_published = True
+    """Publish or unpublish. `publish` defaults to True so old callers still work."""
+    module = await _get_module_or_404(module_id)
+    module.is_published = publish
     await module.save()
-    return {"published": True}
+    return {"module_id": module.id, "published": module.is_published}
 
 
 @router.patch("/modules/{module_id}/scoring")
@@ -114,22 +236,104 @@ async def add_episode(
     admin: Annotated[User, Depends(require_admin)],
 ):
     """
-    Create episode record. Video upload is a separate step via /admin/episodes/{id}/upload.
+    Add an episode to a module — at creation time or any time after.
+    Video upload is a separate step via /admin/episodes/{id}/upload.
+
+    Omit sequence_order to append after the last existing episode, which is what
+    extending a live module almost always means.
     """
-    module = await Module.get(module_id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
+    module = await _get_module_or_404(module_id)
+
+    existing = await Episode.find(Episode.module_id == module_id).to_list()
+    if body.sequence_order is None:
+        order = max((e.sequence_order for e in existing), default=0) + 1
+    else:
+        order = body.sequence_order
+        # * a duplicate order makes two episodes sort arbitrarily; push the rest
+        # * down so an explicit insert-in-the-middle stays unambiguous
+        if any(e.sequence_order == order for e in existing):
+            for e in existing:
+                if e.sequence_order >= order:
+                    e.sequence_order += 1
+                    await e.save()
 
     ep = Episode(
         module_id=module_id,
         title=body.title,
         description=body.description,
-        sequence_order=body.sequence_order,
+        sequence_order=order,
         status="pending",
     )
     await ep.insert()
-    await module.update(Inc({Module.total_episodes: 1}))
-    return {"id": ep.id, "title": ep.title}
+    await _sync_episode_count(module)
+    return {
+        "id": ep.id,
+        "title": ep.title,
+        "sequence_order": ep.sequence_order,
+        "module_id": module_id,
+        "total_episodes": module.total_episodes,
+    }
+
+
+@router.patch("/episodes/{episode_id}")
+async def update_episode(
+    episode_id: str,
+    body: UpdateEpisodeBody,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Rename / re-describe / re-position a single episode."""
+    ep = await _get_episode_or_404(episode_id)
+    data = body.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(ep, field, value)
+    await ep.save()
+    return {
+        "id": ep.id,
+        "title": ep.title,
+        "description": ep.description,
+        "sequence_order": ep.sequence_order,
+        "status": ep.status,
+    }
+
+
+@router.patch("/modules/{module_id}/episodes/reorder")
+async def reorder_episodes(
+    module_id: str,
+    body: ReorderEpisodesBody,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Renumber the module's episodes to match the given order, 1..N.
+    Every episode of the module must appear exactly once, so a stale client
+    list can't silently strand an episode at an old position.
+    """
+    await _get_module_or_404(module_id)
+    episodes = await Episode.find(Episode.module_id == module_id).to_list()
+    by_id = {e.id: e for e in episodes}
+
+    if len(set(body.episode_ids)) != len(body.episode_ids):
+        raise HTTPException(status_code=422, detail="Duplicate episode ids in the order")
+    if set(body.episode_ids) != set(by_id):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The order must list every episode of this module exactly once "
+                f"({len(by_id)} expected, {len(body.episode_ids)} sent). "
+                "Reload the module and try again."
+            ),
+        )
+
+    for position, ep_id in enumerate(body.episode_ids, start=1):
+        ep = by_id[ep_id]
+        if ep.sequence_order != position:
+            ep.sequence_order = position
+            await ep.save()
+
+    return {
+        "module_id": module_id,
+        "order": [{"id": e_id, "sequence_order": i}
+                  for i, e_id in enumerate(body.episode_ids, start=1)],
+    }
 
 
 @router.post("/episodes/{episode_id}/prepare-upload")

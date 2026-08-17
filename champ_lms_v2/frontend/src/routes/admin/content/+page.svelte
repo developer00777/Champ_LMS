@@ -84,7 +84,8 @@
   <p class="breadcrumb"><a href="/admin">← Admin</a></p>
   <h1>Content Library</h1>
   <p class="sub">
-    Every module and video. Deleting here is <b>permanent</b> — it removes the video
+    Every module and video. Open a module to rename it, reorder it, or add more
+    episodes at any time. Deleting here is <b>permanent</b> — it removes the video
     from Bunny Stream and the CDN, not just from this app.
   </p>
 
@@ -157,6 +158,7 @@
                   {/if}
                 </div>
               </div>
+              <a href="/admin/modules/{m.id}" class="btn">Edit / add episodes</a>
               <button class="btn danger" disabled={loadingPreview === m.id}
                       on:click={() => askModule(m)}>
                 {loadingPreview === m.id ? 'Checking…' : 'Delete module'}

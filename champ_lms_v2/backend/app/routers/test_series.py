@@ -7,6 +7,8 @@ Admin flow:  upload a Q&A PDF -> review/edit the parsed draft -> publish ->
 Learner flow: list published tests -> take the interactive questionnaire ->
              get scored instantly, with answers and AI feedback.
 """
+import re
+import uuid
 from typing import Annotated, Any
 
 import redis.asyncio as aioredis
@@ -61,6 +63,15 @@ class TestCreateIn(BaseModel):
     duration_minutes: int | None = None
     max_attempts: int | None = None
     questions: list[QuestionIn] = Field(default_factory=list)
+
+
+class AppendQuestionsIn(BaseModel):
+    """Add questions to an existing test without resending the ones already there."""
+    questions: list[QuestionIn]
+    # * where the batch came from, so a test built from several PDFs still shows
+    # * its provenance instead of claiming it all came from the first upload
+    source_filename: str | None = None
+    source_parser: str | None = None
 
 
 class SubmitIn(BaseModel):
@@ -136,6 +147,15 @@ def _questions_from_in(items: list[QuestionIn]) -> list[TestQuestion]:
             kwargs["id"] = q.id
         out.append(TestQuestion(**kwargs))
     return out
+
+
+def _normalize_question(text: str) -> str:
+    """
+    Loose key for duplicate detection across two PDF ingests. Case, punctuation
+    and whitespace differ between exports of the same paper, so they're stripped
+    before comparing — this only drives a warning, never an automatic deletion.
+    """
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
 async def _get_test_or_404(test_id: str) -> TestSeries:
@@ -347,6 +367,130 @@ async def update_test_series(
     test.updated_at = datetime.now(timezone.utc)
     await test.save()
     return _admin_view(test)
+
+
+@router.post("/admin/test-series/{test_id}/questions", status_code=201)
+async def append_questions(
+    test_id: str,
+    body: AppendQuestionsIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Append a batch of questions to an existing test series — a second PDF, or
+    hand-written extras — without touching the questions already there.
+
+    This is deliberately separate from PATCH, which replaces the whole set: an
+    admin extending a live test must not have to round-trip every existing
+    question (and risk clobbering a concurrent edit) just to add five more.
+    """
+    from datetime import datetime, timezone
+
+    test = await _get_test_or_404(test_id)
+    incoming = _questions_from_in(body.questions)
+    if not incoming:
+        raise HTTPException(status_code=422, detail="No questions to add")
+
+    # * ids are regenerated on collision — a re-parsed PDF or a duplicated draft
+    # * can arrive carrying ids that already exist, and a duplicate id would make
+    # * the two questions indistinguishable in an attempt's answer map
+    existing_ids = {q.id for q in test.questions}
+    added = 0
+    for q in incoming:
+        if q.id in existing_ids:
+            q.id = str(uuid.uuid4())
+        existing_ids.add(q.id)
+        test.questions.append(q)
+        added += 1
+
+    if body.source_filename:
+        # Keep the original provenance and note what got layered on top.
+        test.source_filename = (
+            f"{test.source_filename} + {body.source_filename}"
+            if test.source_filename and body.source_filename not in (test.source_filename or "")
+            else body.source_filename
+        )
+    if body.source_parser and test.source_parser != body.source_parser:
+        test.source_parser = "mixed" if test.source_parser else body.source_parser
+
+    # A published test whose new questions aren't scorable would break scoring
+    # for the next learner, so pull it back to draft and say so.
+    unpublished = False
+    if test.is_published and not test.is_ready:
+        test.is_published = False
+        unpublished = True
+
+    test.updated_at = datetime.now(timezone.utc)
+    await test.save()
+
+    attempts = await TestAttempt.find(TestAttempt.test_id == test_id).count()
+    return {
+        **_admin_view(test),
+        "added": added,
+        "unpublished_by_this_change": unpublished,
+        "existing_attempts": attempts,
+        "notice": (
+            f"{attempts} learner(s) already took the earlier version — their scores "
+            "were graded against the questions that existed then and are unchanged."
+        ) if attempts else None,
+    }
+
+
+@router.delete("/admin/test-series/{test_id}/questions/{question_id}")
+async def delete_question(
+    test_id: str,
+    question_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Remove a single question without resending the rest of the set."""
+    from datetime import datetime, timezone
+
+    test = await _get_test_or_404(test_id)
+    remaining = [q for q in test.questions if q.id != question_id]
+    if len(remaining) == len(test.questions):
+        raise HTTPException(status_code=404, detail="Question not found in this test")
+
+    test.questions = remaining
+    if test.is_published and not test.is_ready:
+        test.is_published = False
+    test.updated_at = datetime.now(timezone.utc)
+    await test.save()
+    return _admin_view(test)
+
+
+@router.post("/admin/test-series/{test_id}/parse-pdf")
+async def parse_pdf_for_existing_test(
+    test_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+    file: UploadFile = File(...),
+    use_ai: bool = Form(False),
+):
+    """
+    Parse another PDF against an existing test. Saves nothing — the admin
+    reviews the draft and then POSTs it to .../questions to append.
+
+    Flags questions that look like duplicates of ones already in the test so a
+    re-uploaded paper doesn't silently double every question.
+    """
+    test = await _get_test_or_404(test_id)
+    parsed = await parse_pdf_upload(admin=admin, file=file, use_ai=use_ai)
+
+    existing = {_normalize_question(q.question) for q in test.questions}
+    for q in parsed["questions"]:
+        q["duplicate_of_existing"] = _normalize_question(q["question"]) in existing
+
+    dupes = sum(1 for q in parsed["questions"] if q["duplicate_of_existing"])
+    if dupes:
+        parsed["warnings"].append(
+            f"{dupes} question(s) already appear in “{test.title}” — they are "
+            "pre-unchecked below so you don't add them twice."
+        )
+    return {
+        **parsed,
+        "test_id": test.id,
+        "test_title": test.title,
+        "existing_questions": len(test.questions),
+        "duplicate_count": dupes,
+    }
 
 
 @router.patch("/admin/test-series/{test_id}/publish")

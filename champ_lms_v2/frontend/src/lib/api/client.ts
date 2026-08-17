@@ -79,11 +79,26 @@ export const api = {
   // Admin
   createModule: (body: { title: string; description?: string; category?: string; tags?: string[] }) =>
     request<{ id: string }>('/admin/modules', { method: 'POST', body: JSON.stringify(body) }),
-  publishModule: (id: string) =>
-    request(`/admin/modules/${id}/publish`, { method: 'PATCH' }),
-  addEpisode: (moduleId: string, body: { title: string; description?: string; sequence_order: number }) =>
-    request<{ id: string }>(`/admin/modules/${moduleId}/episodes`, { method: 'POST', body: JSON.stringify(body) }),
+  publishModule: (id: string, publish = true) =>
+    request<{ module_id: string; published: boolean }>(
+      `/admin/modules/${id}/publish?publish=${publish}`, { method: 'PATCH' }),
+  // sequence_order omitted = append after the last episode
+  addEpisode: (moduleId: string, body: { title: string; description?: string; sequence_order?: number }) =>
+    request<{ id: string; title: string; sequence_order: number; total_episodes: number }>(
+      `/admin/modules/${moduleId}/episodes`, { method: 'POST', body: JSON.stringify(body) }),
   analytics: () => request<AnalyticsData>('/admin/analytics'),
+
+  // Admin — extend an existing module after it was created
+  adminModule: (id: string) => request<AdminModuleDetail>(`/admin/modules/${id}`),
+  updateModule: (id: string, body: ModuleEditBody) =>
+    request<AdminModuleDetail>(`/admin/modules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  updateEpisode: (episodeId: string, body: { title?: string; description?: string | null; sequence_order?: number }) =>
+    request<{ id: string; title: string; sequence_order: number; status: string }>(
+      `/admin/episodes/${episodeId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  reorderEpisodes: (moduleId: string, episodeIds: string[]) =>
+    request<{ module_id: string; order: { id: string; sequence_order: number }[] }>(
+      `/admin/modules/${moduleId}/episodes/reorder`,
+      { method: 'PATCH', body: JSON.stringify({ episode_ids: episodeIds }) }),
 
   // Zoom
   zoomSessions: () => request<ZoomSession[]>('/zoom/sessions'),
@@ -162,6 +177,40 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+  // * parse a second PDF against an existing test — returns a draft flagged for
+  // * duplicates; nothing is saved until appendTestQuestions is called
+  parseTestPdfForTest: async (testId: string, file: File, useAi = false): Promise<ParsedPdfForTest> => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('use_ai', String(useAi));
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/test-series/${testId}/parse-pdf`, {
+      method: 'POST',
+      body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+    }
+    return res.json();
+  },
+  appendTestQuestions: (
+    testId: string,
+    questions: TestQuestionDraft[],
+    source?: { filename?: string | null; parser?: string | null },
+  ) =>
+    request<AppendResult>(`/admin/test-series/${testId}/questions`, {
+      method: 'POST',
+      body: JSON.stringify({
+        questions,
+        source_filename: source?.filename ?? null,
+        source_parser: source?.parser ?? null,
+      }),
+    }),
+  deleteTestQuestion: (testId: string, questionId: string) =>
+    request<AdminTest>(`/admin/test-series/${testId}/questions/${questionId}`, { method: 'DELETE' }),
+
   adminTestList: () => request<AdminTestSummary[]>('/admin/test-series'),
   adminTest: (id: string) => request<AdminTest>(`/admin/test-series/${id}`),
   updateTestSeries: (id: string, body: Partial<TestSeriesCreate> & { shuffle_questions?: boolean }) =>
@@ -403,6 +452,27 @@ export interface PurgeResult {
   xp_events_preserved: boolean;
 }
 
+// * Admin module editor — extend/edit a module after it was created
+export interface AdminEpisodeDetail {
+  id: string; title: string; description: string | null;
+  sequence_order: number; status: string; duration_seconds: number | null;
+  bunny_video_guid: string | null; has_remote_video: boolean;
+  thumbnail_url: string | null; created_at: string;
+}
+export interface AdminModuleDetail {
+  id: string; title: string; description: string | null;
+  category: string | null; tags: string[] | null; target_roles: string[] | null;
+  module_type: string; target_department: string | null;
+  points_weight: number; is_published: boolean; total_episodes: number;
+  source_type: string; created_at: string;
+  episodes: AdminEpisodeDetail[];
+}
+export interface ModuleEditBody {
+  title?: string; description?: string | null; category?: string | null;
+  tags?: string[] | null; target_roles?: string[] | null;
+  module_type?: string; target_department?: string | null; is_published?: boolean;
+}
+
 // * Test Series types
 export interface TestQuestionDraft {
   id?: string;
@@ -422,6 +492,21 @@ export interface ParsedPdf {
   unscorable_count: number;
   warnings: string[];
   questions: TestQuestionDraft[];
+}
+// * a second PDF parsed against an existing test — same shape as ParsedPdf plus
+// * duplicate flags against the questions already in that test
+export interface ParsedPdfForTest extends ParsedPdf {
+  test_id: string;
+  test_title: string;
+  existing_questions: number;
+  duplicate_count: number;
+  questions: (TestQuestionDraft & { duplicate_of_existing?: boolean })[];
+}
+export interface AppendResult extends AdminTest {
+  added: number;
+  unpublished_by_this_change: boolean;
+  existing_attempts: number;
+  notice: string | null;
 }
 export interface TestSeriesCreate {
   title: string;

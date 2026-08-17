@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { api, type AdminTest, type TestQuestionDraft } from '$lib/api/client';
+  import { api, type AdminTest, type TestQuestionDraft, type ParsedPdfForTest } from '$lib/api/client';
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
   const id = $page.params.id;
@@ -12,6 +12,73 @@
   let busy = false;
   let error = '';
   let saved = '';
+
+  // --- extend this test with more questions -------------------------------
+  type Draft = TestQuestionDraft & { duplicate_of_existing?: boolean };
+  let showExtend = false;
+  let extendFile: File | null = null;
+  let extendUseAi = false;
+  let parsing = false;
+  let extendError = '';
+  let parsed: ParsedPdfForTest | null = null;
+  let incoming: Draft[] = [];
+  // which of the parsed questions to actually append — duplicates start off
+  let include: boolean[] = [];
+
+  function pickExtendFile(e: Event) {
+    extendFile = (e.target as HTMLInputElement).files?.[0] ?? null;
+    extendError = '';
+  }
+
+  async function parseMore() {
+    if (!extendFile) { extendError = 'Choose a PDF first'; return; }
+    parsing = true; extendError = '';
+    try {
+      parsed = await api.parseTestPdfForTest(id, extendFile, extendUseAi);
+      incoming = parsed.questions.map((q) => ({ ...q }));
+      include = incoming.map((q) => !q.duplicate_of_existing);
+    } catch (e: any) { extendError = e.message; }
+    finally { parsing = false; }
+  }
+
+  function cancelExtend() {
+    showExtend = false; parsed = null; incoming = []; include = [];
+    extendFile = null; extendError = '';
+  }
+
+  $: selectedCount = include.filter(Boolean).length;
+  $: selectedUnscorable = incoming.filter((q, i) => include[i] && !scorable(q)).length;
+
+  function setIncomingAnswer(qi: number, oi: number) {
+    incoming[qi].correct_index = oi;
+    incoming = incoming;
+  }
+
+  // Appends only the ticked questions. The existing set is never resent, so a
+  // long test can be extended without round-tripping every question it holds.
+  async function appendSelected() {
+    const chosen = incoming.filter((_, i) => include[i]);
+    if (chosen.length === 0) { extendError = 'Tick at least one question to add'; return; }
+    busy = true; extendError = '';
+    try {
+      const result = await api.appendTestQuestions(id, chosen, {
+        filename: parsed?.source_filename,
+        parser: parsed?.source_parser,
+      });
+      test = result;
+      questions = result.questions.map((q) => ({ ...q }));
+      cancelExtend();
+      saved = result.unpublished_by_this_change
+        ? `${result.added} question(s) added. The test was moved back to draft because `
+          + `some of them still need a correct answer.`
+        : `${result.added} question(s) added.`
+          + (result.existing_attempts
+            ? ` ${result.existing_attempts} earlier attempt(s) keep the scores they were graded on.`
+            : '');
+      setTimeout(() => (saved = ''), 6000);
+    } catch (e: any) { extendError = e.message; }
+    finally { busy = false; }
+  }
 
   onMount(load);
 
@@ -98,6 +165,9 @@
       </div>
       <div class="head-actions">
         <span class="status" class:live={test.is_published}>{test.is_published ? 'Published' : 'Draft'}</span>
+        <button class="btn primary" on:click={() => (showExtend ? cancelExtend() : (showExtend = true))}>
+          {showExtend ? 'Cancel' : '+ Add questions from PDF'}
+        </button>
         <a href="/admin/tests/{id}/results" class="btn">Results</a>
       </div>
     </div>
@@ -128,6 +198,85 @@
         <span>Shuffle question order for each learner</span>
       </label>
     </div>
+
+    {#if showExtend}
+      <div class="form-card extend">
+        <h2>Add more questions</h2>
+        {#if !parsed}
+          <p class="info">
+            Upload another question paper. The questions already in this test stay
+            exactly as they are — this only appends.
+            {#if test.is_published}
+              <br />This test is <b>live</b>: anyone who already took it keeps the
+              score they were graded on, and new attempts will include what you add.
+            {/if}
+          </p>
+          <label>
+            Question paper (PDF, max 10MB)
+            <input type="file" accept="application/pdf,.pdf" on:change={pickExtendFile} />
+          </label>
+          {#if extendFile}<p class="file-info">{extendFile.name} — {(extendFile.size / 1024).toFixed(0)} KB</p>{/if}
+          <label class="check">
+            <input type="checkbox" bind:checked={extendUseAi} />
+            <span>Use AI extraction (slower — try it if the layout is unusual)</span>
+          </label>
+          {#if extendError}<p class="error">{extendError}</p>{/if}
+          <button class="btn primary" disabled={parsing || !extendFile} on:click={parseMore}>
+            {parsing ? 'Reading PDF…' : 'Extract questions'}
+          </button>
+        {:else}
+          <div class="parse-summary">
+            <div><b>{parsed.detected_questions}</b> detected</div>
+            <div><b>{selectedCount}</b> selected to add</div>
+            <div><b>{parsed.existing_questions}</b> already in this test</div>
+            <div class:bad={parsed.duplicate_count > 0}><b>{parsed.duplicate_count}</b> look like duplicates</div>
+          </div>
+          {#each parsed.warnings as w}<p class="warn">{w}</p>{/each}
+          {#if selectedUnscorable > 0}
+            <p class="warn">
+              {selectedUnscorable} selected question(s) have no correct answer marked. You can
+              still add them, but the test drops back to draft until they're set.
+            </p>
+          {/if}
+
+          <div class="incoming">
+            {#each incoming as q, qi (qi)}
+              <div class="in-card" class:skipped={!include[qi]} class:dupe={q.duplicate_of_existing}>
+                <label class="in-head">
+                  <input type="checkbox" bind:checked={include[qi]} />
+                  <span class="in-num">New Q{qi + 1}</span>
+                  {#if q.duplicate_of_existing}
+                    <span class="dupe-tag">already in this test</span>
+                  {/if}
+                </label>
+                <textarea class="q-text" rows="2" bind:value={q.question} disabled={!include[qi]}></textarea>
+                {#each q.options as _, oi}
+                  <div class="opt" class:chosen={q.correct_index === oi}>
+                    <button class="radio" class:on={q.correct_index === oi}
+                            disabled={!include[qi]} on:click={() => setIncomingAnswer(qi, oi)}>
+                      {q.correct_index === oi ? '✓' : String.fromCharCode(65 + oi)}
+                    </button>
+                    <input bind:value={q.options[oi]} disabled={!include[qi]} />
+                  </div>
+                {/each}
+                <div class="row">
+                  <label>Topic<input bind:value={q.topic} disabled={!include[qi]} placeholder="e.g. Pricing" /></label>
+                  <label>Marks<input type="number" min="1" bind:value={q.marks} disabled={!include[qi]} /></label>
+                </div>
+              </div>
+            {/each}
+          </div>
+
+          {#if extendError}<p class="error">{extendError}</p>{/if}
+          <div class="btn-row">
+            <button class="btn primary" disabled={busy || selectedCount === 0} on:click={appendSelected}>
+              {busy ? 'Adding…' : `Add ${selectedCount} question${selectedCount === 1 ? '' : 's'}`}
+            </button>
+            <button class="btn" disabled={busy} on:click={cancelExtend}>Cancel</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     {#if unscorable > 0}
       <p class="warn">{unscorable} question(s) have no correct answer marked — set them to publish.</p>
@@ -227,6 +376,29 @@
   .btn:hover:not(:disabled) { border-color: var(--accent); }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; }
   .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* extend-with-more-questions panel */
+  .form-card.extend { border-color: var(--accent); }
+  .info { font-size: 0.82rem; color: var(--muted); background: var(--surface2);
+          padding: 0.65rem 0.8rem; border-radius: 6px; line-height: 1.6; }
+  .file-info { font-size: 0.78rem; color: var(--muted); }
+  .btn-row { display: flex; gap: 0.6rem; }
+  .parse-summary { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center;
+                   background: var(--surface2); border-radius: 8px;
+                   padding: 0.8rem 1.1rem; font-size: 0.78rem; color: var(--muted); }
+  .parse-summary b { font-size: 1.1rem; color: var(--text); display: block; font-weight: 800; }
+  .parse-summary .bad b { color: #ffc107; }
+  .incoming { display: flex; flex-direction: column; gap: 0.85rem; }
+  .in-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 9px;
+             padding: 0.95rem; display: flex; flex-direction: column; gap: 0.55rem; }
+  .in-card.dupe { border-color: rgba(255,193,7,0.5); }
+  .in-card.skipped { opacity: 0.45; }
+  .in-head { flex-direction: row; align-items: center; gap: 0.5rem; }
+  .in-head input { width: auto; }
+  .in-num { font-size: 0.76rem; font-weight: 700; color: var(--muted); }
+  .dupe-tag { font-size: 0.68rem; color: #ffc107; border: 1px solid rgba(255,193,7,0.45);
+              border-radius: 999px; padding: 0.1rem 0.45rem; }
+  .radio:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .skeleton { border-radius: 10px; background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
               background-size: 200% 100%; animation: shimmer 1.4s infinite; }
