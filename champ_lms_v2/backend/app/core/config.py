@@ -11,7 +11,8 @@ class Settings(BaseSettings):
 
     # Hardcoded admin bootstrap — if both are set, this account is created
     # (or promoted to admin) on every startup. There is no other way to
-    # create an admin: POST /auth/register always creates role="learner".
+    # create the first admin; public sign-up is disabled and every other
+    # account is provisioned by an admin via POST /admin/employees.
     admin_email: str = ""
     admin_password: str = ""
 

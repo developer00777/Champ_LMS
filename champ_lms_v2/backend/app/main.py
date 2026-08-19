@@ -6,7 +6,7 @@ from app.core.db import init_db, close_db
 from app.core.auth import seed_admin
 from app.core.redis import get_redis, close_redis
 from app.services.gamification_service import seed_gamification, rehydrate_leaderboards
-from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series
+from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series, employees
 
 settings = get_settings()
 
@@ -51,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(employees.router)
 app.include_router(content.router)
 app.include_router(progress.router)
 app.include_router(gamification.router)

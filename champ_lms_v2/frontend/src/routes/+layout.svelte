@@ -76,6 +76,14 @@
     </div>
   </nav>
   <RewardModal />
+  {#if $auth.user?.must_change_password && !$page.url.pathname.startsWith('/auth')}
+    <!-- Signed in with an admin-issued password: nudge, don't lock them out,
+         so they can still reach their learning first. -->
+    <div class="pw-banner">
+      <span>You're still using the password an administrator gave you.</span>
+      <a href="/auth/change-password">Set your own password</a>
+    </div>
+  {/if}
   <main class="main">
     <slot />
   </main>
@@ -84,6 +92,15 @@
 {/if}
 
 <style>
+  .pw-banner {
+    display: flex; align-items: center; justify-content: center;
+    gap: 0.75rem; flex-wrap: wrap;
+    padding: 0.6rem 1rem;
+    background: color-mix(in srgb, orange 22%, transparent);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+  }
+  .pw-banner a { color: var(--accent); font-weight: 600; }
   .loading-screen {
     display: flex;
     flex-direction: column;

@@ -40,6 +40,11 @@
   {/if}
 
   <div class="quick-links">
+    <a href="/admin/employees" class="link-card">
+      <div class="icon">👥</div>
+      <h3>Employees</h3>
+      <p>Create logins, set teams and privileges, and view or reset passwords</p>
+    </a>
     <a href="/admin/upload" class="link-card">
       <div class="icon">📤</div>
       <h3>Upload Video</h3>
@@ -53,7 +58,7 @@
     <a href="/admin/tests" class="link-card">
       <div class="icon">📝</div>
       <h3>Test Series</h3>
-      <p>Turn a Q&amp;A PDF into a scored test with AI improvement insights</p>
+      <p>Turn a Q&amp;A PDF or Word doc into a scored test with AI improvement insights</p>
     </a>
     <a href="/admin/content" class="link-card">
       <div class="icon">🗂️</div>

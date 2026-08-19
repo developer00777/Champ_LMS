@@ -18,6 +18,7 @@ class RegisterRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    must_change_password: bool = False
 
 
 class UserOut(BaseModel):
@@ -26,6 +27,8 @@ class UserOut(BaseModel):
     full_name: str | None
     role: str
     department: str | None
+    team: str | None = None
+    must_change_password: bool = False
     points: int
     xp: int
     level: int
@@ -35,21 +38,23 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
-@router.post("/register", response_model=UserOut, status_code=201)
+@router.post("/register", status_code=403, include_in_schema=False)
 async def register(body: RegisterRequest):
-    existing = await User.find_one(User.email == body.email)
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    """
+    Public sign-up is disabled: Champ LMS is internal, and accounts are
+    provisioned by an admin via POST /admin/employees.
 
-    user = User(
-        email=body.email,
-        full_name=body.full_name,
-        hashed_password=hash_password(body.password),
-        department=body.department,
-        role="learner",
+    The route is kept (rather than deleted) so an old client or a bookmarked
+    form gets a clear explanation instead of a bare 404 that looks like an
+    outage.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Self-registration is disabled. Ask an administrator to create "
+            "your account."
+        ),
     )
-    await user.insert()
-    return user
 
 
 @router.post("/token", response_model=TokenResponse)
@@ -60,8 +65,15 @@ async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated. Contact an administrator.",
+        )
     token = create_access_token({"sub": user.id})
-    return {"access_token": token}
+    # * must_change_password lets the client route straight to the change form
+    # * after a first sign-in with an admin-issued password.
+    return {"access_token": token, "must_change_password": user.must_change_password}
 
 
 @router.get("/me", response_model=UserOut)

@@ -49,6 +49,21 @@ function createAuthStore() {
       }
     },
 
+    // Re-fetch the current user without touching the token. Used after the
+    // user changes something about their own account (e.g. their password)
+    // so cached fields like must_change_password stop being stale.
+    async refresh() {
+      if (!browser) return;
+      if (!localStorage.getItem('champ_token')) return;
+      try {
+        const user = await api.me();
+        update(s => ({ ...s, user }));
+      } catch {
+        // Leave the cached user in place: a transient failure here shouldn't
+        // look like a sign-out.
+      }
+    },
+
     logout() {
       localStorage.removeItem('champ_token');
       set({ user: null, loading: false, error: null });

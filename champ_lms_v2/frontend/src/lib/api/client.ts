@@ -35,9 +35,33 @@ export const api = {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
   },
-  register: (body: { email: string; full_name: string; password: string; department?: string }) =>
-    request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   me: () => request<User>('/auth/me'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ id: string; must_change_password: boolean; password_changed_at: string | null }>(
+      '/auth/change-password',
+      { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) },
+    ),
+
+  // Employees — admin only. There is no public sign-up; admins provision
+  // every account and can read the current password (internal tool).
+  employees: (params?: { q?: string; department?: string; team?: string; role?: string }) => {
+    const clean = Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][];
+    const qs = clean.length ? '?' + new URLSearchParams(clean).toString() : '';
+    return request<EmployeeRoster>(`/admin/employees${qs}`);
+  },
+  createEmployee: (body: EmployeeCreate) =>
+    request<Employee & { initial_password: string }>('/admin/employees', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateEmployee: (id: string, body: EmployeeUpdate) =>
+    request<Employee>(`/admin/employees/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  resetEmployeePassword: (id: string) =>
+    request<Employee & { initial_password: string }>(`/admin/employees/${id}/reset-password`, {
+      method: 'POST',
+    }),
+  deactivateEmployee: (id: string) =>
+    request<{ id: string; is_active: boolean }>(`/admin/employees/${id}`, { method: 'DELETE' }),
 
   // Content
   feed: () => request<FeedRow[]>('/feed'),
@@ -259,6 +283,36 @@ export interface User {
   id: string; email: string; full_name: string | null;
   role: string; department: string | null; points: number; streak_days: number;
   xp: number; level: number;
+  team?: string | null;
+  must_change_password?: boolean;
+}
+export interface Employee {
+  id: string; email: string; full_name: string | null;
+  role: string; department: string | null; team: string | null;
+  is_active: boolean;
+  must_change_password: boolean;
+  password_changed_at: string | null;
+  created_at: string;
+  points: number; level: number;
+  // Admin-only: the employee's current password. `password_available` is false
+  // when it can't be decrypted (SECRET_KEY rotated) — reset it in that case.
+  current_password?: string | null;
+  password_available?: boolean;
+}
+export interface EmployeeRoster {
+  employees: Employee[];
+  total: number;
+  departments: string[];
+  teams: string[];
+}
+export interface EmployeeCreate {
+  email: string; full_name: string;
+  department?: string; team?: string; role?: string;
+  initial_password?: string;
+}
+export interface EmployeeUpdate {
+  full_name?: string; department?: string; team?: string;
+  role?: string; is_active?: boolean;
 }
 export interface RewardEntry {
   type: string;

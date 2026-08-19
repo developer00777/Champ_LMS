@@ -1,24 +1,17 @@
 <script lang="ts">
   import { auth } from '$lib/stores/auth';
-  import { api } from '$lib/api/client';
 
   let email = '';
   let password = '';
-  let fullName = '';
-  let department = '';
-  let mode: 'login' | 'register' = 'login';
   let loading = false;
   let error = '';
 
+  // * No sign-up here: Champ LMS is internal and admins provision every
+  // * account, so this page only signs people in.
   async function submit() {
     loading = true; error = '';
     try {
-      if (mode === 'login') {
-        await auth.login(email, password);
-      } else {
-        await api.register({ email, full_name: fullName, password, department: department || undefined });
-        await auth.login(email, password);
-      }
+      await auth.login(email, password);
     } catch (e: any) {
       error = e.message;
     } finally {
@@ -32,20 +25,9 @@
 <div class="auth-wrap">
   <div class="auth-card">
     <div class="logo">CHAMP<span>LMS</span></div>
-    <h1>{mode === 'login' ? 'Sign In' : 'Create Account'}</h1>
+    <h1>Sign In</h1>
 
     <form on:submit|preventDefault={submit}>
-      {#if mode === 'register'}
-        <label>
-          Full Name
-          <input type="text" bind:value={fullName} required placeholder="Jane Smith" />
-        </label>
-        <label>
-          Department
-          <input type="text" bind:value={department} placeholder="Sales, Engineering..." />
-        </label>
-      {/if}
-
       <label>
         Email
         <input type="email" bind:value={email} required placeholder="you@company.com" autocomplete="email" />
@@ -58,15 +40,12 @@
       {#if error}<p class="error">{error}</p>{/if}
 
       <button type="submit" class="btn-primary" disabled={loading}>
-        {loading ? 'Loading...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+        {loading ? 'Loading...' : 'Sign In'}
       </button>
     </form>
 
     <p class="toggle">
-      {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}
-      <button on:click={() => { mode = mode === 'login' ? 'register' : 'login'; error = ''; }}>
-        {mode === 'login' ? 'Register' : 'Sign in'}
-      </button>
+      Need an account? Ask your administrator — accounts are created internally.
     </p>
   </div>
 </div>

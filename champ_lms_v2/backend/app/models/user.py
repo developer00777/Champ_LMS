@@ -13,6 +13,25 @@ class User(Document):
     # role: learner | admin | ld_lead
     role: str = "learner"
     department: str | None = None
+    # Team/squad within a department, set by an admin at creation.
+    team: str | None = None
+
+    # --- Admin-provisioned account state ------------------------------------
+    # Accounts are created by an admin (there is no public sign-up), starting
+    # with a generated password the employee is expected to replace.
+    must_change_password: bool = False
+    password_changed_at: datetime | None = None
+    # Who provisioned this account, for the admin roster.
+    created_by_admin_id: str | None = None
+
+    # * Recoverable copy of the current password, readable by admins only.
+    # * Deliberate product decision for this internal tool: admins must be able
+    # * to read an employee's current password. Login still verifies against
+    # * `hashed_password` (bcrypt) — this field is never used to authenticate,
+    # * so a bug here cannot weaken or bypass the login check.
+    # * It is encrypted at rest with SECRET_KEY rather than stored in plain
+    # * text, and is only ever serialised on admin-only endpoints.
+    password_recoverable: str | None = None
     # Bunny Storage path for avatar, served via CDN
     avatar_bunny_path: str | None = None
     points: int = 0

@@ -69,8 +69,8 @@ async def seed_admin() -> None:
     """
     Create (or promote) the hardcoded admin account from ADMIN_EMAIL/
     ADMIN_PASSWORD env vars. Idempotent — safe to run on every startup.
-    This is the only way to create an admin; POST /auth/register always
-    creates role="learner".
+    This is how the first admin exists: public sign-up is disabled, and
+    every other account is provisioned by an admin via POST /admin/employees.
     """
     if not settings.admin_email or not settings.admin_password:
         return
@@ -82,6 +82,9 @@ async def seed_admin() -> None:
             await user.save()
         return
 
+    # No password_recoverable copy for this account, unlike admin-provisioned
+    # employees: its password lives in ADMIN_PASSWORD, so whoever needs it
+    # already has it, and storing a second copy would only widen exposure.
     await User(
         email=settings.admin_email,
         full_name="Admin",
