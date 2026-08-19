@@ -45,6 +45,11 @@
       <h3>Employees</h3>
       <p>Create logins, set teams and privileges, and view or reset passwords</p>
     </a>
+    <a href="/admin/content-access" class="link-card">
+      <div class="icon">🔐</div>
+      <h3>Content Access</h3>
+      <p>Project modules team-wise and grant or revoke access per person</p>
+    </a>
     <a href="/admin/upload" class="link-card">
       <div class="icon">📤</div>
       <h3>Upload Video</h3>

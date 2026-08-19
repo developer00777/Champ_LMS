@@ -1,15 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type ProgressEntry, type StreakData } from '$lib/api/client';
+  import { api, type ProgressEntry, type RequiredModule, type StreakData } from '$lib/api/client';
   import { auth } from '$lib/stores/auth';
 
   let progress: ProgressEntry[] = [];
   let streak: StreakData | null = null;
+  // Modules an admin marked mandatory for this learner (their team, or them
+  // specifically). Failing to load these must not break the page.
+  let required: RequiredModule[] = [];
   let loading = true;
 
   onMount(async () => {
     try {
-      [progress, streak] = await Promise.all([api.myProgress(), api.myStreak()]);
+      [progress, streak, required] = await Promise.all([
+        api.myProgress(),
+        api.myStreak(),
+        api.requiredModules().catch(() => [] as RequiredModule[]),
+      ]);
     } finally {
       loading = false;
     }
@@ -43,6 +50,24 @@
         <div class="stat-label">In Progress</div>
       </div>
     </div>
+  {/if}
+
+  {#if !loading && required.length > 0}
+    <section class="required">
+      <h2>Required for you</h2>
+      <p class="required-note">
+        Assigned by your administrator — {required.length} module{required.length === 1 ? '' : 's'}.
+      </p>
+      <div class="required-list">
+        {#each required as m (m.id)}
+          <a class="required-item" href={`/module/${m.id}`}>
+            <div class="required-title">{m.title}</div>
+            {#if m.category}<div class="required-meta">{m.category}</div>{/if}
+            <div class="required-meta">{m.total_episodes} episode{m.total_episodes === 1 ? '' : 's'}</div>
+          </a>
+        {/each}
+      </div>
+    </section>
   {/if}
 
   {#if loading}
@@ -115,4 +140,15 @@
   .progress-bar-fill.completed { background: var(--success); }
   .meta { font-size: 0.78rem; color: var(--muted); }
   .badge-done { color: var(--success); font-weight: 700; }
+  .required { margin-bottom: 2rem; }
+  .required-note { color: var(--muted); font-size: 0.82rem; margin: 0 0 0.75rem; }
+  .required-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; }
+  .required-item {
+    display: block; padding: 0.85rem 1rem; border-radius: 8px;
+    background: var(--surface); text-decoration: none; color: var(--text);
+    border: 1px solid color-mix(in srgb, orange 45%, transparent);
+  }
+  .required-item:hover { border-color: var(--accent); }
+  .required-title { font-weight: 600; margin-bottom: 0.25rem; }
+  .required-meta { color: var(--muted); font-size: 0.75rem; }
 </style>

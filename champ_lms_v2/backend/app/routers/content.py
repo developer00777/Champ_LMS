@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from app.models.user import User
+from app.services import content_access
 from app.models.module import Module
 from app.models.episode import Episode
 from app.models.progress import WatchProgress
@@ -76,6 +77,10 @@ async def get_feed(
 
     # Fallback: build basic rows if no recommendations yet
     all_modules = await Module.find(Module.is_published == True).sort(-Module.created_at).limit(40).to_list()
+    # * Every row below derives from this list or from the two lookups further
+    # * down, so filtering all three keeps restricted modules out of the feed.
+    all_modules = await content_access.filter_visible(all_modules, user)
+    visible_ids = await content_access.visible_module_ids(user)
 
     rows: list[FeedRow] = []
 
@@ -92,6 +97,8 @@ async def get_feed(
         episodes = await Episode.find(In(Episode.id, ep_ids)).to_list()
         module_ids = list({e.module_id for e in episodes})
         mods = await Module.find(In(Module.id, module_ids)).to_list()
+        if visible_ids is not None:
+            mods = [m for m in mods if m.id in visible_ids]
         if mods:
             rows.append(FeedRow(
                 row_title="Continue Watching",
@@ -115,6 +122,8 @@ async def get_feed(
         for row_data in rec.rows:
             module_ids = row_data.get("module_ids", [])
             mods = await Module.find(In(Module.id, module_ids)).to_list()
+            if visible_ids is not None:
+                mods = [m for m in mods if m.id in visible_ids]
             if mods:
                 rows.append(FeedRow(
                     row_title=row_data["row_title"],
@@ -175,6 +184,36 @@ async def get_feed(
     return rows
 
 
+@router.get("/modules/required")
+async def list_required_modules(
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """
+    Modules an admin has made mandatory for this learner, via their team or a
+    per-person rule. Separate from /modules so the existing ModuleOut shape (and
+    every caller of it) stays unchanged.
+
+    Declared before /modules/{module_id} so "required" isn't swallowed as an id.
+    """
+    required_ids = await content_access.required_module_ids(user)
+    if not required_ids:
+        return []
+    modules = await Module.find(
+        In(Module.id, list(required_ids)), Module.is_published == True
+    ).sort(-Module.created_at).to_list()
+    return [
+        {
+            "id": m.id,
+            "title": m.title,
+            "description": m.description,
+            "category": m.category,
+            "thumbnail_url": _thumbnail_url(m.thumbnail_bunny_path),
+            "total_episodes": m.total_episodes,
+        }
+        for m in modules
+    ]
+
+
 @router.get("/modules", response_model=list[ModuleOut])
 async def list_modules(
     user: Annotated[User, Depends(get_current_user)],
@@ -188,6 +227,8 @@ async def list_modules(
         pattern = _ci_regex(q)
         filters.append(Or(RegEx(Module.title, pattern, "i"), RegEx(Module.description, pattern, "i")))
     modules = await Module.find(*filters).sort(-Module.created_at).to_list()
+    # * Hide modules whose audience doesn't include this learner.
+    modules = await content_access.filter_visible(modules, user)
     return [
         ModuleOut(
             id=m.id,
@@ -210,6 +251,11 @@ async def get_module(
 ):
     module = await Module.get(module_id)
     if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+
+    # 404 rather than 403: a learner who can't see a module shouldn't be able to
+    # confirm it exists by probing ids.
+    if not await content_access.can_access_module_id(module_id, user):
         raise HTTPException(status_code=404, detail="Module not found")
 
     episodes = await Episode.find(Episode.module_id == module_id).sort(+Episode.sequence_order).to_list()
@@ -249,6 +295,12 @@ async def get_stream_url(
     """
     ep = await Episode.get(episode_id)
     if not ep:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    # * The access check that actually matters: without it, filtering the lists
+    # * would only hide content in the UI while the video stayed playable to
+    # * anyone who knew (or guessed) an episode id.
+    if not await content_access.can_access_module_id(ep.module_id, user):
         raise HTTPException(status_code=404, detail="Episode not found")
 
     if ep.status != "ready" and ep.bunny_video_guid:
@@ -314,11 +366,16 @@ async def search(
         .limit(20)
         .to_list()
     )
+    modules = await content_access.filter_visible(modules, user)
     episodes = await (
         Episode.find(title_or_desc(Episode.title, Episode.description), Episode.status == "ready")
         .limit(20)
         .to_list()
     )
+    # Episode hits are filtered by their parent module's audience.
+    visible = await content_access.visible_module_ids(user)
+    if visible is not None:
+        episodes = [e for e in episodes if e.module_id in visible]
     return {
         "modules": [
             {"id": m.id, "title": m.title, "category": m.category,

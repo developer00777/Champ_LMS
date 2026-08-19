@@ -19,7 +19,10 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app.core.auth import get_current_user, hash_password, require_admin, verify_password
 from app.core import password_vault
+from app.models.content_access import ContentAccessRule
+from app.models.module import Module
 from app.models.user import User
+from app.services import content_access
 
 router = APIRouter(tags=["employees"])
 
@@ -331,4 +334,266 @@ async def change_own_password(
         "id": user.id,
         "must_change_password": user.must_change_password,
         "password_changed_at": user.password_changed_at,
+    }
+
+
+# --------------------------------------------------------------------------
+# Admin: content targeting
+#
+# Two levers, described in app/services/content_access.py:
+#   * module audience  — teams / departments / roles that can see a module,
+#                        and the teams it is required of.
+#   * per-person rule  — grant, require or revoke for one individual.
+# --------------------------------------------------------------------------
+class ModuleAudienceIn(BaseModel):
+    """
+    Set a module's audience. Passing [] clears a dimension (opening it up);
+    omitting a field leaves that dimension untouched.
+    """
+    audience_teams: list[str] | None = None
+    audience_departments: list[str] | None = None
+    target_roles: list[str] | None = None
+    required_for_teams: list[str] | None = None
+
+
+class AccessRuleIn(BaseModel):
+    user_id: str
+    access: str  # grant | required | revoke
+    reason: str | None = None
+
+
+def _clean_list(values: list[str] | None) -> list[str] | None:
+    """Trim, drop blanks, de-duplicate case-insensitively, keep order."""
+    if values is None:
+        return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in values:
+        v = (v or "").strip()
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+    return out
+
+
+def _audience_out(module: Module) -> dict:
+    return {
+        "id": module.id,
+        "title": module.title,
+        "category": module.category,
+        "is_published": module.is_published,
+        "audience_teams": module.audience_teams or [],
+        "audience_departments": module.audience_departments or [],
+        "target_roles": module.target_roles or [],
+        "required_for_teams": module.required_for_teams or [],
+        "is_restricted": content_access.is_restricted(module),
+    }
+
+
+@router.get("/admin/content-access/modules")
+async def list_module_audiences(admin: Annotated[User, Depends(require_admin)]):
+    """
+    Every module with its audience, plus the teams/departments available to
+    assign (taken from real employee records, so the admin picks from what
+    actually exists rather than retyping names).
+    """
+    modules = await Module.find_all().sort(-Module.created_at).to_list()
+    users = await User.find_all().to_list()
+    return {
+        "modules": [_audience_out(m) for m in modules],
+        "teams": sorted({u.team for u in users if u.team}),
+        "departments": sorted({u.department for u in users if u.department}),
+        "roles": list(ASSIGNABLE_ROLES),
+    }
+
+
+@router.patch("/admin/content-access/modules/{module_id}")
+async def set_module_audience(
+    module_id: str,
+    body: ModuleAudienceIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Restrict a module to teams/departments/roles, or open it up again."""
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+
+    if body.target_roles is not None:
+        bad = [r for r in body.target_roles if r not in ASSIGNABLE_ROLES]
+        if bad:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown role(s): {', '.join(bad)}. Valid: {', '.join(ASSIGNABLE_ROLES)}",
+            )
+
+    if body.audience_teams is not None:
+        module.audience_teams = _clean_list(body.audience_teams)
+    if body.audience_departments is not None:
+        module.audience_departments = _clean_list(body.audience_departments)
+    if body.target_roles is not None:
+        module.target_roles = _clean_list(body.target_roles)
+    if body.required_for_teams is not None:
+        module.required_for_teams = _clean_list(body.required_for_teams)
+
+    await module.save()
+    return _audience_out(module)
+
+
+@router.get("/admin/content-access/modules/{module_id}/people")
+async def module_access_people(
+    module_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Who can currently see this module and why — audience match, an explicit
+    per-person rule, or admin bypass. Lets an admin verify the effect of a
+    restriction instead of guessing.
+    """
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+
+    users = await User.find_all().to_list()
+    rules = await ContentAccessRule.find(ContentAccessRule.module_id == module_id).to_list()
+    by_user = {r.user_id: r for r in rules}
+
+    people = []
+    for u in sorted(users, key=lambda x: (x.full_name or x.email or "").lower()):
+        rule = by_user.get(u.id)
+        override = {module_id: rule.access} if rule else {}
+        allowed = content_access.can_access(module, u, override)
+        if content_access.is_admin(u):
+            why = "admin"
+        elif rule:
+            why = f"rule: {rule.access}"
+        elif content_access.matches_audience(module, u):
+            why = "audience" if content_access.is_restricted(module) else "open to everyone"
+        else:
+            why = "not in audience"
+        people.append({
+            "user_id": u.id,
+            "full_name": u.full_name,
+            "email": u.email,
+            "team": u.team,
+            "department": u.department,
+            "role": u.role,
+            "is_active": u.is_active,
+            "can_access": allowed,
+            "required": content_access.is_required(module, u, override),
+            "rule": rule.access if rule else None,
+            "reason": rule.reason if rule else None,
+            "why": why,
+        })
+
+    return {
+        **_audience_out(module),
+        "people": people,
+        "can_access_count": sum(1 for p in people if p["can_access"]),
+    }
+
+
+@router.put("/admin/content-access/modules/{module_id}/people")
+async def set_person_access(
+    module_id: str,
+    body: AccessRuleIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Grant, require or revoke this module for one person."""
+    valid = (ContentAccessRule.GRANT, ContentAccessRule.REQUIRED, ContentAccessRule.REVOKE)
+    if body.access not in valid:
+        raise HTTPException(
+            status_code=422, detail=f"access must be one of: {', '.join(valid)}"
+        )
+
+    module = await Module.get(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    target = await User.get(body.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    existing = await ContentAccessRule.find_one(
+        ContentAccessRule.user_id == body.user_id,
+        ContentAccessRule.module_id == module_id,
+    )
+    if existing:
+        existing.access = body.access
+        existing.reason = body.reason
+        existing.created_by_admin_id = admin.id
+        await existing.save()
+        rule = existing
+    else:
+        rule = ContentAccessRule(
+            user_id=body.user_id,
+            module_id=module_id,
+            access=body.access,
+            reason=body.reason,
+            created_by_admin_id=admin.id,
+        )
+        await rule.insert()
+
+    return {
+        "module_id": module_id,
+        "user_id": rule.user_id,
+        "access": rule.access,
+        "reason": rule.reason,
+    }
+
+
+@router.delete("/admin/content-access/modules/{module_id}/people/{user_id}")
+async def clear_person_access(
+    module_id: str,
+    user_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Drop a per-person rule, so the module's audience rules apply again."""
+    rule = await ContentAccessRule.find_one(
+        ContentAccessRule.user_id == user_id,
+        ContentAccessRule.module_id == module_id,
+    )
+    if not rule:
+        raise HTTPException(status_code=404, detail="No rule set for that person")
+    await rule.delete()
+    return {"module_id": module_id, "user_id": user_id, "access": None}
+
+
+@router.get("/admin/content-access/employees/{user_id}")
+async def employee_access_overview(
+    user_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    The catalogue from one employee's point of view — what they can open, what
+    is required of them, and where any explicit rule applies.
+    """
+    target = await User.get(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    modules = await Module.find_all().sort(-Module.created_at).to_list()
+    overrides = await content_access.rules_for_user(user_id)
+
+    items = [
+        {
+            "module_id": m.id,
+            "title": m.title,
+            "category": m.category,
+            "is_published": m.is_published,
+            "is_restricted": content_access.is_restricted(m),
+            "can_access": content_access.can_access(m, target, overrides),
+            "required": content_access.is_required(m, target, overrides),
+            "rule": overrides.get(m.id),
+        }
+        for m in modules
+    ]
+    return {
+        "user_id": target.id,
+        "full_name": target.full_name,
+        "email": target.email,
+        "team": target.team,
+        "department": target.department,
+        "role": target.role,
+        "modules": items,
+        "accessible_count": sum(1 for i in items if i["can_access"]),
+        "required_count": sum(1 for i in items if i["required"]),
     }

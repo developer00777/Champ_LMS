@@ -13,6 +13,10 @@ from app.models.learning_path import LearningPath, UserPathProgress
 from app.models.team import Team, TeamChallenge, TeamProgress
 from app.models.social import SocialPost, Notification
 from app.models.test_series import TestSeries, TestAttempt, TestQuestion
+# * ContentAccessRule: per-person module grants/revokes. Note this is unrelated
+# * to models.team.Team, which is a gamification squad; content access keys off
+# * the User.team org field an admin sets on the employee.
+from app.models.content_access import ContentAccessRule
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -22,6 +26,7 @@ __all__ = [
     "Team", "TeamChallenge", "TeamProgress",
     "SocialPost", "Notification",
     "TestSeries", "TestAttempt", "TestQuestion",
+    "ContentAccessRule",
 ]
 
 DOCUMENT_MODELS = [
@@ -33,4 +38,5 @@ DOCUMENT_MODELS = [
     SocialPost, Notification,
     # * TestQuestion is an embedded BaseModel, not a Document — not registered here
     TestSeries, TestAttempt,
+    ContentAccessRule,
 ]

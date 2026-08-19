@@ -24,6 +24,17 @@ class Module(Document):
     module_type: str = "upskilling"  # onboarding | upskilling
     # target_department scopes onboarding modules to one of the company departments.
     target_department: str | None = None
+
+    # --- Audience (see app/services/content_access.py) ----------------------
+    # Empty/None on every dimension = open to everyone, which is what modules
+    # created before this feature look like. Setting any of them restricts the
+    # module to people matching at least ONE populated dimension.
+    audience_teams: list[str] | None = None
+    audience_departments: list[str] | None = None
+    # Teams/users for whom this module is required rather than merely
+    # available. Being required implies access, so a required audience is also
+    # honoured by the visibility check.
+    required_for_teams: list[str] | None = None
     # Admin-configurable point multiplier (1.0 = baseline). Used by the scoring engine
     # to make harder / longer / certification modules worth more points.
     points_weight: float = 1.0

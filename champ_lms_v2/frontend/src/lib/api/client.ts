@@ -63,6 +63,29 @@ export const api = {
   deactivateEmployee: (id: string) =>
     request<{ id: string; is_active: boolean }>(`/admin/employees/${id}`, { method: 'DELETE' }),
 
+  // Content targeting — admin only. Audience rules restrict a module to
+  // teams/departments/roles; per-person rules are the exceptions on top.
+  contentAudiences: () => request<AudienceCatalogue>('/admin/content-access/modules'),
+  setModuleAudience: (moduleId: string, body: ModuleAudience) =>
+    request<ModuleAudienceOut>(`/admin/content-access/modules/${moduleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  moduleAccessPeople: (moduleId: string) =>
+    request<ModuleAccessPeople>(`/admin/content-access/modules/${moduleId}/people`),
+  setPersonAccess: (moduleId: string, userId: string, access: AccessLevel, reason?: string) =>
+    request<{ module_id: string; user_id: string; access: AccessLevel; reason: string | null }>(
+      `/admin/content-access/modules/${moduleId}/people`,
+      { method: 'PUT', body: JSON.stringify({ user_id: userId, access, reason }) },
+    ),
+  clearPersonAccess: (moduleId: string, userId: string) =>
+    request<{ module_id: string; user_id: string; access: null }>(
+      `/admin/content-access/modules/${moduleId}/people/${userId}`,
+      { method: 'DELETE' },
+    ),
+  employeeAccessOverview: (userId: string) =>
+    request<EmployeeAccessOverview>(`/admin/content-access/employees/${userId}`),
+
   // Content
   feed: () => request<FeedRow[]>('/feed'),
   modules: (params?: { category?: string; q?: string }) => {
@@ -70,6 +93,8 @@ export const api = {
     return request<Module[]>(`/modules${qs}`);
   },
   module: (id: string) => request<ModuleDetail>(`/modules/${id}`),
+  // Modules an admin made mandatory for the signed-in learner.
+  requiredModules: () => request<RequiredModule[]>('/modules/required'),
   streamUrl: (episodeId: string) => request<StreamUrlResponse>(`/episodes/${episodeId}/stream`),
   search: (q: string) => request<SearchResult>(`/search?q=${encodeURIComponent(q)}`),
 
@@ -313,6 +338,53 @@ export interface EmployeeCreate {
 export interface EmployeeUpdate {
   full_name?: string; department?: string; team?: string;
   role?: string; is_active?: boolean;
+}
+
+export interface RequiredModule {
+  id: string; title: string; description: string | null;
+  category: string | null; thumbnail_url: string | null; total_episodes: number;
+}
+
+export type AccessLevel = 'grant' | 'required' | 'revoke';
+export interface ModuleAudience {
+  audience_teams?: string[];
+  audience_departments?: string[];
+  target_roles?: string[];
+  required_for_teams?: string[];
+}
+export interface ModuleAudienceOut {
+  id: string; title: string; category: string | null; is_published: boolean;
+  audience_teams: string[]; audience_departments: string[];
+  target_roles: string[]; required_for_teams: string[];
+  // false = open to everyone; true = limited to the listed audience
+  is_restricted: boolean;
+}
+export interface AudienceCatalogue {
+  modules: ModuleAudienceOut[];
+  teams: string[]; departments: string[]; roles: string[];
+}
+export interface AccessPerson {
+  user_id: string; full_name: string | null; email: string;
+  team: string | null; department: string | null; role: string;
+  is_active: boolean;
+  can_access: boolean; required: boolean;
+  rule: AccessLevel | null; reason: string | null;
+  // Human-readable explanation: admin | rule: x | audience | not in audience
+  why: string;
+}
+export interface ModuleAccessPeople extends ModuleAudienceOut {
+  people: AccessPerson[];
+  can_access_count: number;
+}
+export interface EmployeeAccessOverview {
+  user_id: string; full_name: string | null; email: string;
+  team: string | null; department: string | null; role: string;
+  modules: {
+    module_id: string; title: string; category: string | null;
+    is_published: boolean; is_restricted: boolean;
+    can_access: boolean; required: boolean; rule: AccessLevel | null;
+  }[];
+  accessible_count: number; required_count: number;
 }
 export interface RewardEntry {
   type: string;
