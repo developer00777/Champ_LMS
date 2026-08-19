@@ -2,14 +2,16 @@
 AI service — OpenRouter for Zoom → Module pipeline and quiz generation.
 OpenRouter gives access to 200+ models via one API key and OpenAI-compatible SDK.
 
-Recommended cheap models for this task:
-  google/gemini-flash-1.5       ~$0.075/1M tokens  (fast, good JSON)
-  meta-llama/llama-3.1-8b-instruct:free  FREE tier (rate limited)
-  deepseek/deepseek-chat        ~$0.14/1M tokens   (strong reasoning)
-  google/gemini-2.0-flash-001   ~$0.10/1M tokens   (best quality/cost)
+Recommended cheap models for this task (verified live on OpenRouter):
+  google/gemini-2.5-flash       ~$0.30/1M in  (fast, good JSON, 1M ctx)  <- default
+  google/gemini-2.5-flash-lite  ~$0.10/1M in  (cheapest, still solid JSON)
+  deepseek/deepseek-chat        ~$0.26/1M in  (strong reasoning)
 
 Set OPENROUTER_MODEL in .env to switch without code changes.
-Default: google/gemini-flash-1.5
+
+NOTE: OpenRouter retires model ids. A retired id makes every call 404, which
+surfaces as an opaque failure on the endpoints that depend on it — so verify a
+new id against https://openrouter.ai/api/v1/models before setting it.
 """
 import json
 import httpx
@@ -156,6 +158,25 @@ Return ONLY a valid JSON object (no markdown, no commentary):
 }}"""
 
 
+class AIServiceError(RuntimeError):
+    """An AI call failed, with a message safe and useful to show an admin."""
+
+
+def _error_detail(resp: httpx.Response) -> str:
+    """Best-effort human-readable detail from an OpenRouter error response."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return resp.text[:200].strip() or "(empty response)"
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])[:200]
+        if isinstance(err, str):
+            return err[:200]
+    return str(body)[:200]
+
+
 def _extract_json_object(text: str) -> dict:
     """Extract first JSON object from model output, handling markdown fences."""
     text = text.strip()
@@ -193,20 +214,55 @@ class AIService:
         }
 
     async def _chat(self, prompt: str, max_tokens: int = 4096) -> str:
-        """Single chat completion via OpenRouter."""
+        """
+        Single chat completion via OpenRouter.
+
+        Raises AIServiceError with an actionable message. The generic httpx
+        error is useless to whoever sees it downstream: a 404 here almost
+        always means OPENROUTER_MODEL names a model OpenRouter has retired,
+        which is a config fix, not a transient failure.
+        """
+        model = self.settings.openrouter_model
         async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{OPENROUTER_BASE}/chat/completions",
-                headers=self._headers(),
-                json={
-                    "model": self.settings.openrouter_model,
-                    "max_tokens": max_tokens,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,  # low temp for consistent JSON output
-                },
+            try:
+                resp = await client.post(
+                    f"{OPENROUTER_BASE}/chat/completions",
+                    headers=self._headers(),
+                    json={
+                        "model": model,
+                        "max_tokens": max_tokens,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.3,  # low temp for consistent JSON output
+                    },
+                )
+            except httpx.RequestError as exc:
+                raise AIServiceError(f"Could not reach OpenRouter: {exc}") from exc
+
+        if resp.status_code == 404:
+            raise AIServiceError(
+                f"OpenRouter does not recognise model '{model}' — it has most "
+                "likely been retired. Set OPENROUTER_MODEL to a current id "
+                "(e.g. google/gemini-2.5-flash); see openrouter.ai/api/v1/models."
             )
-            resp.raise_for_status()
+        if resp.status_code in (401, 403):
+            raise AIServiceError(
+                "OpenRouter rejected the API key (check OPENROUTER_API_KEY)."
+            )
+        if resp.status_code == 402:
+            raise AIServiceError("OpenRouter credits exhausted — top up the account.")
+        if resp.status_code == 429:
+            raise AIServiceError("OpenRouter rate-limited this request; try again shortly.")
+        if resp.status_code >= 400:
+            raise AIServiceError(
+                f"OpenRouter returned {resp.status_code}: {_error_detail(resp)}"
+            )
+
+        try:
             return resp.json()["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            raise AIServiceError(
+                f"Unexpected response shape from OpenRouter: {_error_detail(resp)}"
+            ) from exc
 
     async def build_module_from_zoom(self, transcript: str, summary: str) -> dict:
         """Convert a Zoom transcript into a structured module JSON."""

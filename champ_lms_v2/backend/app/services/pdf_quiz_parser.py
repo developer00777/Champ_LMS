@@ -1,8 +1,10 @@
 """
-Turn a question-and-answer PDF into structured TestQuestion data.
+Turn a question-and-answer document (PDF or Word .docx) into structured
+TestQuestion data.
 
-There is no standard format for a "quiz PDF", so this runs a deterministic
-pattern parser first (free, instant, handles the common numbered-question +
+Text extraction is format-specific; everything after it is shared. There is no
+standard format for a "quiz document", so this runs a deterministic pattern
+parser first (free, instant, handles the common numbered-question +
 lettered-options + answer-key layouts) and leaves the AI parser in
 ai_service.parse_questions_from_text() as the fallback for odd layouts.
 
@@ -61,7 +63,90 @@ _KEY_PAIR = re.compile(r"(\d{1,3})\s*[).:\-=]?\s*\(?\s*([A-Ha-h])\s*\)?")
 
 
 class PdfParseError(Exception):
-    """Raised when the upload isn't a readable PDF at all."""
+    """
+    Raised when the upload isn't a readable question document at all.
+
+    Name kept for backwards compatibility with existing importers; it covers
+    Word documents too now.
+    """
+
+
+# Formats we can pull text out of, by lowercase file extension.
+PDF_EXTENSIONS = (".pdf",)
+DOCX_EXTENSIONS = (".docx",)
+SUPPORTED_EXTENSIONS = PDF_EXTENSIONS + DOCX_EXTENSIONS
+
+# Magic bytes, so a mislabelled extension or a browser that sends a vague
+# content-type still routes to the right extractor.
+_PDF_MAGIC = b"%PDF"
+_ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")  # .docx is a zip
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # legacy .doc / .xls
+
+
+def _looks_like_pdf(data: bytes) -> bool:
+    # Some producers emit junk before the header, so scan the first block.
+    return _PDF_MAGIC in data[:1024]
+
+
+def _looks_like_docx(data: bytes) -> bool:
+    return data[:4] in (m[:4] for m in _ZIP_MAGIC)
+
+
+def _looks_like_legacy_doc(data: bytes) -> bool:
+    return data[:8] == _OLE_MAGIC
+
+
+def extract_text_from_docx(data: bytes) -> str:
+    """
+    Pull text out of a Word .docx. Paragraphs and table cells both count — quiz
+    papers are very often laid out as a table (one row per question, or a
+    question/answer two-column grid), and skipping tables would silently lose
+    most of the document.
+
+    Import is local so a missing python-docx surfaces as a clear error on this
+    endpoint instead of breaking app startup.
+    """
+    try:
+        from docx import Document
+    except ImportError as exc:  # pragma: no cover - dependency is pinned
+        raise PdfParseError(
+            "Word support unavailable: the 'python-docx' package is not installed."
+        ) from exc
+
+    try:
+        doc = Document(io.BytesIO(data))
+    except Exception as exc:
+        raise PdfParseError(
+            f"Could not read this Word document: {exc}. If it was saved as an "
+            "older .doc file, re-save it as .docx and upload again."
+        ) from exc
+
+    lines: list[str] = []
+
+    def emit(text: str) -> None:
+        text = text.replace("\xa0", " ").rstrip()
+        if text.strip():
+            lines.append(text)
+
+    for para in doc.paragraphs:
+        emit(para.text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            # A row's cells are de-duplicated because merged cells repeat their
+            # text across every grid position they span.
+            seen: list[str] = []
+            for cell in cells:
+                if cell and (not seen or cell != seen[-1]):
+                    seen.append(cell)
+            # Cells often each hold a full line ("A) foo"), so emit them
+            # separately rather than joining a row into one unparseable line.
+            for cell in seen:
+                for cell_line in cell.splitlines():
+                    emit(cell_line)
+
+    return "\n".join(lines)
 
 
 def extract_text(data: bytes) -> str:
@@ -295,12 +380,56 @@ def parse_questions(text: str) -> list[TestQuestion]:
     return [q for q in questions if len(q.options) >= 2]
 
 
-def parse_pdf(data: bytes) -> tuple[list[TestQuestion], str]:
-    """Extract text then pattern-parse. Returns (questions, extracted_text)."""
-    text = extract_text(data)
-    if not text.strip():
+def parse_document(data: bytes, filename: str | None = None) -> tuple[list[TestQuestion], str]:
+    """
+    Extract text from a PDF or Word .docx, then pattern-parse it.
+    Returns (questions, extracted_text).
+
+    Format is decided by magic bytes first and the filename only as a
+    tie-breaker, so a .docx renamed to .pdf (or an unhelpful content-type from
+    the browser) still parses instead of failing confusingly.
+    """
+    if not data:
+        raise PdfParseError("The uploaded file is empty.")
+
+    ext = ""
+    if filename and "." in filename:
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+
+    if _looks_like_pdf(data):
+        text, kind = extract_text(data), "PDF"
+    elif _looks_like_docx(data):
+        text, kind = extract_text_from_docx(data), "Word document"
+    elif _looks_like_legacy_doc(data):
         raise PdfParseError(
-            "No text found in this PDF — it may be a scanned image. "
-            "Upload a text-based PDF, or add the questions manually."
+            "This is an older Word .doc file, which can't be read directly. "
+            "Open it in Word or Google Docs and save it as .docx (or export to "
+            "PDF), then upload again."
+        )
+    elif ext in PDF_EXTENSIONS:
+        # Named .pdf but no %PDF header — let pypdf produce the precise error.
+        text, kind = extract_text(data), "PDF"
+    elif ext in DOCX_EXTENSIONS:
+        text, kind = extract_text_from_docx(data), "Word document"
+    else:
+        raise PdfParseError(
+            "Unsupported file type. Upload a PDF or a Word .docx question paper."
+        )
+
+    if not text.strip():
+        if kind == "PDF":
+            raise PdfParseError(
+                "No text found in this PDF — it may be a scanned image. "
+                "Upload a text-based PDF, or add the questions manually."
+            )
+        raise PdfParseError(
+            "No text found in this Word document. If the questions are inside "
+            "images or text boxes, paste them into the document body (or add "
+            "them manually) and upload again."
         )
     return parse_questions(text), text
+
+
+def parse_pdf(data: bytes) -> tuple[list[TestQuestion], str]:
+    """Backwards-compatible alias for PDF-only callers."""
+    return parse_document(data, filename="upload.pdf")

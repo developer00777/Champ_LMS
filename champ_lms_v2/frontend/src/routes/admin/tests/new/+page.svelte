@@ -24,11 +24,11 @@
   function pick(e: Event) {
     file = (e.target as HTMLInputElement).files?.[0] ?? null;
     error = '';
-    if (file && !title) title = file.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ');
+    if (file && !title) title = file.name.replace(/\.(pdf|docx)$/i, '').replace(/[_-]+/g, ' ');
   }
 
   async function parsePdf() {
-    if (!file) { error = 'Choose a PDF first'; return; }
+    if (!file) { error = 'Choose a PDF or Word file first'; return; }
     busy = true; error = '';
     try {
       parsed = await api.parseTestPdf(file, useAi);
@@ -98,11 +98,11 @@
 
 <div class="page">
   <p class="breadcrumb"><a href="/admin/tests">← Test Series</a></p>
-  <h1>New test series from PDF</h1>
-  <p class="sub">Upload a PDF of questions and answers. We extract them, you confirm, learners take it.</p>
+  <h1>New test series from a document</h1>
+  <p class="sub">Upload a PDF or Word document of questions and answers. We extract them, you confirm, learners take it.</p>
 
   <div class="steps">
-    <span class="step" class:active={step === 'upload'} class:done={step === 'review'}>1. Upload PDF</span>
+    <span class="step" class:active={step === 'upload'} class:done={step === 'review'}>1. Upload</span>
     <span class="divider">›</span>
     <span class="step" class:active={step === 'review'}>2. Review &amp; publish</span>
   </div>
@@ -117,11 +117,14 @@
         <code>1. What is …</code> then <code>A) …  B) …</code>, with either
         <code>Answer: B</code> under each question or an <code>Answer Key</code>
         section at the end. Topic, Marks and Explanation lines are picked up too.
+        In Word files, questions laid out in a table work as well as plain
+        paragraphs. Scanned or image-only files have no text to read — export a
+        text-based file, or tick AI extraction for unusual layouts.
       </p>
 
       <label>
-        Question paper (PDF, max 10MB)
-        <input type="file" accept="application/pdf,.pdf" on:change={pick} />
+        Question paper (PDF or Word .docx, max 10MB)
+        <input type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" on:change={pick} />
       </label>
       {#if file}<p class="file-info">{file.name} — {(file.size / 1024).toFixed(0)} KB</p>{/if}
 
@@ -131,7 +134,7 @@
       </label>
 
       <button class="btn primary" disabled={busy || !file} on:click={parsePdf}>
-        {busy ? 'Reading PDF…' : 'Extract questions'}
+        {busy ? 'Reading document…' : 'Extract questions'}
       </button>
     </div>
   {:else if parsed}

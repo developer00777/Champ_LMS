@@ -1,9 +1,9 @@
 """
 Test series router.
 
-Admin flow:  upload a Q&A PDF -> review/edit the parsed draft -> publish ->
-             see every learner's score, their answers, and AI-generated
-             areas of improvement.
+Admin flow:  upload a Q&A PDF or Word .docx -> review/edit the parsed draft ->
+             publish -> see every learner's score, their answers, and
+             AI-generated areas of improvement.
 Learner flow: list published tests -> take the interactive questionnaire ->
              get scored instantly, with answers and AI feedback.
 """
@@ -22,7 +22,11 @@ from app.models.test_series import TestAttempt, TestQuestion, TestSeries
 from app.models.user import User
 from app.services.ai_service import ai_service, fallback_analysis
 from app.services.gamification_service import GamificationService
-from app.services.pdf_quiz_parser import PdfParseError, parse_pdf
+from app.services.pdf_quiz_parser import (
+    SUPPORTED_EXTENSIONS,
+    PdfParseError,
+    parse_document,
+)
 
 router = APIRouter(tags=["test-series"])
 
@@ -175,14 +179,31 @@ async def parse_pdf_upload(
     use_ai: bool = Form(False),
 ):
     """
-    Parse a Q&A PDF into draft questions WITHOUT saving anything.
+    Parse a Q&A document (PDF or Word .docx) into draft questions WITHOUT
+    saving anything.
     The admin reviews the result and then POSTs it to /admin/test-series.
 
     Deterministic parser runs first; `use_ai` (or a pattern parse that found
     nothing) routes to the AI parser for unusual layouts.
     """
-    if file.content_type and "pdf" not in file.content_type.lower():
-        raise HTTPException(status_code=415, detail="Upload a PDF file")
+    name = (file.filename or "").lower()
+    ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+    if ext and ext not in SUPPORTED_EXTENSIONS:
+        # Only reject on a known-wrong extension. Content-type is unreliable for
+        # .docx (browsers send anything from the correct OOXML type to
+        # application/octet-stream), so the real format check is the magic-byte
+        # sniffing in parse_document().
+        if ext == ".doc":
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    "Older Word .doc files can't be read. Save as .docx or export "
+                    "to PDF, then upload again."
+                ),
+            )
+        raise HTTPException(
+            status_code=415, detail="Upload a PDF or Word (.docx) question paper"
+        )
 
     data = await file.read()
     if not data:
@@ -190,11 +211,11 @@ async def parse_pdf_upload(
     if len(data) > MAX_PDF_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"PDF too large ({len(data) // 1024 // 1024}MB). Limit is 10MB.",
+            detail=f"File too large ({len(data) // 1024 // 1024}MB). Limit is 10MB.",
         )
 
     try:
-        questions, text = parse_pdf(data)
+        questions, text = parse_document(data, filename=file.filename)
     except PdfParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -207,9 +228,9 @@ async def parse_pdf_upload(
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "Could not detect any questions in this PDF, and AI parsing "
-                        "is unavailable (OPENROUTER_API_KEY not set). Check the PDF "
-                        "format or add questions manually."
+                        "Could not detect any questions in this document, and AI "
+                        "parsing is unavailable (OPENROUTER_API_KEY not set). Check "
+                        "the layout or add questions manually."
                     ),
                 )
             warnings.append("AI parsing requested but no API key configured; used pattern parser.")
@@ -236,9 +257,16 @@ async def parse_pdf_upload(
                     questions, parser_used = ai_questions, "ai"
             except Exception as exc:  # noqa: BLE001 - degrade to pattern result
                 if not questions:
+                    # 503, not 502: the upload was fine and nothing about it will
+                    # fix this — the AI backend is misconfigured or unavailable.
                     raise HTTPException(
-                        status_code=502,
-                        detail=f"AI parsing failed and no questions were detected: {exc}",
+                        status_code=503,
+                        detail=(
+                            f"AI parsing is unavailable ({exc}) and no questions "
+                            "could be detected by the pattern parser. Either fix the "
+                            "AI configuration, upload a document with numbered questions "
+                            "and lettered options, or add the questions manually."
+                        ),
                     ) from exc
                 warnings.append(f"AI parsing failed ({exc}); used pattern parser instead.")
 
@@ -465,7 +493,7 @@ async def parse_pdf_for_existing_test(
     use_ai: bool = Form(False),
 ):
     """
-    Parse another PDF against an existing test. Saves nothing — the admin
+    Parse another question paper against an existing test. Saves nothing — the admin
     reviews the draft and then POSTs it to .../questions to append.
 
     Flags questions that look like duplicates of ones already in the test so a

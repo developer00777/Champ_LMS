@@ -43,7 +43,9 @@ class Settings(BaseSettings):
 
     # AI — OpenRouter (openrouter.ai/api/v1, OpenAI-compatible)
     openrouter_api_key: str = ""
-    openrouter_model: str = "google/gemini-flash-1.5"  # cheap + fast; change freely in .env
+    # NOTE: OpenRouter retires model ids without notice, and a retired id 404s
+    # every AI call. Verify against openrouter.ai/api/v1/models when changing.
+    openrouter_model: str = "google/gemini-2.5-flash"  # cheap + fast; change freely in .env
 
     # Zoom
     zoom_webhook_secret: str = ""

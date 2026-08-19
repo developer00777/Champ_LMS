@@ -31,7 +31,7 @@
   }
 
   async function parseMore() {
-    if (!extendFile) { extendError = 'Choose a PDF first'; return; }
+    if (!extendFile) { extendError = 'Choose a PDF or Word file first'; return; }
     parsing = true; extendError = '';
     try {
       parsed = await api.parseTestPdfForTest(id, extendFile, extendUseAi);
@@ -166,7 +166,7 @@
       <div class="head-actions">
         <span class="status" class:live={test.is_published}>{test.is_published ? 'Published' : 'Draft'}</span>
         <button class="btn primary" on:click={() => (showExtend ? cancelExtend() : (showExtend = true))}>
-          {showExtend ? 'Cancel' : '+ Add questions from PDF'}
+          {showExtend ? 'Cancel' : '+ Add questions from a document'}
         </button>
         <a href="/admin/tests/{id}/results" class="btn">Results</a>
       </div>
@@ -212,8 +212,8 @@
             {/if}
           </p>
           <label>
-            Question paper (PDF, max 10MB)
-            <input type="file" accept="application/pdf,.pdf" on:change={pickExtendFile} />
+            Question paper (PDF or Word .docx, max 10MB)
+            <input type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" on:change={pickExtendFile} />
           </label>
           {#if extendFile}<p class="file-info">{extendFile.name} — {(extendFile.size / 1024).toFixed(0)} KB</p>{/if}
           <label class="check">
@@ -222,7 +222,7 @@
           </label>
           {#if extendError}<p class="error">{extendError}</p>{/if}
           <button class="btn primary" disabled={parsing || !extendFile} on:click={parseMore}>
-            {parsing ? 'Reading PDF…' : 'Extract questions'}
+            {parsing ? 'Reading document…' : 'Extract questions'}
           </button>
         {:else}
           <div class="parse-summary">
