@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { api, type FeedRow, type ProgressEntry } from '$lib/api/client';
   import { gamification } from '$lib/stores/gamification';
+  import { auth } from '$lib/stores/auth';
+  import Avatar from '$lib/components/Avatar.svelte';
   import ContentRow from '$lib/components/ContentRow.svelte';
   import HeroTrailer from '$lib/components/HeroTrailer.svelte';
   import UpskillingTrack from '$lib/components/UpskillingTrack.svelte';
@@ -75,6 +77,23 @@
 {:else}
   <div class="home-grid">
     <div class="home-main">
+      <!-- Who is signed in, up front: the picture, name and employee code the
+           admin assigned, so people can confirm at a glance whose account
+           they're in on a shared machine. -->
+      <a class="whoami" href="/settings">
+        <Avatar src={$auth.user?.avatar_url} name={$auth.user?.full_name} size={54} />
+        <span class="whoami-text">
+          <b>{$auth.user?.full_name ?? 'Welcome back'}</b>
+          <span class="whoami-meta">
+            {#if $auth.user?.employee_code}
+              <span class="code">{$auth.user.employee_code}</span>
+            {/if}
+            {#if $auth.user?.department}
+              <span class="dept">{$auth.user.department}</span>
+            {/if}
+          </span>
+        </span>
+      </a>
       <HeroTrailer module={heroModule} />
       {#each rows as row}
         <ContentRow
@@ -101,6 +120,25 @@
 {/if}
 
 <style>
+  .whoami {
+    display: flex; align-items: center; gap: 0.9rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 0.85rem 1.1rem;
+    margin-bottom: 1.25rem; text-decoration: none;
+    transition: border-color 0.2s ease;
+  }
+  .whoami:hover { border-color: var(--accent); }
+  .whoami-text { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .whoami-text b { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+  .whoami-meta { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; }
+  .whoami .code {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-radius: 999px; padding: 0.14rem 0.5rem;
+  }
+  .whoami .dept { font-size: 0.76rem; color: var(--muted); }
+
   /* Skeleton loading animations */
   @keyframes shimmer {
     0% { background-position: -200% 0; }

@@ -13,17 +13,35 @@ from pydantic import BaseModel, Field
 from pymongo import IndexModel, ASCENDING, DESCENDING
 
 
+# Question kinds. "mcq" keeps the historical shape (options + correct_index);
+# "written" has no options and is graded by the AI against a model answer.
+QUESTION_TYPE_MCQ = "mcq"
+QUESTION_TYPE_WRITTEN = "written"
+QUESTION_TYPES = (QUESTION_TYPE_MCQ, QUESTION_TYPE_WRITTEN)
+
+
 class TestQuestion(BaseModel):
     """
     One question inside a TestSeries. Embedded, not a collection — questions are
     only ever read as part of their parent test.
 
-    correct_index is the index into options. For questions parsed out of a PDF
-    where the answer key couldn't be matched, correct_index is None and the
-    question is unscorable until an admin fixes it (see TestSeries.is_ready).
+    Two kinds:
+      * mcq     — options plus correct_index. For questions parsed out of a PDF
+                  where the answer key couldn't be matched, correct_index is
+                  None and the question is unscorable until an admin fixes it
+                  (see TestSeries.is_ready).
+      * written — the learner types prose. Graded by the AI, which is why a
+                  written question stays scorable with no answer key at all:
+                  `expected_answer` helps a lot but the model can also assess
+                  an answer on subject-matter merit when the source document
+                  never supplied one.
+
+    question_type defaults to mcq so documents and rows written before written
+    questions existed keep their exact previous behaviour.
     """
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     question: str
+    question_type: str = QUESTION_TYPE_MCQ
     options: list[str] = Field(default_factory=list)
     correct_index: int | None = None
     explanation: str | None = None
@@ -31,8 +49,35 @@ class TestQuestion(BaseModel):
     topic: str | None = None
     marks: int = 1
 
+    # --- written questions only --------------------------------------------
+    # The model answer / marking guidance. Optional: when the PDF had no answer
+    # key, the AI grades on subject knowledge instead of against a reference.
+    expected_answer: str | None = None
+    # Soft guidance shown to the learner and given to the grader as context.
+    max_words: int | None = None
+
+    # --- per-question time limit -------------------------------------------
+    # Seconds allowed for this question. None = no per-question limit (the
+    # whole-test duration_minutes still applies if set).
+    time_limit_seconds: int | None = None
+    # True when time_limit_seconds came from the AI rather than being typed by
+    # an admin, so the UI can show it as a suggestion they may override.
+    time_limit_source: str | None = None  # "ai" | "manual" | None
+
+    @property
+    def is_written(self) -> bool:
+        return self.question_type == QUESTION_TYPE_WRITTEN
+
     @property
     def scorable(self) -> bool:
+        """
+        Can this question contribute to a score?
+
+        A written question always can — the AI grades it, with or without a
+        reference answer. An MCQ needs a valid correct_index.
+        """
+        if self.is_written:
+            return bool(self.question.strip())
         return (
             self.correct_index is not None
             and 0 <= self.correct_index < len(self.options)
@@ -93,8 +138,17 @@ class TestAttempt(Document):
     test_id: str  # references test_series.id
     user_id: str  # references users.id
 
-    # answers[question_id] = selected option index (None = skipped)
+    # answers[question_id] = selected option index (None = skipped).
+    # MCQ only; written responses live in `text_answers` since they are prose.
     answers: dict[str, int | None] = Field(default_factory=dict)
+    # text_answers[question_id] = what the learner typed for a written question
+    text_answers: dict[str, str] = Field(default_factory=dict)
+    # True when at least one written answer was graded by the model, so the
+    # result screen can say the score involved AI judgement.
+    ai_graded: bool = False
+    # Written questions the grader could not reach (model down, bad response).
+    # They score 0 but are flagged rather than silently counted as wrong.
+    ungraded_question_ids: list[str] = Field(default_factory=list)
     # [{question_id, question, your_answer, correct_answer, correct, topic, marks}]
     breakdown: list[dict] = Field(default_factory=list)
 

@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type Employee, type EmployeeRoster } from '$lib/api/client';
+  import {
+    api, ApiError,
+    type Employee, type EmployeeRoster, type BulkUploadResult, type BulkUploadError,
+  } from '$lib/api/client';
+  import Avatar from '$lib/components/Avatar.svelte';
 
   const ROLES = [
     { value: 'learner', label: 'Learner' },
@@ -22,6 +26,7 @@
   let showCreate = false;
   let cEmail = '';
   let cName = '';
+  let cCode = '';
   let cDept = '';
   let cTeam = '';
   let cRole = 'learner';
@@ -34,7 +39,7 @@
   // per-row state
   let revealed = new Set<string>();
   let editing: string | null = null;
-  let eName = '', eDept = '', eTeam = '', eRole = '';
+  let eName = '', eDept = '', eTeam = '', eRole = '', eCode = '';
   let rowBusy: string | null = null;
 
   async function load() {
@@ -58,22 +63,92 @@
     try {
       const emp = await api.createEmployee({
         email: cEmail.trim(), full_name: cName.trim(),
+        employee_code: cCode.trim() || undefined,
         department: cDept.trim() || undefined,
         team: cTeam.trim() || undefined,
         role: cRole,
       });
       issued = { name: emp.full_name ?? emp.email, email: emp.email, password: emp.initial_password };
-      cEmail = cName = cDept = cTeam = ''; cRole = 'learner';
+      cEmail = cName = cCode = cDept = cTeam = ''; cRole = 'learner';
       showCreate = false;
       await load();
     } catch (e: any) { createError = e.message; }
     finally { creating = false; }
   }
 
+  // --- bulk upload from the master tracker ---------------------------------
+  let showBulk = false;
+  let bulkFile: File | null = null;
+  let bulkInput: HTMLInputElement;
+  let bulkBusy = false;
+  let bulkError = '';
+  // Row-level failures from the server. The upload is all-or-nothing, so these
+  // are what the admin must fix in the spreadsheet before anything is created.
+  let bulkRowErrors: BulkUploadError['errors'] = [];
+  // A validated dry run: what *would* be created, held until the admin confirms.
+  let bulkPreview: BulkUploadResult | null = null;
+  // Created accounts with their starting passwords, kept on screen so the
+  // admin can copy them out or export them in one go.
+  let bulkCreated: BulkUploadResult['created'] = [];
+
+  function pickBulkFile(e: Event) {
+    bulkFile = (e.target as HTMLInputElement).files?.[0] ?? null;
+    bulkError = ''; bulkRowErrors = []; bulkPreview = null;
+  }
+
+  function resetBulk() {
+    bulkFile = null; bulkError = ''; bulkRowErrors = [];
+    bulkPreview = null; bulkCreated = [];
+    if (bulkInput) bulkInput.value = '';
+  }
+
+  async function runBulk(dryRun: boolean) {
+    if (!bulkFile) { bulkError = 'Choose a CSV or Excel file first'; return; }
+    bulkBusy = true; bulkError = ''; bulkRowErrors = [];
+    try {
+      const r = await api.bulkUploadEmployees(bulkFile, dryRun);
+      if (dryRun) {
+        bulkPreview = r;
+      } else {
+        bulkCreated = r.created ?? [];
+        bulkPreview = null;
+        bulkFile = null;
+        if (bulkInput) bulkInput.value = '';
+        await load();
+      }
+    } catch (e: any) {
+      bulkError = e.message;
+      // The server sends a structured detail listing every bad row.
+      const detail = e instanceof ApiError ? (e.detail as BulkUploadError | undefined) : undefined;
+      if (detail && Array.isArray(detail.errors)) bulkRowErrors = detail.errors;
+      bulkPreview = null;
+    } finally { bulkBusy = false; }
+  }
+
+  /** All new passwords as one block, so they can be pasted into a tracker. */
+  function copyCreated() {
+    const lines = (bulkCreated ?? []).map(
+      (r) => [r.employee_code ?? '', r.full_name ?? '', r.email, r.initial_password].join('\t'),
+    );
+    copy(['Employee ID\tName\tEmail\tPassword', ...lines].join('\n'));
+  }
+
+  /** A starter CSV with exactly the headings the importer expects. */
+  function downloadTemplate() {
+    const csv =
+      'Employee ID,Employee Name,Official Email ID,Department,Team,Role\n' +
+      'CHMP-0001,Jane Doe,jane@championsmail.com,Sales,Enterprise West,learner\n';
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'champ-employee-tracker-template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function startEdit(emp: Employee) {
     editing = emp.id;
     eName = emp.full_name ?? ''; eDept = emp.department ?? '';
-    eTeam = emp.team ?? ''; eRole = emp.role;
+    eTeam = emp.team ?? ''; eRole = emp.role; eCode = emp.employee_code ?? '';
   }
 
   async function saveEdit(id: string) {
@@ -82,6 +157,8 @@
       await api.updateEmployee(id, {
         full_name: eName.trim(), department: eDept.trim(),
         team: eTeam.trim(), role: eRole,
+        // Only an admin can set this — employees cannot relabel themselves.
+        employee_code: eCode.trim(),
       });
       editing = null;
       await load();
@@ -137,10 +214,105 @@
         sign-in.
       </p>
     </div>
-    <button class="btn primary" on:click={() => { showCreate = !showCreate; createError = ''; }}>
-      {showCreate ? 'Cancel' : '+ Add employee'}
-    </button>
+    <div class="head-actions">
+      <button class="btn" on:click={() => { showBulk = !showBulk; if (!showBulk) resetBulk(); }}>
+        {showBulk ? 'Close bulk upload' : '⬆ Bulk upload'}
+      </button>
+      <button class="btn primary" on:click={() => { showCreate = !showCreate; createError = ''; }}>
+        {showCreate ? 'Cancel' : '+ Add employee'}
+      </button>
+    </div>
   </header>
+
+  {#if showBulk}
+    <div class="card">
+      <h2>Bulk upload from the master tracker</h2>
+      <p class="sub">
+        Upload the tracker as CSV or Excel (.xlsx). It needs columns for
+        <b>employee ID</b>, <b>employee name</b> and <b>official email ID</b>;
+        department, team and role are optional. Headings are matched loosely, so
+        the usual tracker column names work as they are.
+      </p>
+
+      <div class="bulk-controls">
+        <input
+          type="file"
+          accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          bind:this={bulkInput}
+          on:change={pickBulkFile}
+        />
+        <button class="btn" on:click={downloadTemplate}>Download template</button>
+      </div>
+
+      {#if bulkFile}
+        <p class="muted">Selected: <b>{bulkFile.name}</b></p>
+      {/if}
+
+      <div class="bulk-actions">
+        <button class="btn" disabled={bulkBusy || !bulkFile} on:click={() => runBulk(true)}>
+          {bulkBusy ? 'Working…' : 'Validate file'}
+        </button>
+        <button class="btn primary" disabled={bulkBusy || !bulkFile} on:click={() => runBulk(false)}>
+          {bulkBusy ? 'Working…' : 'Create accounts'}
+        </button>
+        {#if bulkFile || bulkCreated?.length || bulkRowErrors.length}
+          <button class="btn ghost" disabled={bulkBusy} on:click={resetBulk}>Clear</button>
+        {/if}
+      </div>
+
+      {#if bulkError}<p class="error">{bulkError}</p>{/if}
+
+      {#if bulkRowErrors.length}
+        <!-- Nothing was created: the import is all-or-nothing, so a half-imported
+             tracker can never leave the roster in a state nobody can reason about. -->
+        <div class="row-errors">
+          <p class="error"><b>Nothing was created.</b> Fix these rows and upload again.</p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Row</th><th>Email</th><th>Problem</th></tr></thead>
+              <tbody>
+                {#each bulkRowErrors as re}
+                  <tr><td>{re.row}</td><td>{re.email ?? '—'}</td><td>{re.error}</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {/if}
+
+      {#if bulkPreview}
+        <p class="ok">
+          ✓ File is valid — <b>{bulkPreview.would_create}</b> account{bulkPreview.would_create === 1 ? '' : 's'}
+          ready to create. Nothing has been created yet; choose “Create accounts” to go ahead.
+        </p>
+      {/if}
+
+      {#if bulkCreated?.length}
+        <div class="created">
+          <div class="created-head">
+            <b>{bulkCreated.length} account{bulkCreated.length === 1 ? '' : 's'} created</b>
+            <button class="btn small" on:click={copyCreated}>Copy all with passwords</button>
+          </div>
+          <p class="sub">Share each password with its owner. They stay readable in the table below.</p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Employee ID</th><th>Name</th><th>Email</th><th>Password</th></tr></thead>
+              <tbody>
+                {#each bulkCreated as r}
+                  <tr>
+                    <td>{r.employee_code ?? '—'}</td>
+                    <td>{r.full_name ?? '—'}</td>
+                    <td>{r.email}</td>
+                    <td><code>{r.initial_password}</code></td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   {#if issued}
     <div class="issued">
@@ -160,6 +332,7 @@
     <div class="card">
       <h2>New employee</h2>
       <div class="grid">
+        <label>Employee code<input bind:value={cCode} placeholder="CHMP-0001" /></label>
         <label>Full name<input bind:value={cName} placeholder="Jane Doe" /></label>
         <label>Email<input type="email" bind:value={cEmail} placeholder="jane@championsmail.com" /></label>
         <label>Department<input bind:value={cDept} placeholder="Sales" /></label>
@@ -206,7 +379,7 @@
       <table>
         <thead>
           <tr>
-            <th>Name</th><th>Department</th><th>Team</th><th>Privileges</th>
+            <th>Employee</th><th>Employee code</th><th>Department</th><th>Team</th><th>Privileges</th>
             <th>Password</th><th>Status</th><th></th>
           </tr>
         </thead>
@@ -215,6 +388,7 @@
             <tr class:inactive={!emp.is_active}>
               {#if editing === emp.id}
                 <td><input bind:value={eName} /><div class="email">{emp.email}</div></td>
+                <td><input bind:value={eCode} placeholder="CHMP-0001" /></td>
                 <td><input bind:value={eDept} /></td>
                 <td><input bind:value={eTeam} /></td>
                 <td>
@@ -229,8 +403,20 @@
                 </td>
               {:else}
                 <td>
-                  <div class="name">{emp.full_name ?? '—'}</div>
-                  <div class="email">{emp.email}</div>
+                  <div class="person">
+                    <Avatar src={emp.avatar_url} name={emp.full_name} size={34} />
+                    <div>
+                      <div class="name">{emp.full_name ?? '—'}</div>
+                      <div class="email">{emp.email}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  {#if emp.employee_code}
+                    <code>{emp.employee_code}</code>
+                  {:else}
+                    <span class="muted">Not set</span>
+                  {/if}
                 </td>
                 <td>{emp.department ?? '—'}</td>
                 <td>{emp.team ?? '—'}</td>
@@ -299,12 +485,23 @@
   .count { color: var(--muted); font-size: 0.82rem; margin: 0 0 0.5rem; }
   /* Wide table scrolls inside its own container so the page never scrolls sideways. */
   .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.87rem; min-width: 900px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.87rem; min-width: 1040px; }
   th, td { text-align: left; padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
   th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
   tbody tr:last-child td { border-bottom: none; }
   tr.inactive { opacity: 0.55; }
   .name { font-weight: 600; }
+  .person { display: flex; align-items: center; gap: 0.6rem; }
+  .head-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .bulk-controls { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 1rem 0 0.75rem; }
+  .bulk-controls input[type='file'] { flex: 1 1 260px; font-size: 0.83rem; padding: 0.4rem; }
+  .bulk-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  .row-errors { margin-top: 1rem; }
+  .row-errors table { min-width: 480px; }
+  .created { margin-top: 1.25rem; }
+  .created-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
+  .created table { min-width: 620px; }
+  .ok { color: var(--success); font-size: 0.85rem; margin-top: 0.75rem; }
   .email { color: var(--muted); font-size: 0.78rem; }
   code { background: var(--surface2); padding: 0.2rem 0.45rem; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.85rem; }
   .pw { white-space: nowrap; }

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { api, type TestResults, type AiAnalysis } from '$lib/api/client';
+  import { api, type TestResults, type AiAnalysis, type CohortCoaching } from '$lib/api/client';
+  import Avatar from '$lib/components/Avatar.svelte';
 
   const id = $page.params.id;
   let data: TestResults | null = null;
@@ -42,6 +43,30 @@
     return row.ai_analysis;
   }
 
+  // --- cohort coaching -----------------------------------------------------
+  // What to do about the results, for the whole group and per person, so the
+  // admin can act on this page instead of just reading it.
+  let coaching: CohortCoaching | null = null;
+  let coachBusy = false;
+  let coachError = '';
+  let copied = '';
+
+  async function coach() {
+    coachBusy = true; coachError = '';
+    try {
+      coaching = await api.coachTestCohort(id);
+    } catch (e: any) { coachError = e.message; }
+    finally { coachBusy = false; }
+  }
+
+  async function copyMessage(userId: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = userId;
+      setTimeout(() => { if (copied === userId) copied = ''; }, 2000);
+    } catch { /* clipboard blocked — the text is on screen to copy by hand */ }
+  }
+
   $: cohortRanked = data
     ? Object.entries(data.cohort_topic_stats).sort((a, b) => a[1].accuracy - b[1].accuracy)
     : [];
@@ -80,6 +105,66 @@
       </div>
     {/if}
 
+    {#if data.attempts.length > 0}
+      <div class="panel coach-panel">
+        <div class="coach-head">
+          <div>
+            <h2>🤖 What to suggest</h2>
+            <p class="panel-sub">
+              AI coaching across everyone's latest attempt: what the group should
+              work on, plus a ready-to-send note for each person who needs one.
+            </p>
+          </div>
+          <button class="btn primary" disabled={coachBusy} on:click={coach}>
+            {coachBusy ? 'Thinking…' : coaching ? 'Regenerate' : 'Get coaching plan'}
+          </button>
+        </div>
+
+        {#if coachError}<p class="error">{coachError}</p>{/if}
+
+        {#if coaching}
+          {@const g = coaching.guidance}
+          <p class="coach-summary">{g.cohort_summary}</p>
+
+          {#if g.weakest_topics?.length}
+            <h3 class="coach-h3">Weakest areas</h3>
+            <div class="weak-list">
+              {#each g.weakest_topics as w}
+                <div class="weak">
+                  <div class="weak-top"><b>{w.topic}</b><span class="acc">{w.accuracy}%</span></div>
+                  <p class="why">{w.why_it_matters}</p>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if g.group_actions?.length}
+            <h3 class="coach-h3">Run this for the group</h3>
+            <ul class="recs">{#each g.group_actions as a}<li>{a}</li>{/each}</ul>
+          {/if}
+
+          {#if g.per_learner?.length}
+            <h3 class="coach-h3">Person by person</h3>
+            <div class="learners">
+              {#each g.per_learner as l (l.user_id)}
+                <div class="learner">
+                  <div class="learner-top">
+                    <b>{l.full_name}</b>
+                    <span class="learner-score">{l.score}%</span>
+                  </div>
+                  <p class="focus"><b>Focus:</b> {l.focus}</p>
+                  <blockquote>{l.message_to_learner}</blockquote>
+                  <button class="btn small" on:click={() => copyMessage(l.user_id, l.message_to_learner)}>
+                    {copied === l.user_id ? 'Copied ✓' : 'Copy message'}
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+      </div>
+    {/if}
+
     {#if data.attempts.length === 0}
       <div class="empty">
         <div class="empty-icon">📊</div>
@@ -93,9 +178,15 @@
           <div class="row-card">
             <div class="row-head">
               <div class="who">
-                <b>{a.full_name || a.email || 'Unknown'}</b>
-                <span class="muted">{a.email}{a.department ? ` · ${a.department}` : ''}</span>
-                <span class="muted tiny">{new Date(a.submitted_at).toLocaleString()}</span>
+                <Avatar src={a.avatar_url} name={a.full_name} size={40} />
+                <div class="who-text">
+                  <b>
+                    {a.full_name || a.email || 'Unknown'}
+                    {#if a.employee_code}<span class="code">{a.employee_code}</span>{/if}
+                  </b>
+                  <span class="muted">{a.email}{a.department ? ` · ${a.department}` : ''}</span>
+                  <span class="muted tiny">{new Date(a.submitted_at).toLocaleString()}</span>
+                </div>
               </div>
               <div class="score-box">
                 <span class="score" class:pass={a.passed} class:fail={!a.passed}>{a.score}%</span>
@@ -212,10 +303,33 @@
   .bar-val { flex: 0 0 90px; text-align: right; font-variant-numeric: tabular-nums; }
   .bar-val em { color: var(--muted); font-style: normal; font-size: 0.72rem; }
 
+  .coach-panel { border-left: 3px solid var(--accent); }
+  .coach-head { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+  .coach-summary { font-size: 0.87rem; line-height: 1.65; margin: 0.9rem 0 0.25rem; }
+  .coach-h3 { font-size: 0.82rem; font-weight: 700; text-transform: uppercase;
+              letter-spacing: 0.05em; color: var(--muted); margin: 1.1rem 0 0.55rem; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.small { padding: 0.28rem 0.6rem; font-size: 0.74rem; }
+  .learners { display: flex; flex-direction: column; gap: 0.7rem; }
+  .learner { background: var(--surface2); border-radius: 8px; padding: 0.8rem 0.95rem; }
+  .learner-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; font-size: 0.9rem; }
+  .learner-score { font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .focus { font-size: 0.79rem; color: var(--muted); margin: 0.35rem 0 0.5rem; }
+  .learner blockquote {
+    margin: 0 0 0.6rem; padding: 0.55rem 0.75rem; font-size: 0.81rem; line-height: 1.6;
+    background: var(--surface); border-left: 2px solid var(--border); border-radius: 0 6px 6px 0;
+  }
+
   .rows { display: flex; flex-direction: column; gap: 0.9rem; }
   .row-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.15rem; }
   .row-head { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-  .who { display: flex; flex-direction: column; gap: 0.15rem; }
+  .who { display: flex; align-items: center; gap: 0.7rem; }
+  .who-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+  .who .code {
+    font-size: 0.68rem; font-weight: 700; color: var(--muted);
+    background: var(--surface2); border-radius: 999px; padding: 0.1rem 0.45rem;
+    margin-left: 0.4rem; letter-spacing: 0.03em;
+  }
   .who b { font-size: 0.98rem; }
   .muted { color: var(--muted); font-size: 0.79rem; }
   .tiny { font-size: 0.72rem; }

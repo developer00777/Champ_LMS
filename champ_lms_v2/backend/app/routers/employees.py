@@ -9,12 +9,13 @@ app.core.password_vault for why that is allowed here and how it is contained).
 """
 from __future__ import annotations
 
+import csv
+import io
 import secrets
-import string
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.auth import get_current_user, hash_password, require_admin, verify_password
@@ -23,6 +24,7 @@ from app.models.content_access import ContentAccessRule
 from app.models.module import Module
 from app.models.user import User
 from app.services import content_access
+from app.services.bunny_storage import bunny_storage
 
 router = APIRouter(tags=["employees"])
 
@@ -68,6 +70,7 @@ def generate_password(length: int = 12) -> str:
 class EmployeeCreateIn(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=1)
+    employee_code: str | None = None
     department: str | None = None
     team: str | None = None
     role: str = "learner"
@@ -79,6 +82,8 @@ class EmployeeCreateIn(BaseModel):
 class EmployeeUpdateIn(BaseModel):
     """Every field optional — only what's provided is changed."""
     full_name: str | None = None
+    # Admin-only: employees cannot relabel themselves (see PATCH /auth/me).
+    employee_code: str | None = None
     department: str | None = None
     team: str | None = None
     role: str | None = None
@@ -88,6 +93,29 @@ class EmployeeUpdateIn(BaseModel):
 class ChangePasswordIn(BaseModel):
     current_password: str
     new_password: str = Field(min_length=MIN_PASSWORD_LENGTH)
+
+
+def _avatar_url(user: User) -> str | None:
+    """CDN URL for a profile picture, or None when none is set."""
+    return bunny_storage.avatar_url(user.avatar_bunny_path)
+
+
+def _normalize_code(code: str | None) -> str | None:
+    """Trim and upper-case an employee code; blank becomes None."""
+    code = (code or "").strip().upper()
+    return code or None
+
+
+async def _assert_code_free(code: str | None, *, exclude_user_id: str | None = None) -> None:
+    """Employee codes identify people, so a duplicate is rejected outright."""
+    if not code:
+        return
+    clash = await User.find_one(User.employee_code == code)
+    if clash and clash.id != exclude_user_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Employee code {code} is already used by {clash.email}",
+        )
 
 
 def _employee_out(user: User, *, include_password: bool) -> dict:
@@ -102,6 +130,8 @@ def _employee_out(user: User, *, include_password: bool) -> dict:
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
+        "employee_code": user.employee_code,
+        "avatar_url": _avatar_url(user),
         "role": user.role,
         "department": user.department,
         "team": user.team,
@@ -183,6 +213,9 @@ async def create_employee(
     if await User.find_one(User.email == email):
         raise HTTPException(status_code=409, detail="That email already has an account")
 
+    code = _normalize_code(body.employee_code)
+    await _assert_code_free(code)
+
     if body.initial_password is not None:
         if len(body.initial_password) < MIN_PASSWORD_LENGTH:
             raise HTTPException(
@@ -200,6 +233,7 @@ async def create_employee(
         role=body.role,
         department=(body.department or "").strip() or None,
         team=(body.team or "").strip() or None,
+        employee_code=code,
         must_change_password=True,
         created_by_admin_id=admin.id,
     )
@@ -210,6 +244,288 @@ async def create_employee(
         **_employee_out(user, include_password=True),
         "initial_password": starting,
     }
+
+
+def _read_tabular(data: bytes, filename: str) -> list[dict]:
+    """
+    Read a CSV or Excel master tracker into row dicts keyed by our field names.
+
+    Excel is handled with openpyxl (already a dependency of nothing else here,
+    so it degrades to a clear message if absent). CSV is decoded tolerantly:
+    trackers exported from Excel are frequently cp1252 or UTF-8-BOM rather than
+    clean UTF-8, and failing on an encoding quirk would be a poor experience.
+    """
+    name = (filename or "").lower()
+    if name.endswith((".xlsx", ".xlsm")):
+        return _read_excel(data)
+    if name.endswith(".xls"):
+        raise HTTPException(
+            status_code=415,
+            detail="Old .xls files aren't supported. Save as .xlsx or CSV.",
+        )
+    return _read_csv(data)
+
+
+def _read_csv(data: bytes) -> list[dict]:
+    text = None
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = data.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise HTTPException(status_code=422, detail="Could not decode this file as text")
+
+    try:
+        # Sniff the delimiter: trackers are exported as comma- or
+        # semicolon-separated depending on the machine's locale.
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    mapping = _map_headers(reader.fieldnames or [])
+    if not mapping:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Couldn't find the expected columns. Include headings for "
+                "employee ID, employee name and official email ID."
+            ),
+        )
+    return [
+        {mapping[k]: (v or "") for k, v in row.items() if k in mapping}
+        for row in reader
+    ]
+
+
+def _read_excel(data: bytes) -> list[dict]:
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover - dependency is pinned
+        raise HTTPException(
+            status_code=415,
+            detail="Excel support unavailable: the 'openpyxl' package is not installed.",
+        ) from exc
+
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not read this workbook: {exc}") from exc
+
+    ws = wb.active
+    rows = ws.iter_rows(values_only=True)
+    try:
+        header = next(rows)
+    except StopIteration:
+        return []
+
+    headers = [str(h).strip() if h is not None else "" for h in header]
+    mapping = _map_headers(headers)
+    if not mapping:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Couldn't find the expected columns. Include headings for "
+                "employee ID, employee name and official email ID."
+            ),
+        )
+
+    out: list[dict] = []
+    for raw_row in rows:
+        row: dict[str, str] = {}
+        for header_name, value in zip(headers, raw_row):
+            field = mapping.get(header_name)
+            if not field:
+                continue
+            # Excel stores a numeric employee code as a float (1042.0), which
+            # would otherwise be imported with a stray decimal.
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            row[field] = "" if value is None else str(value).strip()
+        if any(row.values()):
+            out.append(row)
+    return out
+
+
+# Header aliases accepted in a bulk upload, so a real master tracker doesn't
+# have to be renamed to match us exactly.
+_BULK_HEADERS = {
+    "employee_code": {
+        "employee id", "employee code", "emp id", "emp code", "employee_id",
+        "employee_code", "empid", "code", "id",
+    },
+    "full_name": {
+        "employee name", "full name", "name", "employee_name", "full_name",
+    },
+    "email": {
+        "official email id", "official email", "email id", "email", "e-mail",
+        "official_email", "email_address", "mail",
+    },
+    "department": {"department", "dept"},
+    "team": {"team", "squad"},
+    "role": {"role", "privilege", "privileges", "access"},
+}
+
+MAX_BULK_ROWS = 2000
+
+
+def _map_headers(fieldnames: list[str]) -> dict[str, str]:
+    """Map a tracker's column names onto our fields, case-insensitively."""
+    mapping: dict[str, str] = {}
+    for raw in fieldnames or []:
+        key = (raw or "").strip().lower().replace("_", " ")
+        for field, aliases in _BULK_HEADERS.items():
+            if key in aliases or key.replace(" ", "_") in aliases:
+                mapping[raw] = field
+                break
+    return mapping
+
+
+@router.post("/admin/employees/bulk-upload")
+async def bulk_upload_employees(
+    admin: Annotated[User, Depends(require_admin)],
+    file: UploadFile = File(...),
+    dry_run: bool = False,
+):
+    """
+    Create many accounts at once from a master tracker (CSV or Excel).
+
+    Expects employee ID, employee name and official email columns; department,
+    team and role are optional. Column names are matched loosely, so the usual
+    tracker headings work without editing the file.
+
+    Every row is validated before anything is written, and the whole upload is
+    rejected if any row is bad. A tracker half-imported is worse than one not
+    imported: the admin cannot tell which people already exist, and re-running
+    it produces a pile of duplicate-email errors.
+
+    `dry_run` validates and reports without creating anything.
+    """
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty")
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large. Limit is 5MB.")
+
+    rows = _read_tabular(raw, file.filename or "")
+    if not rows:
+        raise HTTPException(
+            status_code=422,
+            detail="No rows found. Include a header row and at least one employee.",
+        )
+    if len(rows) > MAX_BULK_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{len(rows)} rows exceeds the {MAX_BULK_ROWS}-row limit.",
+        )
+
+    existing_emails = {u.email for u in await User.find_all().to_list()}
+    existing_codes = {u.employee_code for u in await User.find_all().to_list() if u.employee_code}
+
+    valid: list[dict] = []
+    errors: list[dict] = []
+    seen_emails: set[str] = set()
+    seen_codes: set[str] = set()
+
+    for i, row in enumerate(rows, start=2):  # row 1 is the header, so data starts at 2
+        email = (row.get("email") or "").strip().lower()
+        name = (row.get("full_name") or "").strip()
+        code = _normalize_code(row.get("employee_code"))
+        role = (row.get("role") or "learner").strip().lower() or "learner"
+
+        def bad(msg: str) -> None:
+            errors.append({"row": i, "email": email or None, "error": msg})
+
+        if not email and not name and not code:
+            continue  # blank spacer row in the spreadsheet
+        if not email:
+            bad("Missing official email ID")
+            continue
+        if "@" not in email or email.startswith("@") or email.endswith("@"):
+            bad(f"'{email}' is not a valid email address")
+            continue
+        if not name:
+            bad("Missing employee name")
+            continue
+        if role not in ASSIGNABLE_ROLES:
+            bad(f"Unknown role '{role}'. Valid: {', '.join(ASSIGNABLE_ROLES)}")
+            continue
+        if email in existing_emails:
+            bad("An account with this email already exists")
+            continue
+        if email in seen_emails:
+            bad("Duplicate email within the file")
+            continue
+        if code and code in existing_codes:
+            bad(f"Employee code {code} is already used")
+            continue
+        if code and code in seen_codes:
+            bad(f"Duplicate employee code {code} within the file")
+            continue
+
+        seen_emails.add(email)
+        if code:
+            seen_codes.add(code)
+        valid.append({
+            "email": email, "full_name": name, "employee_code": code,
+            "department": (row.get("department") or "").strip() or None,
+            "team": (row.get("team") or "").strip() or None,
+            "role": role,
+        })
+
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    f"{len(errors)} row(s) could not be imported, so nothing was "
+                    "created. Fix them and upload again."
+                ),
+                "errors": errors[:50],
+                "error_count": len(errors),
+                "valid_count": len(valid),
+            },
+        )
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "would_create": len(valid),
+            "employees": [
+                {k: v for k, v in row.items() if k != "role"} | {"role": row["role"]}
+                for row in valid
+            ],
+        }
+
+    created = []
+    for row in valid:
+        password = generate_password()
+        user = User(
+            email=row["email"],
+            full_name=row["full_name"],
+            employee_code=row["employee_code"],
+            hashed_password="",  # set by _apply_password
+            role=row["role"],
+            department=row["department"],
+            team=row["team"],
+            must_change_password=True,
+            created_by_admin_id=admin.id,
+        )
+        _apply_password(user, password)
+        await user.insert()
+        created.append({
+            "id": user.id,
+            "employee_code": user.employee_code,
+            "full_name": user.full_name,
+            "email": user.email,
+            "department": user.department,
+            "team": user.team,
+            "role": user.role,
+            "initial_password": password,
+        })
+
+    return {"dry_run": False, "created_count": len(created), "created": created}
 
 
 @router.patch("/admin/employees/{user_id}")
@@ -241,6 +557,10 @@ async def update_employee(
                 status_code=422, detail="You cannot deactivate your own account."
             )
 
+    if body.employee_code is not None:
+        code = _normalize_code(body.employee_code)
+        await _assert_code_free(code, exclude_user_id=user.id)
+        user.employee_code = code
     if body.full_name is not None:
         user.full_name = body.full_name.strip() or None
     if body.department is not None:
@@ -302,6 +622,115 @@ async def delete_employee(
     user.is_active = False
     await user.save()
     return {"id": user.id, "is_active": user.is_active}
+
+
+# --------------------------------------------------------------------------
+# Employee: own profile
+# --------------------------------------------------------------------------
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+_AVATAR_TYPES = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+    "image/webp": ".webp", "image/gif": ".gif",
+}
+
+
+class ProfileUpdateIn(BaseModel):
+    """
+    What an employee may change about themselves.
+
+    Deliberately excludes employee_code, role, team and department: those are
+    org facts an admin owns, and letting people edit their own would make the
+    roster untrustworthy.
+    """
+    full_name: str | None = None
+
+
+@router.patch("/auth/me")
+async def update_own_profile(
+    body: ProfileUpdateIn,
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """Update the caller's own editable profile fields."""
+    if body.full_name is not None:
+        name = body.full_name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Name cannot be empty")
+        user.full_name = name
+        await user.save()
+    return {
+        "id": user.id,
+        "full_name": user.full_name,
+        "employee_code": user.employee_code,
+        "avatar_url": _avatar_url(user),
+    }
+
+
+@router.post("/auth/me/avatar")
+async def upload_own_avatar(
+    user: Annotated[User, Depends(get_current_user)],
+    file: UploadFile = File(...),
+):
+    """
+    Upload the caller's profile picture to Bunny Storage.
+
+    The stored path includes the user id so one person's picture can never
+    overwrite another's, and a timestamp so a replacement gets a fresh URL
+    rather than being masked by a stale CDN cache entry.
+    """
+    content_type = (file.content_type or "").lower().split(";")[0].strip()
+    ext = _AVATAR_TYPES.get(content_type)
+    if not ext:
+        raise HTTPException(
+            status_code=415,
+            detail="Upload a JPEG, PNG, WebP or GIF image.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="The uploaded image is empty")
+    if len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image too large ({len(data) // 1024 // 1024}MB). Limit is 5MB.",
+        )
+
+    stamp = int(datetime.now(timezone.utc).timestamp())
+    path = f"avatars/{user.id}/{stamp}{ext}"
+    previous = user.avatar_bunny_path
+
+    try:
+        await bunny_storage.upload_thumbnail(path, data, f"avatar{ext}")
+    except Exception as exc:  # noqa: BLE001 - surface a usable message
+        raise HTTPException(
+            status_code=502, detail=f"Could not upload the image: {exc}"
+        ) from exc
+
+    user.avatar_bunny_path = path
+    await user.save()
+
+    # Best-effort cleanup of the replaced file. A failure here must not fail the
+    # request: the new picture is already live and correct.
+    if previous and previous != path:
+        try:
+            await bunny_storage.delete_thumbnail(previous)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {"avatar_url": _avatar_url(user), "avatar_bunny_path": path}
+
+
+@router.delete("/auth/me/avatar")
+async def delete_own_avatar(user: Annotated[User, Depends(get_current_user)]):
+    """Remove the caller's profile picture, falling back to initials."""
+    path = user.avatar_bunny_path
+    user.avatar_bunny_path = None
+    await user.save()
+    if path:
+        try:
+            await bunny_storage.delete_thumbnail(path)
+        except Exception:  # noqa: BLE001 - the row is already cleared
+            pass
+    return {"avatar_url": None}
 
 
 # --------------------------------------------------------------------------

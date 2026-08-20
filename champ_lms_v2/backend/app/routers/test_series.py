@@ -9,6 +9,7 @@ Learner flow: list published tests -> take the interactive questionnaire ->
 """
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 import redis.asyncio as aioredis
@@ -18,9 +19,17 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, require_admin
 from app.core.redis import get_redis
-from app.models.test_series import TestAttempt, TestQuestion, TestSeries
+from app.models.test_series import (
+    QUESTION_TYPE_MCQ,
+    QUESTION_TYPE_WRITTEN,
+    QUESTION_TYPES,
+    TestAttempt,
+    TestQuestion,
+    TestSeries,
+)
 from app.models.user import User
 from app.services.ai_service import ai_service, fallback_analysis
+from app.services.bunny_storage import bunny_storage
 from app.services.gamification_service import GamificationService
 from app.services.pdf_quiz_parser import (
     SUPPORTED_EXTENSIONS,
@@ -39,11 +48,18 @@ MAX_PDF_BYTES = 10 * 1024 * 1024  # 10MB — a question paper is text, not media
 class QuestionIn(BaseModel):
     id: str | None = None
     question: str
-    options: list[str]
+    # Defaults keep older clients working: no question_type means mcq, and
+    # options may be omitted entirely for a written question.
+    question_type: str = QUESTION_TYPE_MCQ
+    options: list[str] = Field(default_factory=list)
     correct_index: int | None = None
     explanation: str | None = None
     topic: str | None = None
     marks: int = 1
+    expected_answer: str | None = None
+    max_words: int | None = None
+    time_limit_seconds: int | None = None
+    time_limit_source: str | None = None
 
 
 class TestUpdateIn(BaseModel):
@@ -80,7 +96,9 @@ class AppendQuestionsIn(BaseModel):
 
 class SubmitIn(BaseModel):
     # {question_id: selected_option_index}; omit or null for skipped
-    answers: dict[str, int | None]
+    answers: dict[str, int | None] = Field(default_factory=dict)
+    # {question_id: typed answer} for written questions
+    text_answers: dict[str, str] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------
@@ -110,11 +128,16 @@ def _admin_view(t: TestSeries) -> dict:
             {
                 "id": q.id,
                 "question": q.question,
+                "question_type": q.question_type,
                 "options": q.options,
                 "correct_index": q.correct_index,
                 "explanation": q.explanation,
                 "topic": q.topic,
                 "marks": q.marks,
+                "expected_answer": q.expected_answer,
+                "max_words": q.max_words,
+                "time_limit_seconds": q.time_limit_seconds,
+                "time_limit_source": q.time_limit_source,
                 "scorable": q.scorable,
             }
             for q in t.questions
@@ -136,21 +159,116 @@ def _topic_stats(breakdown: list[dict]) -> dict[str, dict]:
     return stats
 
 
+# Sanity bounds for a per-question timer: under 5s is unusable, over an hour
+# is indistinguishable from no limit.
+MIN_TIME_LIMIT_SECONDS = 5
+MAX_TIME_LIMIT_SECONDS = 3600
+
+
+def _clamp_time_limit(seconds: int | None) -> int | None:
+    if seconds is None:
+        return None
+    try:
+        value = int(seconds)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None  # 0 / negative means "no limit", not "instant fail"
+    return max(MIN_TIME_LIMIT_SECONDS, min(MAX_TIME_LIMIT_SECONDS, value))
+
+
+def _fallback_time_limit(q: TestQuestion) -> int:
+    """
+    A sane per-question limit without the AI.
+
+    Used when a suggestion comes back unusable, so the admin still gets a
+    complete set rather than a half-filled form. Scales with marks, because a
+    5-mark question is not a 1-mark question.
+    """
+    if q.is_written:
+        base = 180  # a short written answer
+        return _clamp_time_limit(base + 90 * max(0, q.marks - 1)) or base
+    base = 60  # a single-mark multiple-choice question
+    return _clamp_time_limit(base + 30 * max(0, q.marks - 1)) or base
+
+
 def _questions_from_in(items: list[QuestionIn]) -> list[TestQuestion]:
     out: list[TestQuestion] = []
     for q in items:
+        qtype = q.question_type if q.question_type in QUESTION_TYPES else QUESTION_TYPE_MCQ
+        # A question with no options can only be written, whatever was declared:
+        # an MCQ with nothing to choose from is unanswerable.
+        options = [o for o in q.options if o.strip()]
+        if not options and (q.expected_answer or qtype == QUESTION_TYPE_WRITTEN):
+            qtype = QUESTION_TYPE_WRITTEN
+
         kwargs: dict[str, Any] = {
             "question": q.question,
-            "options": [o for o in q.options if o.strip()],
-            "correct_index": q.correct_index,
+            "question_type": qtype,
+            "options": [] if qtype == QUESTION_TYPE_WRITTEN else options,
+            # A written question has no option index to be correct.
+            "correct_index": None if qtype == QUESTION_TYPE_WRITTEN else q.correct_index,
             "explanation": q.explanation,
             "topic": q.topic,
             "marks": max(1, q.marks),
+            "expected_answer": (q.expected_answer or None) if qtype == QUESTION_TYPE_WRITTEN else None,
+            "max_words": q.max_words if qtype == QUESTION_TYPE_WRITTEN else None,
+            "time_limit_seconds": _clamp_time_limit(q.time_limit_seconds),
+            "time_limit_source": q.time_limit_source,
         }
         if q.id:
             kwargs["id"] = q.id
         out.append(TestQuestion(**kwargs))
     return out
+
+
+async def _grade_written(q: TestQuestion, answer: str) -> dict | None:
+    """
+    Grade one written answer with the AI.
+
+    Returns {awarded, correct, feedback, model_answer} or None when grading is
+    unavailable (no API key, model error, unusable response). None is a real
+    outcome the caller must handle — never a silent zero — because a model
+    outage should not look like a wrong answer on the learner's transcript.
+
+    The model's numbers are clamped rather than trusted: it occasionally awards
+    more than the question is worth, or returns marks as a string.
+    """
+    if not ai_service.enabled:
+        return None
+    try:
+        raw = await ai_service.grade_written_answer(
+            question=q.question,
+            answer=answer,
+            marks=q.marks,
+            expected_answer=q.expected_answer,
+            topic=q.topic,
+        )
+    except Exception:  # noqa: BLE001 - degrade to "ungraded", never fail the submit
+        return None
+
+    try:
+        awarded = float(raw.get("marks_awarded") or 0)
+    except (TypeError, ValueError):
+        awarded = 0.0
+    awarded = int(round(max(0.0, min(float(q.marks), awarded))))
+
+    correct = bool(raw.get("correct"))
+    # Keep the flag and the marks consistent: a "correct" answer awarded
+    # nothing (or vice versa) reads as a bug to whoever sees the transcript.
+    if awarded >= q.marks * 0.6 and q.marks > 0:
+        correct = True
+    if awarded == 0:
+        correct = False
+
+    feedback = str(raw.get("feedback") or "").strip() or None
+    model_answer = str(raw.get("model_answer") or "").strip() or None
+    return {
+        "awarded": awarded,
+        "correct": correct,
+        "feedback": feedback,
+        "model_answer": model_answer,
+    }
 
 
 def _normalize_question(text: str) -> str:
@@ -241,15 +359,27 @@ async def parse_pdf_upload(
                     [
                         QuestionIn(
                             question=str(r.get("question", "")).strip(),
+                            question_type=(
+                                QUESTION_TYPE_WRITTEN
+                                if str(r.get("question_type") or "").lower() == QUESTION_TYPE_WRITTEN
+                                or not (r.get("options") or [])
+                                else QUESTION_TYPE_MCQ
+                            ),
                             options=[str(o) for o in (r.get("options") or [])],
                             correct_index=r.get("correct_index"),
                             explanation=r.get("explanation"),
                             topic=r.get("topic"),
                             marks=int(r.get("marks") or 1),
+                            expected_answer=r.get("expected_answer") or r.get("model_answer"),
                         )
                         for r in raw
                         if str(r.get("question", "")).strip()
-                        and len(r.get("options") or []) >= 2
+                        # An MCQ needs choices; a written question needs none.
+                        and (
+                            len(r.get("options") or []) >= 2
+                            or str(r.get("question_type") or "").lower() == QUESTION_TYPE_WRITTEN
+                            or not (r.get("options") or [])
+                        )
                     ]
                 )
                 # * only take the AI result if it actually did better
@@ -297,11 +427,16 @@ async def parse_pdf_upload(
             {
                 "id": q.id,
                 "question": q.question,
+                "question_type": q.question_type,
                 "options": q.options,
                 "correct_index": q.correct_index,
                 "explanation": q.explanation,
                 "topic": q.topic,
                 "marks": q.marks,
+                "expected_answer": q.expected_answer,
+                "max_words": q.max_words,
+                "time_limit_seconds": q.time_limit_seconds,
+                "time_limit_source": q.time_limit_source,
                 "scorable": q.scorable,
             }
             for q in questions
@@ -378,8 +513,6 @@ async def update_test_series(
     admin: Annotated[User, Depends(require_admin)],
 ):
     """Edit metadata and/or replace the question set (the review step)."""
-    from datetime import datetime, timezone
-
     test = await _get_test_or_404(test_id)
     data = body.model_dump(exclude_unset=True)
 
@@ -411,8 +544,6 @@ async def append_questions(
     admin extending a live test must not have to round-trip every existing
     question (and risk clobbering a concurrent edit) just to add five more.
     """
-    from datetime import datetime, timezone
-
     test = await _get_test_or_404(test_id)
     incoming = _questions_from_in(body.questions)
     if not incoming:
@@ -470,8 +601,6 @@ async def delete_question(
     admin: Annotated[User, Depends(require_admin)],
 ):
     """Remove a single question without resending the rest of the set."""
-    from datetime import datetime, timezone
-
     test = await _get_test_or_404(test_id)
     remaining = [q for q in test.questions if q.id != question_id]
     if len(remaining) == len(test.questions):
@@ -518,6 +647,113 @@ async def parse_pdf_for_existing_test(
         "test_title": test.title,
         "existing_questions": len(test.questions),
         "duplicate_count": dupes,
+    }
+
+
+class SuggestTimeLimitsIn(BaseModel):
+    # When true, write the suggestions onto the test. When false (default),
+    # return them for the admin to review first.
+    apply: bool = False
+    # Only fill limits that are currently unset, leaving manual values alone.
+    only_missing: bool = True
+
+
+@router.post("/admin/test-series/{test_id}/suggest-time-limits")
+async def suggest_time_limits(
+    test_id: str,
+    body: SuggestTimeLimitsIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Ask the AI how long each question should take.
+
+    Returns a suggestion per question; `apply` writes them onto the test.
+    Suggestions are marked time_limit_source="ai" so the UI can show them as
+    proposals an admin may override.
+    """
+    test = await _get_test_or_404(test_id)
+    if not test.questions:
+        raise HTTPException(status_code=422, detail="This test has no questions yet")
+    if not ai_service.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AI time suggestions are unavailable (OPENROUTER_API_KEY not set). "
+                "Set limits manually instead."
+            ),
+        )
+
+    targets = [
+        (i, q) for i, q in enumerate(test.questions)
+        if not (body.only_missing and q.time_limit_seconds is not None)
+    ]
+    if not targets:
+        return {
+            "suggestions": [],
+            "applied": False,
+            "message": "Every question already has a time limit.",
+        }
+
+    try:
+        raw = await ai_service.suggest_time_limits(
+            [
+                {
+                    "question": q.question,
+                    "question_type": q.question_type,
+                    "marks": q.marks,
+                }
+                for _, q in targets
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 - config/model failure, not a bug here
+        raise HTTPException(
+            status_code=503, detail=f"Could not get time suggestions: {exc}"
+        ) from exc
+
+    # Match by the index the model echoes back, falling back to position, since
+    # a model occasionally drops or reorders entries.
+    by_index: dict[int, dict] = {}
+    for pos, item in enumerate(raw if isinstance(raw, list) else []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("index", pos))
+        except (TypeError, ValueError):
+            idx = pos
+        by_index.setdefault(idx, item)
+
+    suggestions = []
+    applied = 0
+    for offset, (real_index, q) in enumerate(targets):
+        item = by_index.get(offset) or by_index.get(real_index) or {}
+        seconds = _clamp_time_limit(item.get("seconds"))
+        if seconds is None:
+            seconds = _fallback_time_limit(q)
+            why = "default for this question type (no usable AI suggestion)"
+        else:
+            why = str(item.get("why") or "").strip() or None
+        suggestions.append({
+            "question_id": q.id,
+            "question": q.question[:120],
+            "question_type": q.question_type,
+            "marks": q.marks,
+            "current_seconds": q.time_limit_seconds,
+            "suggested_seconds": seconds,
+            "why": why,
+        })
+        if body.apply:
+            q.time_limit_seconds = seconds
+            q.time_limit_source = "ai"
+            applied += 1
+
+    if body.apply and applied:
+        test.updated_at = datetime.now(timezone.utc)
+        await test.save()
+
+    return {
+        "suggestions": suggestions,
+        "applied": bool(body.apply and applied),
+        "applied_count": applied if body.apply else 0,
     }
 
 
@@ -575,6 +811,8 @@ async def test_results(
             "attempt_id": a.id,
             "user_id": a.user_id,
             "full_name": u.full_name if u else None,
+            "employee_code": u.employee_code if u else None,
+            "avatar_url": bunny_storage.avatar_url(u.avatar_bunny_path) if u else None,
             "email": u.email if u else None,
             "department": u.department if u else None,
             "score": a.score,
@@ -612,6 +850,84 @@ async def test_results(
         if attempts else None,
         "cohort_topic_stats": cohort,
         "attempts": rows,
+    }
+
+
+@router.post("/admin/test-series/{test_id}/coach")
+async def coach_test_cohort(
+    test_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    AI coaching guidance for the whole cohort: what the group struggled with,
+    what to run for everyone, and a ready-to-send message per learner who needs
+    attention — so the admin can act on results rather than just read them.
+    """
+    test = await _get_test_or_404(test_id)
+    attempts = await TestAttempt.find(TestAttempt.test_id == test_id).to_list()
+    if not attempts:
+        raise HTTPException(
+            status_code=422, detail="Nobody has taken this test yet."
+        )
+    if not ai_service.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AI coaching is unavailable (OPENROUTER_API_KEY not set). The "
+                "per-question results and topic accuracy are still on this page."
+            ),
+        )
+
+    user_ids = list({a.user_id for a in attempts})
+    users = {u.id: u for u in await User.find(In(User.id, user_ids)).to_list()}
+
+    # Keep only each person's latest attempt: coaching someone on a score they
+    # already improved on would be actively misleading.
+    latest: dict[str, TestAttempt] = {}
+    for a in sorted(attempts, key=lambda x: x.submitted_at):
+        latest[a.user_id] = a
+
+    rows = []
+    cohort: dict[str, dict] = {}
+    for a in latest.values():
+        stats = _topic_stats(a.breakdown)
+        for topic, st in stats.items():
+            agg = cohort.setdefault(topic, {"correct": 0, "total": 0, "accuracy": 0})
+            agg["correct"] += st["correct"]
+            agg["total"] += st["total"]
+        u = users.get(a.user_id)
+        rows.append({
+            "user_id": a.user_id,
+            "full_name": u.full_name if u else None,
+            "email": u.email if u else None,
+            "score": a.score,
+            "passed": a.passed,
+            "weak_topics": [
+                t for t, st in sorted(stats.items(), key=lambda kv: kv[1]["accuracy"])
+                if st["accuracy"] < 100
+            ][:3],
+        })
+    for st in cohort.values():
+        st["accuracy"] = round(st["correct"] / st["total"] * 100) if st["total"] else 0
+
+    try:
+        guidance = await ai_service.coach_cohort(
+            test_title=test.title,
+            pass_threshold=test.pass_threshold,
+            attempts=rows,
+            cohort_topics=cohort,
+        )
+    except Exception as exc:  # noqa: BLE001 - model/config failure
+        raise HTTPException(
+            status_code=503, detail=f"Could not generate coaching guidance: {exc}"
+        ) from exc
+
+    return {
+        "test_id": test.id,
+        "test_title": test.title,
+        "learners_considered": len(rows),
+        "cohort_topics": cohort,
+        "guidance": guidance,
     }
 
 
@@ -699,9 +1015,25 @@ async def take_test(
         "total_marks": sum(q.marks for q in questions),
         "attempt_number": used + 1,
         "max_attempts": test.max_attempts,
+        # * total per-question time, so the client can show an overall budget
+        # * when the test has per-question limits but no whole-test duration.
+        "total_time_limit_seconds": (
+            sum(q.time_limit_seconds for q in questions if q.time_limit_seconds)
+            or None
+        ),
         "questions": [
-            {"id": q.id, "question": q.question, "options": q.options,
-             "topic": q.topic, "marks": q.marks}
+            {
+                "id": q.id,
+                "question": q.question,
+                "question_type": q.question_type,
+                # Written questions carry no options, and expected_answer is
+                # deliberately withheld — it is the answer key.
+                "options": [] if q.is_written else q.options,
+                "max_words": q.max_words,
+                "time_limit_seconds": q.time_limit_seconds,
+                "topic": q.topic,
+                "marks": q.marks,
+            }
             for q in questions
         ],
     }
@@ -735,8 +1067,64 @@ async def submit_test(
     breakdown: list[dict] = []
     marks_earned = 0
     correct_count = 0
+    ai_graded = False
+    ungraded: list[str] = []
 
     for q in scorable:
+        if q.is_written:
+            typed = (body.text_answers.get(q.id) or "").strip()
+            row = {
+                "question_id": q.id,
+                "question": q.question,
+                "question_type": QUESTION_TYPE_WRITTEN,
+                "options": [],
+                "your_index": None,
+                "your_answer": typed or None,
+                "correct_index": None,
+                "correct_answer": q.expected_answer,
+                "explanation": q.explanation,
+                "topic": q.topic,
+                "marks": q.marks,
+            }
+
+            if not typed:
+                # Nothing written: zero, and no reason to spend a model call.
+                row.update({
+                    "awarded": 0, "correct": False,
+                    "ai_feedback": "You left this answer blank.",
+                    "graded_by": "skipped",
+                })
+            else:
+                graded = await _grade_written(q, typed)
+                if graded is None:
+                    # Grading unavailable. Score 0 but record it so the result
+                    # says "not graded" rather than quietly implying a wrong
+                    # answer, and an admin can re-grade later.
+                    ungraded.append(q.id)
+                    row.update({
+                        "awarded": 0, "correct": False,
+                        "ai_feedback": (
+                            "This answer could not be graded automatically. "
+                            "An administrator can review it."
+                        ),
+                        "graded_by": "ungraded",
+                    })
+                else:
+                    ai_graded = True
+                    marks_earned += graded["awarded"]
+                    if graded["correct"]:
+                        correct_count += 1
+                    row.update({
+                        "awarded": graded["awarded"],
+                        "correct": graded["correct"],
+                        "ai_feedback": graded["feedback"],
+                        "graded_by": "ai",
+                    })
+                    if graded.get("model_answer") and not row["correct_answer"]:
+                        row["correct_answer"] = graded["model_answer"]
+            breakdown.append(row)
+            continue
+
         given = body.answers.get(q.id)
         if given is not None and not (0 <= given < len(q.options)):
             given = None  # out-of-range index counts as skipped, never a crash
@@ -747,12 +1135,15 @@ async def submit_test(
         breakdown.append({
             "question_id": q.id,
             "question": q.question,
+            "question_type": QUESTION_TYPE_MCQ,
             "options": q.options,
             "your_index": given,
             "your_answer": q.options[given] if given is not None else None,
             "correct_index": q.correct_index,
             "correct_answer": q.options[q.correct_index],
             "correct": is_correct,
+            "awarded": q.marks if is_correct else 0,
+            "graded_by": "auto",
             "explanation": q.explanation,
             "topic": q.topic,
             "marks": q.marks,
@@ -765,7 +1156,13 @@ async def submit_test(
     attempt = TestAttempt(
         test_id=test.id,
         user_id=user.id,
-        answers={q.id: body.answers.get(q.id) for q in scorable},
+        answers={q.id: body.answers.get(q.id) for q in scorable if not q.is_written},
+        text_answers={
+            q.id: (body.text_answers.get(q.id) or "").strip()
+            for q in scorable if q.is_written
+        },
+        ai_graded=ai_graded,
+        ungraded_question_ids=ungraded,
         breakdown=breakdown,
         score=score,
         marks_earned=marks_earned,
@@ -806,6 +1203,8 @@ async def submit_test(
         "marks_total": marks_total,
         "correct_count": correct_count,
         "total_questions": len(scorable),
+        "ai_graded": ai_graded,
+        "ungraded_count": len(ungraded),
         "breakdown": breakdown,
         "topic_stats": _topic_stats(breakdown),
         "rewards": rewards,
