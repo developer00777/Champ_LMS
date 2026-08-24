@@ -185,6 +185,60 @@ Return ONLY a valid JSON array with one entry per question, in the same order
   {{"index": 0, "seconds": 60, "why": "short recall MCQ"}}
 ]"""
 
+PROCTOR_REVIEW_PROMPT = """You are an exam proctor reviewing the integrity of one online test attempt. Decide how likely it is that this candidate cheated.
+
+You are given only behavioural telemetry from the exam page — there is no camera
+and no screen recording. Judge intent from the pattern, and be fair: an honest
+candidate on a real laptop generates some noise.
+
+Attempt duration: {elapsed_label}
+Time with the exam not visible or not focused: {away_seconds}s total, longest single absence {longest_away_seconds}s
+Event tallies: {counts_label}
+Telemetry missing: {telemetry_missing}
+
+Event timeline (mm:ss from the start of the attempt):
+{timeline}
+
+Written answers on this attempt:
+{answer_profile}
+
+A deterministic rule-based pass already scored this {rules_risk_score}/100 and found:
+{rules_findings}
+
+How to weigh the signals:
+- Innocent by itself: one or two brief tab switches, a right-click, a blocked
+  Ctrl+A, exiting fullscreen once. Laptops get notifications and people adjust
+  windows.
+- Meaningful: repeatedly leaving the exam, especially a long absence immediately
+  before a hard question is answered, or absences that cluster on high-mark
+  questions.
+- Strong: a long written answer that appeared as a burst rather than typed;
+  paste attempts into an answer field; developer tools opening; the same exam
+  open in two windows.
+- Correlate timing with content. A 200-word answer submitted right after a
+  90-second absence is a very different story from the same answer typed steadily.
+- If telemetry is missing entirely, say the attempt could not be monitored. Do
+  not call it clean, and do not call it cheating either.
+
+Scoring:
+- 0-14 "clean": nothing meaningful.
+- 15-39 "minor": ordinary noise, no evidence of misconduct.
+- 40-69 "suspicious": a pattern that a human should look at.
+- 70-100 "high_risk": strong behavioural evidence of outside help.
+
+Write for an L&D administrator who must decide whether to act. Never state as
+fact something the telemetry only suggests — say "consistent with" rather than
+"the candidate did". Never name a candidate; you have not been told who this is.
+
+Return ONLY a valid JSON object (no markdown, no commentary):
+{{
+  "risk_score": 0,
+  "risk_level": "clean",
+  "summary": "1-2 sentences an administrator reads next to the score",
+  "findings": ["specific, evidence-anchored observations; [] if there are none"]
+}}"""
+
+
 COHORT_COACHING_PROMPT = """You are advising an L&D administrator on how to coach a team after a test. Base everything on the results below.
 
 Test: {test_title} (pass mark {pass_threshold}%)
@@ -465,6 +519,51 @@ class AIService:
         prompt = SUGGEST_TIME_LIMITS_PROMPT.format(questions_block=questions_block)
         out = await self._chat(prompt, max_tokens=4096)
         return _extract_json_array(out)
+
+    async def review_proctoring(
+        self,
+        timeline: str,
+        counts: dict,
+        away_seconds: int,
+        longest_away_seconds: int,
+        elapsed_seconds: int | None,
+        rules_risk_score: int,
+        rules_findings: list[str],
+        answer_profile: str,
+        telemetry_missing: bool,
+    ) -> dict:
+        """
+        Ask the model to judge one attempt's integrity from its event timeline.
+
+        Returns {risk_score, risk_level, summary, findings}. The caller clamps
+        the score against the deterministic one — this verdict is advisory, and
+        must never be the only thing standing between a learner and an
+        accusation.
+        """
+        if elapsed_seconds:
+            mins, secs = divmod(elapsed_seconds, 60)
+            elapsed_label = f"{mins}m {secs}s"
+        else:
+            elapsed_label = "unknown"
+
+        counts_label = ", ".join(
+            f"{k}={v}" for k, v in sorted(counts.items())
+        ) or "none"
+        findings_label = "\n".join(f"- {f}" for f in rules_findings) or "- nothing"
+
+        prompt = PROCTOR_REVIEW_PROMPT.format(
+            timeline=timeline,
+            counts_label=counts_label,
+            away_seconds=away_seconds,
+            longest_away_seconds=longest_away_seconds,
+            elapsed_label=elapsed_label,
+            rules_risk_score=rules_risk_score,
+            rules_findings=findings_label,
+            answer_profile=answer_profile,
+            telemetry_missing="yes" if telemetry_missing else "no",
+        )
+        out = await self._chat(prompt, max_tokens=1024)
+        return _extract_json_object(out)
 
     async def coach_cohort(
         self,

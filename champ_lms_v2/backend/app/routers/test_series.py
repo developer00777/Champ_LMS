@@ -9,7 +9,7 @@ Learner flow: list published tests -> take the interactive questionnaire ->
 """
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 import redis.asyncio as aioredis
@@ -31,6 +31,7 @@ from app.models.user import User
 from app.services.ai_service import ai_service, fallback_analysis
 from app.services.bunny_storage import bunny_storage
 from app.services.gamification_service import GamificationService
+from app.services.proctor_service import build_report as build_proctor_report
 from app.services.pdf_quiz_parser import (
     SUPPORTED_EXTENSIONS,
     PdfParseError,
@@ -71,6 +72,7 @@ class TestUpdateIn(BaseModel):
     duration_minutes: int | None = None
     max_attempts: int | None = None
     shuffle_questions: bool | None = None
+    proctoring_enabled: bool | None = None
     questions: list[QuestionIn] | None = None
 
 
@@ -82,6 +84,7 @@ class TestCreateIn(BaseModel):
     pass_threshold: int = Field(default=70, ge=1, le=100)
     duration_minutes: int | None = None
     max_attempts: int | None = None
+    proctoring_enabled: bool = True
     questions: list[QuestionIn] = Field(default_factory=list)
 
 
@@ -94,11 +97,34 @@ class AppendQuestionsIn(BaseModel):
     source_parser: str | None = None
 
 
+class ProctorEventIn(BaseModel):
+    """
+    One integrity event as the exam client reports it. Deliberately permissive —
+    the proctor service validates the kind against a whitelist and clamps the
+    numbers, so a malformed or hostile row is dropped there rather than 422-ing
+    a finished exam away.
+    """
+    kind: str
+    at_seconds: int | None = None
+    duration_seconds: int | None = None
+    question_id: str | None = None
+    detail: str | None = None
+
+
 class SubmitIn(BaseModel):
     # {question_id: selected_option_index}; omit or null for skipped
     answers: dict[str, int | None] = Field(default_factory=dict)
     # {question_id: typed answer} for written questions
     text_answers: dict[str, str] = Field(default_factory=dict)
+
+    # --- proctoring telemetry ----------------------------------------------
+    # None means the client sent nothing at all, which the proctor treats as an
+    # unmonitored attempt. An empty list means "monitored, nothing happened" —
+    # a different thing, so the distinction is preserved rather than defaulted.
+    proctor_events: list[ProctorEventIn] | None = None
+    # Seconds the learner had the exam open, by the client's own clock. Used to
+    # correlate absences against total time; never trusted for scoring.
+    elapsed_seconds: int | None = None
 
 
 # --------------------------------------------------------------------------
@@ -116,6 +142,7 @@ def _admin_view(t: TestSeries) -> dict:
         "duration_minutes": t.duration_minutes,
         "max_attempts": t.max_attempts,
         "shuffle_questions": t.shuffle_questions,
+        "proctoring_enabled": t.proctoring_enabled,
         "is_published": t.is_published,
         "is_ready": t.is_ready,
         "unscorable_count": t.unscorable_count,
@@ -163,6 +190,31 @@ def _topic_stats(breakdown: list[dict]) -> dict[str, dict]:
 # is indistinguishable from no limit.
 MIN_TIME_LIMIT_SECONDS = 5
 MAX_TIME_LIMIT_SECONDS = 3600
+
+
+def _proctor_summary(a: TestAttempt) -> dict | None:
+    """
+    The verdict without the timeline, for list views.
+
+    None means the attempt was never proctored (made before proctoring existed,
+    or on a test with it switched off). Callers must render that as "not
+    proctored" rather than as a clean result.
+    """
+    p = a.proctoring
+    if not p:
+        return None
+    return {
+        "risk_level": p.risk_level,
+        "risk_score": p.risk_score,
+        "summary": p.summary,
+        "findings": p.findings,
+        "counts": p.counts,
+        "away_seconds": p.away_seconds,
+        "longest_away_seconds": p.longest_away_seconds,
+        "telemetry_missing": p.telemetry_missing,
+        "verdict_by": p.verdict_by,
+        "event_count": len(p.events),
+    }
 
 
 def _clamp_time_limit(seconds: int | None) -> int | None:
@@ -462,6 +514,7 @@ async def create_test_series(
         pass_threshold=body.pass_threshold,
         duration_minutes=body.duration_minutes,
         max_attempts=body.max_attempts,
+        proctoring_enabled=body.proctoring_enabled,
         questions=_questions_from_in(body.questions),
         source_filename=source_filename,
         source_parser=source_parser or "manual",
@@ -521,6 +574,7 @@ async def update_test_series(
     for field in (
         "title", "description", "category", "department", "pass_threshold",
         "duration_minutes", "max_attempts", "shuffle_questions",
+        "proctoring_enabled",
     ):
         if field in data:
             setattr(test, field, data[field])
@@ -826,6 +880,9 @@ async def test_results(
             "topic_stats": _topic_stats(a.breakdown),
             "has_ai_analysis": a.ai_analysis is not None,
             "ai_analysis": a.ai_analysis,
+            # * the full event timeline is deliberately not in the list payload —
+            # * it is large and only wanted when an admin opens one attempt
+            "proctoring": _proctor_summary(a),
         })
 
     scores = [a.score for a in attempts]
@@ -1015,6 +1072,9 @@ async def take_test(
         "total_marks": sum(q.marks for q in questions),
         "attempt_number": used + 1,
         "max_attempts": test.max_attempts,
+        # * when true the client blocks copy/paste/context menu and reports
+        # * integrity events with the submission
+        "proctoring_enabled": test.proctoring_enabled,
         # * total per-question time, so the client can show an overall budget
         # * when the test has per-question limits but no whole-test duration.
         "total_time_limit_seconds": (
@@ -1153,6 +1213,28 @@ async def submit_test(
     score = round(marks_earned / marks_total * 100) if marks_total else 0
     passed = score >= test.pass_threshold
 
+    # Integrity review. Runs before the insert so the verdict is stored with the
+    # attempt in one write, and is wrapped because a proctoring failure must
+    # never cost someone a completed exam.
+    proctoring = None
+    if test.proctoring_enabled:
+        try:
+            proctoring = await build_proctor_report(
+                raw_events=[e.model_dump() for e in (body.proctor_events or [])],
+                questions=scorable,
+                text_answers=body.text_answers,
+                elapsed_seconds=body.elapsed_seconds,
+                client_reported=body.proctor_events is not None,
+            )
+        except Exception:  # noqa: BLE001 — no verdict is better than a lost submit
+            proctoring = None
+
+    started_at = None
+    if body.elapsed_seconds and body.elapsed_seconds > 0:
+        started_at = datetime.now(timezone.utc) - timedelta(
+            seconds=min(body.elapsed_seconds, 24 * 3600)
+        )
+
     attempt = TestAttempt(
         test_id=test.id,
         user_id=user.id,
@@ -1170,6 +1252,8 @@ async def submit_test(
         correct_count=correct_count,
         total_questions=len(scorable),
         passed=passed,
+        proctoring=proctoring,
+        started_at=started_at,
     )
     await attempt.insert()
 
@@ -1208,6 +1292,11 @@ async def submit_test(
         "breakdown": breakdown,
         "topic_stats": _topic_stats(breakdown),
         "rewards": rewards,
+        # The learner is told the attempt was monitored and how many signals
+        # were logged, but not the risk verdict — that is for the admin to act
+        # on, and showing a score here just teaches people what to evade.
+        "proctored": proctoring is not None,
+        "proctor_flag_count": len(proctoring.findings) if proctoring else 0,
     }
 
 
@@ -1248,6 +1337,21 @@ async def get_attempt(
         raise HTTPException(status_code=403, detail="Not your attempt")
 
     test = await TestSeries.get(attempt.test_id)
+    is_admin = user.role in ("admin", "ld_lead")
+
+    # The learner is told their attempt was monitored; the risk verdict and the
+    # event timeline go to admins only. Handing someone their own score for
+    # "how suspicious did that look" is a tuning signal for evading it.
+    proctoring: dict | None = None
+    if attempt.proctoring:
+        if is_admin:
+            proctoring = _proctor_summary(attempt)
+            proctoring["events"] = [
+                e.model_dump() for e in attempt.proctoring.events
+            ]
+        else:
+            proctoring = {"proctored": True}
+
     return {
         "attempt_id": attempt.id,
         "test_id": attempt.test_id,
@@ -1263,6 +1367,7 @@ async def get_attempt(
         "breakdown": attempt.breakdown,
         "topic_stats": _topic_stats(attempt.breakdown),
         "ai_analysis": attempt.ai_analysis,
+        "proctoring": proctoring,
     }
 
 

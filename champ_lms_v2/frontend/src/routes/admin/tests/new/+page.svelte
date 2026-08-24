@@ -19,6 +19,9 @@
   let passThreshold = 70;
   let durationMinutes: number | null = null;
   let maxAttempts: number | null = null;
+  // On by default — a company exam should be proctored unless the admin says
+  // otherwise, which matches the server-side default.
+  let proctoringEnabled = true;
   let questions: TestQuestionDraft[] = [];
 
   function pick(e: Event) {
@@ -87,6 +90,7 @@
         pass_threshold: passThreshold,
         duration_minutes: durationMinutes || null,
         max_attempts: maxAttempts || null,
+        proctoring_enabled: proctoringEnabled,
         questions,
       }, { filename: parsed?.source_filename ?? undefined, parser: parsed?.source_parser });
 
@@ -156,6 +160,17 @@
         <label>Time limit (min)<input type="number" min="1" bind:value={durationMinutes} placeholder="none" /></label>
         <label>Max attempts<input type="number" min="1" bind:value={maxAttempts} placeholder="unlimited" /></label>
       </div>
+      <label class="check">
+        <input type="checkbox" bind:checked={proctoringEnabled} />
+        <span>
+          AI proctoring
+          <small>
+            Blocks copying, pasting and the right-click menu, records tab
+            switches, and gives every attempt an AI integrity verdict in the
+            results.
+          </small>
+        </span>
+      </label>
     </div>
 
     <div class="parse-summary">
@@ -242,8 +257,11 @@
   }
   input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-  .check { flex-direction: row; align-items: center; gap: 0.55rem; font-size: 0.83rem; }
-  .check input { width: auto; }
+  .check { flex-direction: row; align-items: flex-start; gap: 0.55rem; font-size: 0.83rem; }
+  .check input { width: auto; margin-top: 0.15rem; }
+  /* The proctoring toggle carries an explanation, so its label stacks. */
+  .check span { display: flex; flex-direction: column; gap: 0.15rem; }
+  .check small { font-weight: 400; font-size: 0.72rem; color: var(--muted); line-height: 1.5; max-width: 46ch; }
   .info { font-size: 0.82rem; color: var(--muted); background: var(--surface2);
           padding: 0.7rem 0.85rem; border-radius: 6px; line-height: 1.55; }
   .info code { background: var(--surface); padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.78rem; }

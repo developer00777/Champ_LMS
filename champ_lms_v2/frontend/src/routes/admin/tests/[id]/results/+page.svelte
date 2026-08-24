@@ -10,6 +10,46 @@
   let error = '';
   let expanded: Record<string, boolean> = {};
   let analyzing: Record<string, boolean> = {};
+  // Integrity timelines are opened per attempt — the event list is long and
+  // only wanted when an admin is actually investigating one result.
+  let timelineOpen: Record<string, boolean> = {};
+
+  const RISK_LABELS: Record<string, string> = {
+    clean: 'No issues',
+    minor: 'Minor flags',
+    suspicious: 'Needs review',
+    high_risk: 'High risk',
+  };
+
+  function toggleTimeline(attemptId: string) {
+    timelineOpen[attemptId] = !timelineOpen[attemptId];
+    timelineOpen = timelineOpen;
+  }
+
+  function clockAt(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  /** Human label for an event kind, so admins don't read raw enum names. */
+  function eventLabel(kind: string): string {
+    const labels: Record<string, string> = {
+      tab_hidden: 'Left the exam tab',
+      tab_visible: 'Returned to the exam',
+      window_blur: 'Window lost focus',
+      window_focus: 'Window regained focus',
+      copy_attempt: 'Tried to copy text',
+      paste_attempt: 'Tried to paste into an answer',
+      context_menu: 'Right-clicked',
+      devtools_open: 'Developer tools',
+      shortcut_blocked: 'Blocked shortcut',
+      fullscreen_exit: 'Exited fullscreen',
+      answer_burst: 'Answer appeared at once',
+      multi_session: 'Exam open in another tab',
+    };
+    return labels[kind] ?? kind;
+  }
 
   onMount(load);
 
@@ -194,6 +234,16 @@
                   {a.correct_count}/{a.total_questions} correct · {a.marks_earned}/{a.marks_total} marks
                 </span>
                 <span class="verdict" class:pass={a.passed}>{a.passed ? 'PASSED' : 'FAILED'}</span>
+                {#if a.proctoring}
+                  <span class="risk risk-{a.proctoring.risk_level}"
+                        title={`Integrity risk ${a.proctoring.risk_score}/100`}>
+                    {RISK_LABELS[a.proctoring.risk_level] ?? a.proctoring.risk_level}
+                  </span>
+                {:else}
+                  <span class="risk risk-none" title="This attempt was not proctored">
+                    Not proctored
+                  </span>
+                {/if}
               </div>
             </div>
 
@@ -207,6 +257,49 @@
                   : a.has_ai_analysis ? 'Regenerate AI insight' : 'Get AI insight'}
               </button>
             </div>
+
+            {#if a.proctoring && (a.proctoring.findings.length || a.proctoring.risk_score > 0 || a.proctoring.telemetry_missing)}
+              {@const pr = a.proctoring}
+              <div class="integrity risk-border-{pr.risk_level}">
+                <div class="integrity-head">
+                  <span class="integrity-title">🛡 Proctoring review</span>
+                  <span class="integrity-score">{pr.risk_score}/100</span>
+                  {#if pr.verdict_by === 'rules'}
+                    <span class="tag">rules only (AI review unavailable)</span>
+                  {/if}
+                  {#if pr.telemetry_missing}
+                    <span class="tag danger">no telemetry received</span>
+                  {/if}
+                </div>
+                {#if pr.summary}<p class="integrity-summary">{pr.summary}</p>{/if}
+                {#if pr.findings.length}
+                  <ul class="integrity-findings">
+                    {#each pr.findings as f}<li>{f}</li>{/each}
+                  </ul>
+                {/if}
+                <p class="integrity-meta">
+                  {pr.event_count} event(s) recorded · {pr.away_seconds}s away in total
+                  {#if pr.longest_away_seconds}· longest absence {pr.longest_away_seconds}s{/if}
+                </p>
+                {#if pr.event_count}
+                  <button class="btn small" on:click={() => toggleTimeline(a.attempt_id)}>
+                    {timelineOpen[a.attempt_id] ? 'Hide' : 'Show'} timeline
+                  </button>
+                {/if}
+                {#if timelineOpen[a.attempt_id] && pr.events?.length}
+                  <ol class="timeline">
+                    {#each pr.events as e}
+                      <li>
+                        <span class="t-at">{clockAt(e.at_seconds)}</span>
+                        <span class="t-kind">{eventLabel(e.kind)}</span>
+                        {#if e.duration_seconds}<span class="t-dur">{e.duration_seconds}s</span>{/if}
+                        {#if e.detail}<span class="t-detail">{e.detail}</span>{/if}
+                      </li>
+                    {/each}
+                  </ol>
+                {/if}
+              </div>
+            {/if}
 
             {#if analysisOf(a)}
               {@const an = analysisOf(a)}
@@ -333,6 +426,40 @@
   .who b { font-size: 0.98rem; }
   .muted { color: var(--muted); font-size: 0.79rem; }
   .tiny { font-size: 0.72rem; }
+  /* --- proctoring verdict ------------------------------------------------ */
+  .risk { font-size: 0.66rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+          border-radius: 999px; padding: 0.1rem 0.5rem; border: 1px solid; margin-top: 0.1rem; }
+  .risk-clean { color: var(--success); border-color: var(--success); }
+  .risk-minor { color: #c9a227; border-color: #c9a227; }
+  .risk-suspicious { color: #e08a3c; border-color: #e08a3c; }
+  .risk-high_risk { color: #fff; background: #c0392b; border-color: #c0392b; }
+  .risk-none { color: var(--muted); border-color: var(--border); }
+
+  .integrity { margin-top: 0.9rem; background: var(--surface2); border: 1px solid var(--border);
+               border-left-width: 3px; border-radius: 8px; padding: 0.85rem 1rem; }
+  .risk-border-clean { border-left-color: var(--success); }
+  .risk-border-minor { border-left-color: #c9a227; }
+  .risk-border-suspicious { border-left-color: #e08a3c; }
+  .risk-border-high_risk { border-left-color: #c0392b; }
+  .integrity-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.45rem; }
+  .integrity-title { font-size: 0.8rem; font-weight: 800; }
+  .integrity-score { font-size: 0.75rem; font-weight: 800; color: var(--muted);
+                     font-variant-numeric: tabular-nums; }
+  .tag.danger { color: #c0392b; border-color: #c0392b; }
+  .integrity-summary { font-size: 0.82rem; line-height: 1.55; margin-bottom: 0.5rem; }
+  .integrity-findings { margin: 0 0 0.5rem 1.1rem; font-size: 0.79rem; line-height: 1.6; color: var(--text); }
+  .integrity-meta { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.5rem; }
+  .btn.small { padding: 0.3rem 0.7rem; font-size: 0.74rem; }
+
+  .timeline { margin: 0.6rem 0 0; padding: 0; list-style: none; display: flex;
+              flex-direction: column; gap: 0.2rem; max-height: 320px; overflow-y: auto; }
+  .timeline li { display: flex; align-items: baseline; gap: 0.55rem; font-size: 0.74rem;
+                 padding: 0.28rem 0.4rem; border-radius: 4px; background: var(--surface); flex-wrap: wrap; }
+  .t-at { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 700; flex-shrink: 0; }
+  .t-kind { font-weight: 600; }
+  .t-dur { color: #e08a3c; font-weight: 700; }
+  .t-detail { color: var(--muted); }
+
   .score-box { display: flex; flex-direction: column; align-items: flex-end; gap: 0.15rem; }
   .score { font-size: 1.6rem; font-weight: 800; line-height: 1; }
   .score.pass { color: var(--success); }

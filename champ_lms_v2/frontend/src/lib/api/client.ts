@@ -1,3 +1,5 @@
+import type { ProctorEvent } from '$lib/utils/exam-lockdown';
+
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
 
 export class ApiError extends Error {
@@ -322,10 +324,10 @@ export const api = {
   // Test Series — learner
   testSeries: () => request<LearnerTest[]>('/test-series'),
   takeTest: (id: string) => request<TestPaper>(`/test-series/${id}/take`),
-  submitTest: (id: string, answers: Record<string, number | null>) =>
+  submitTest: (id: string, body: SubmitTestBody) =>
     request<TestResult>(`/test-series/${id}/submit`, {
       method: 'POST',
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify(body),
     }),
   myTestAttempts: () => request<MyAttempt[]>('/test-series/attempts/me'),
   testAttempt: (attemptId: string) => request<AttemptDetail>(`/test-series/attempts/${attemptId}`),
@@ -732,6 +734,7 @@ export interface TestSeriesCreate {
   pass_threshold?: number;
   duration_minutes?: number | null;
   max_attempts?: number | null;
+  proctoring_enabled?: boolean;
   questions: TestQuestionDraft[];
 }
 export interface AdminTest {
@@ -739,6 +742,7 @@ export interface AdminTest {
   category: string | null; department: string | null;
   pass_threshold: number; duration_minutes: number | null;
   max_attempts: number | null; shuffle_questions: boolean;
+  proctoring_enabled: boolean;
   is_published: boolean; is_ready: boolean;
   unscorable_count: number; total_marks: number; total_questions: number;
   source_filename: string | null; source_parser: string | null;
@@ -759,11 +763,46 @@ export interface LearnerTest {
   my_attempts: number; attempts_left: number | null;
   my_best_score: number | null; passed: boolean;
 }
+export interface TestPaperQuestion {
+  id: string;
+  question: string;
+  question_type: 'mcq' | 'written';
+  options: string[];
+  max_words: number | null;
+  time_limit_seconds: number | null;
+  topic: string | null;
+  marks: number;
+}
 export interface TestPaper {
   id: string; title: string; description: string | null;
   duration_minutes: number | null; pass_threshold: number; total_marks: number;
   attempt_number: number; max_attempts: number | null;
-  questions: { id: string; question: string; options: string[]; topic: string | null; marks: number }[];
+  total_time_limit_seconds: number | null;
+  // * when true the client locks down copy/paste/context menu and reports
+  // * integrity events with the submission
+  proctoring_enabled: boolean;
+  questions: TestPaperQuestion[];
+}
+export interface SubmitTestBody {
+  answers: Record<string, number | null>;
+  text_answers?: Record<string, string>;
+  proctor_events?: ProctorEvent[];
+  elapsed_seconds?: number;
+}
+// * the admin-facing integrity verdict for one attempt. Learners only ever see
+// * `{ proctored: true }` — the risk score is deliberately withheld from them.
+export interface ProctoringReport {
+  risk_level: 'clean' | 'minor' | 'suspicious' | 'high_risk';
+  risk_score: number;
+  summary: string | null;
+  findings: string[];
+  counts: Record<string, number>;
+  away_seconds: number;
+  longest_away_seconds: number;
+  telemetry_missing: boolean;
+  verdict_by: 'rules' | 'ai';
+  event_count: number;
+  events?: ProctorEvent[];
 }
 export interface BreakdownRow {
   question_id: string; question: string; options: string[];
@@ -779,6 +818,8 @@ export interface TestResult {
   correct_count: number; total_questions: number;
   breakdown: BreakdownRow[]; topic_stats: Record<string, TopicStat>;
   rewards?: { pass?: RewardEntry; perfect_quiz?: RewardEntry | null; badges_unlocked?: string[] } | null;
+  proctored?: boolean;
+  proctor_flag_count?: number;
 }
 export interface AiAnalysis {
   summary: string;
@@ -795,6 +836,9 @@ export interface AttemptDetail {
   correct_count: number; total_questions: number; submitted_at: string;
   breakdown: BreakdownRow[]; topic_stats: Record<string, TopicStat>;
   ai_analysis: AiAnalysis | null;
+  // * admins get the full verdict here; a learner viewing their own attempt
+  // * only ever gets { proctored: true }
+  proctoring: ProctoringReport | { proctored: true } | null;
 }
 export interface MyAttempt {
   attempt_id: string; test_id: string; test_title: string;
@@ -810,6 +854,9 @@ export interface TestResultRow {
   submitted_at: string; breakdown: BreakdownRow[];
   topic_stats: Record<string, TopicStat>;
   has_ai_analysis: boolean; ai_analysis: AiAnalysis | null;
+  // * null when the attempt was never proctored (predates proctoring, or the
+  // * test has it switched off) — render that as "not proctored", not "clean"
+  proctoring: ProctoringReport | null;
 }
 export interface TestResults {
   test_id: string; title: string; pass_threshold: number;

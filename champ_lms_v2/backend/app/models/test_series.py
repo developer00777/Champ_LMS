@@ -98,6 +98,14 @@ class TestSeries(Document):
     max_attempts: int | None = None  # None = unlimited
     shuffle_questions: bool = False
 
+    # --- proctoring ---------------------------------------------------------
+    # When on, the exam runs in a locked-down client (copy/paste/context menu
+    # blocked, tab switching logged) and every attempt gets an AI integrity
+    # verdict. Defaults to on: a company exam should be proctored unless the
+    # admin deliberately opts out, and tests written before this field existed
+    # inherit the default.
+    proctoring_enabled: bool = True
+
     is_published: bool = False
     # * provenance from the PDF ingest, so the admin can see where this came from
     source_filename: str | None = None
@@ -126,6 +134,84 @@ class TestSeries(Document):
             IndexModel([("is_published", ASCENDING), ("department", ASCENDING)]),
             IndexModel([("created_at", DESCENDING)]),
         ]
+
+
+# ==========================================================================
+# Proctoring
+# ==========================================================================
+# Event kinds a proctored attempt can record. The client names the kind; the
+# server keeps this whitelist so a tampered client can't invent categories that
+# would confuse the AI proctor or the admin UI.
+PROCTOR_EVENT_KINDS = (
+    "tab_hidden",       # page became invisible (tab switch, minimise, app switch)
+    "tab_visible",      # came back — pairs with tab_hidden to measure the gap
+    "window_blur",      # focus left the window without the page hiding
+    "window_focus",
+    "copy_attempt",     # copy/cut on question or answer text, blocked
+    "paste_attempt",    # paste into a written answer, blocked
+    "context_menu",     # right-click, blocked
+    "devtools_open",    # devtools-sized viewport gap or the shortcut pressed
+    "shortcut_blocked", # print/save/select-all/view-source key combo
+    "fullscreen_exit",  # left the exam's fullscreen
+    "answer_burst",     # a long written answer appeared faster than typing allows
+    "multi_session",    # the same attempt opened in a second tab/window
+)
+
+
+class ProctorEvent(BaseModel):
+    """
+    One integrity signal captured while the learner was taking the test.
+
+    Embedded in the attempt rather than its own collection: events are only ever
+    read alongside the attempt they belong to, and an exam produces tens of them,
+    not thousands. `at_seconds` is the offset from the start of the attempt —
+    more useful than a wall clock when reconstructing a timeline, and immune to a
+    client whose system clock is wrong.
+    """
+    kind: str
+    at_seconds: int = 0
+    # How long the excursion lasted, for kinds that have a duration
+    # (tab_hidden -> tab_visible). None for instantaneous events.
+    duration_seconds: int | None = None
+    # Which question was on screen when it happened, when the client knew.
+    question_id: str | None = None
+    # Short human-readable extra ("Ctrl+P", "pasted 480 chars"). Truncated
+    # server-side — it is client-supplied text that an admin will read.
+    detail: str | None = None
+
+
+class ProctorReport(BaseModel):
+    """
+    The proctoring summary attached to a finished attempt: what happened, plus
+    the AI's read on whether it looks like cheating.
+
+    Counts are derived server-side from `events` so the admin UI and the AI
+    prompt agree, and so a client can't send a flattering summary.
+    """
+    events: list[ProctorEvent] = Field(default_factory=list)
+    # Denormalised tallies, keyed by event kind, for cheap list rendering.
+    counts: dict[str, int] = Field(default_factory=dict)
+    # Total seconds the learner spent with the exam not visible/focused.
+    away_seconds: int = 0
+    # Longest single excursion — one 4-minute absence matters more than
+    # eight 2-second alt-tabs, and the average hides that.
+    longest_away_seconds: int = 0
+    # True when the client never sent any telemetry at all, which itself is
+    # worth flagging: it means scripts were blocked or the submit API was called directly.
+    telemetry_missing: bool = False
+
+    # --- AI verdict --------------------------------------------------------
+    # "clean" | "minor" | "suspicious" | "high_risk" | "unavailable"
+    risk_level: str = "clean"
+    # 0-100. Deterministic score from the signals; the AI can adjust it.
+    risk_score: int = 0
+    # One or two sentences an admin reads next to the result.
+    summary: str | None = None
+    # Bullet points naming the specific signals behind the verdict.
+    findings: list[str] = Field(default_factory=list)
+    # "rules" when only the deterministic scorer ran, "ai" when the model
+    # reviewed the timeline, so nobody mistakes a fallback for a judgement.
+    verdict_by: str = "rules"
 
 
 class TestAttempt(Document):
@@ -161,6 +247,11 @@ class TestAttempt(Document):
 
     # * AI "areas of improvement" — generated once, on demand, then cached here
     ai_analysis: dict | None = None
+
+    # * integrity telemetry + AI verdict. None for attempts made before
+    # * proctoring existed and for tests with proctoring switched off — the UI
+    # * must show "not proctored" for those, never "clean".
+    proctoring: ProctorReport | None = None
 
     started_at: datetime | None = None
     submitted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

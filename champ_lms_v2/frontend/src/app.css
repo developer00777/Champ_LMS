@@ -176,3 +176,40 @@ nav, button, .badge {
     --radius-lg: 8px;
   }
 }
+
+/* ==========================================================================
+   Exam lockdown
+
+   Applied to <body> only while a proctored test is on screen, and removed when
+   the learner leaves it (see lib/utils/exam-lockdown.ts). Selection is killed
+   everywhere inside the exam so the question paper cannot be highlighted,
+   dragged out, or copied — except in the learner's own answer fields, which
+   must stay fully editable.
+   ========================================================================== */
+body.exam-locked,
+body.exam-locked * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body.exam-locked textarea,
+body.exam-locked input {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+}
+
+/* Nothing from a proctored exam should reach a printer or a PDF. Ctrl+P is
+   blocked in script, but the OS print menu is not ours to intercept. */
+@media print {
+  body.exam-locked * {
+    display: none !important;
+  }
+  body.exam-locked::after {
+    content: 'Printing is not permitted during a proctored test.';
+    display: block;
+    font: 14px sans-serif;
+  }
+}
