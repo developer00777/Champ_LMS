@@ -36,6 +36,9 @@
       <a href="/paths" class:active={$page.url.pathname === '/paths'}>
         <span class="nav-icon">🥾</span> Paths
       </a>
+      <a href="/daily" class:active={$page.url.pathname === '/daily'}>
+        <span class="nav-icon">🔥</span> Today
+      </a>
       <a href="/challenges" class:active={$page.url.pathname === '/challenges'}>
         <span class="nav-icon">🏁</span> Challenges
       </a>

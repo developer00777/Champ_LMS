@@ -65,6 +65,11 @@
       <h3>Test Series</h3>
       <p>Turn a Q&amp;A PDF or Word doc into a scored test with AI improvement insights</p>
     </a>
+    <a href="/admin/daily" class="link-card">
+      <div class="icon">🔥</div>
+      <h3>Daily Challenges</h3>
+      <p>Write a challenge pool — three rotate into everyone's day automatically</p>
+    </a>
     <a href="/admin/content" class="link-card">
       <div class="icon">🗂️</div>
       <h3>Content Library</h3>

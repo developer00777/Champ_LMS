@@ -6,7 +6,7 @@ from app.core.db import init_db, close_db
 from app.core.auth import seed_admin
 from app.core.redis import get_redis, close_redis
 from app.services.gamification_service import seed_gamification, rehydrate_leaderboards
-from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series, employees
+from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series, employees, daily
 
 settings = get_settings()
 
@@ -28,6 +28,13 @@ async def lifespan(app: FastAPI):
     from app.routers.challenges import seed_challenges
     try:
         await seed_challenges()
+    except Exception:
+        pass
+    # * Seed the rotating daily-challenge pool (idempotent, insert-only so admin
+    # * edits survive a restart)
+    from app.services.daily_service import seed_daily_challenges
+    try:
+        await seed_daily_challenges()
     except Exception:
         pass
     yield
@@ -61,6 +68,7 @@ app.include_router(assessments.router)
 app.include_router(learning_path.router)
 app.include_router(challenges.router)
 app.include_router(social.router)
+app.include_router(daily.router)
 app.include_router(test_series.router)
 app.include_router(webhooks.router)
 # Bunny dashboard may be configured with /api prefix — support both paths

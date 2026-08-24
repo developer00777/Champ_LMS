@@ -335,6 +335,29 @@ export const api = {
     request<{ attempt_id: string; ai_analysis: AiAnalysis }>(
       `/test-series/attempts/${attemptId}/analysis`, { method: 'POST' }),
 
+  // Daily engagement: rotating challenge pool, kudos, streak
+  dailyChallenges: () => request<DailyChallengeSet>('/daily/challenges'),
+  completeDailyChallenge: (id: string) =>
+    request<DailyChallengeResult>(`/daily/challenges/${id}/complete`, { method: 'POST' }),
+  streakDetail: () => request<StreakDetail>('/daily/streak'),
+  kudosWall: (opts: { limit?: number; mine?: boolean } = {}) =>
+    request<KudosItem[]>(
+      `/daily/kudos?limit=${opts.limit ?? 30}${opts.mine ? '&mine=true' : ''}`),
+  kudosRecipients: () => request<KudosRecipient[]>('/daily/kudos/recipients'),
+  sendKudos: (body: { to_user_id: string; message: string; emoji?: string }) =>
+    request<SendKudosResult>('/daily/kudos', { method: 'POST', body: JSON.stringify(body) }),
+  // Admin — the challenge pool behind the rotation
+  adminDailyChallenges: () => request<AdminChallengePool>('/admin/daily/challenges'),
+  createDailyChallenge: (body: DailyChallengeInput) =>
+    request<{ id: string; title: string; active: boolean }>('/admin/daily/challenges',
+      { method: 'POST', body: JSON.stringify(body) }),
+  updateDailyChallenge: (id: string, body: Partial<DailyChallengeInput> & { active?: boolean }) =>
+    request<{ id: string; updated: boolean }>(`/admin/daily/challenges/${id}`,
+      { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteDailyChallenge: (id: string) =>
+    request<{ deleted: boolean; deactivated: boolean; completions: number }>(
+      `/admin/daily/challenges/${id}`, { method: 'DELETE' }),
+
   // Social
   socialFeed: (department?: string, limit = 30) =>
     request<SocialPostItem[]>(`/social/feed?limit=${limit}${department ? `&department=${department}` : ''}`),
@@ -864,6 +887,94 @@ export interface TestResults {
   average_score: number | null; pass_rate: number | null;
   cohort_topic_stats: Record<string, TopicStat>;
   attempts: TestResultRow[];
+}
+
+// * Daily engagement types. The rotating pool is server-computed: the client
+// * never decides what today's challenges are, nor whether one is claimable.
+export type ChallengeKind = 'watch_episode' | 'pass_quiz' | 'pass_test' | 'self_report';
+export interface DailyChallengeItem {
+  id: string;
+  title: string;
+  description: string | null;
+  kind: ChallengeKind;
+  reward_xp: number;
+  reward_points: number;
+  // true when the platform confirms this from real progress rather than trusting a click
+  auto_verified: boolean;
+  always_on: boolean;
+  department: string | null;
+  completed_today: boolean;
+  completed_at: string | null;
+  verified: boolean;
+  claimable: boolean;
+}
+export interface DailyChallengeSet {
+  period_key: string;
+  total: number;
+  completed: number;
+  challenges: DailyChallengeItem[];
+}
+export interface DailyChallengeResult {
+  completed: boolean;
+  challenge_id: string;
+  verified: boolean;
+  awarded_xp: number;
+  awarded_points: number;
+  points: number;
+  xp: { amount: number; total_xp: number; level_up: boolean; new_level: number; new_tier: string };
+  streak_days: number;
+}
+export interface StreakDetail {
+  streak_days: number;
+  longest_streak: number;
+  streak_freezes: number;
+  last_activity_date: string | null;
+  active_today: boolean;
+}
+export interface KudosItem {
+  id: string;
+  from_user_id: string; to_user_id: string;
+  from_name: string | null; to_name: string | null;
+  from_avatar_url: string | null; to_avatar_url: string | null;
+  message: string; emoji: string;
+  xp_multiplier: number;
+  department: string | null;
+  created_at: string;
+}
+export interface KudosRecipient {
+  id: string; full_name: string; employee_code: string | null;
+  department: string | null; avatar_url: string | null;
+}
+export interface SendKudosResult {
+  id: string; to_name: string | null; message: string; emoji: string;
+  xp_multiplier: number;
+  awarded_xp_to_receiver: number; awarded_xp_to_giver: number;
+  kudos_left_today: number;
+}
+export interface DailyChallengeInput {
+  title: string;
+  description?: string | null;
+  kind: ChallengeKind;
+  reward_xp?: number;
+  reward_points?: number;
+  department?: string | null;
+  always_on?: boolean;
+}
+export interface AdminChallengeRow extends DailyChallengeInput {
+  id: string;
+  reward_xp: number;
+  reward_points: number;
+  active: boolean;
+  always_on: boolean;
+  auto_verified: boolean;
+  live_today: boolean;
+  completion_count: number;
+  created_at: string;
+}
+export interface AdminChallengePool {
+  daily_count: number;
+  active_count: number;
+  challenges: AdminChallengeRow[];
 }
 
 // * Social types

@@ -17,6 +17,9 @@ from app.models.test_series import TestSeries, TestAttempt, TestQuestion
 # * to models.team.Team, which is a gamification squad; content access keys off
 # * the User.team org field an admin sets on the employee.
 from app.models.content_access import ContentAccessRule
+# * Daily engagement: rotating challenge pool + directed peer kudos. Streaks
+# * stay in User/GamificationService rather than getting a second home here.
+from app.models.daily import DailyChallenge, DailyChallengeCompletion, Kudos
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -27,6 +30,7 @@ __all__ = [
     "SocialPost", "Notification",
     "TestSeries", "TestAttempt", "TestQuestion",
     "ContentAccessRule",
+    "DailyChallenge", "DailyChallengeCompletion", "Kudos",
 ]
 
 DOCUMENT_MODELS = [
@@ -39,4 +43,5 @@ DOCUMENT_MODELS = [
     # * TestQuestion is an embedded BaseModel, not a Document — not registered here
     TestSeries, TestAttempt,
     ContentAccessRule,
+    DailyChallenge, DailyChallengeCompletion, Kudos,
 ]

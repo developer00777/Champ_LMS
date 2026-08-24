@@ -285,11 +285,25 @@ class GamificationService:
 
     async def record_activity(self, user_id: str) -> int:
         """
-        Update streak using Redis.
-        Returns current streak count.
+        Update the learner's streak. Returns the current streak count.
+
+        Redis holds the live counter; the User document is the durable copy, so a
+        flushed cache costs the day's increment rather than the whole streak
+        (see the fallback below).
+
+        Two rules beyond a plain counter:
+
+          * longest_streak is a high-water mark. It only ever rises, so breaking
+            a streak does not erase the fact that it happened.
+          * A single missed day spends a streak freeze instead of resetting to 1.
+            People take a day off; a 40-day streak that dies to one sick day
+            teaches them not to bother starting again. Freezes are finite, so
+            this forgives an interruption without making the streak meaningless.
         """
-        today = datetime.now(timezone.utc).date().isoformat()
-        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+        today_date = datetime.now(timezone.utc).date()
+        today = today_date.isoformat()
+        yesterday = (today_date - timedelta(days=1)).isoformat()
+        day_before = (today_date - timedelta(days=2)).isoformat()
 
         last_key = f"last_activity:{user_id}"
         streak_key = f"streak:{user_id}"
@@ -298,20 +312,37 @@ class GamificationService:
         if last_date == today:
             return int(await self.redis.get(streak_key) or 0)
 
+        user = await User.get(user_id)
+
+        # Redis is a cache, not the record. If it was evicted, resume from what
+        # the user document says rather than silently restarting at 1.
+        cached = await self.redis.get(streak_key)
+        previous = int(cached) if cached is not None else (user.streak_days if user else 0)
+
+        freeze_used = False
         if last_date == yesterday:
-            streak = await self.redis.incr(streak_key)
+            streak = previous + 1
+        elif last_date == day_before and user and user.streak_freezes > 0:
+            # Exactly one day missed and a freeze in hand: carry the streak.
+            streak = previous + 1
+            freeze_used = True
         else:
-            await self.redis.set(streak_key, 1)
             streak = 1
 
+        await self.redis.set(streak_key, streak)
         await self.redis.set(last_key, today)
 
-        # Persist streak to DB
-        user = await User.get(user_id)
+        # Persist to DB, including the high-water mark and any spent freeze.
         if user:
-            await user.update(
-                Set({User.streak_days: streak, User.last_activity_at: datetime.now(timezone.utc)})
-            )
+            updates = {
+                User.streak_days: streak,
+                User.last_activity_at: datetime.now(timezone.utc),
+            }
+            if streak > (user.longest_streak or 0):
+                updates[User.longest_streak] = streak
+            if freeze_used:
+                updates[User.streak_freezes] = max(0, user.streak_freezes - 1)
+            await user.update(Set(updates))
 
         if streak == 7:
             await self.award_points(user_id, "streak_7day", "")
