@@ -5,6 +5,7 @@
   import { auth, isLoggedIn, isAdmin } from '$lib/stores/auth';
   import { gamification } from '$lib/stores/gamification';
   import LevelBadge from '$lib/components/LevelBadge.svelte';
+  import Avatar from '$lib/components/Avatar.svelte';
   import RewardModal from '$lib/components/RewardModal.svelte';
   import '../app.css';
 
@@ -72,6 +73,20 @@
           />
         </a>
       {/if}
+      <a
+        href="/settings"
+        class="profile-link"
+        class:active={$page.url.pathname === '/settings'}
+        title="{$auth.user?.full_name ?? 'Profile'} — settings"
+      >
+        <Avatar src={$auth.user?.avatar_url} name={$auth.user?.full_name} size={34} />
+        <span class="profile-name">
+          <b>{$auth.user?.full_name ?? 'Profile'}</b>
+          {#if $auth.user?.employee_code}
+            <em>{$auth.user.employee_code}</em>
+          {/if}
+        </span>
+      </a>
       <button class="btn-signout" on:click={() => auth.logout()}>Sign Out</button>
     </div>
   </nav>
@@ -233,6 +248,45 @@
     display: flex;
     align-items: center;
   }
+
+  .profile-link {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+  }
+
+  .profile-link:hover,
+  .profile-link.active {
+    background: var(--surface);
+    border-color: var(--border);
+  }
+
+  .profile-name {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+    max-width: 130px;
+  }
+
+  .profile-name b {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .profile-name em {
+    font-style: normal;
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+  }
   
   .main { 
     padding: 1.5rem 2rem 4rem; 
@@ -266,6 +320,11 @@
     .btn-signout {
       padding: 0.3rem 0.7rem;
       font-size: 0.75rem;
+    }
+
+    /* Keep the picture, drop the text: the nav is tight on a phone. */
+    .profile-name {
+      display: none;
     }
     
     .main {

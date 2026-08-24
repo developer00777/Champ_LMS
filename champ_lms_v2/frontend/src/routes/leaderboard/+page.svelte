@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api, type LeaderboardEntry, type Badge } from '$lib/api/client';
   import { auth } from '$lib/stores/auth';
+  import Avatar from '$lib/components/Avatar.svelte';
 
   let entries: LeaderboardEntry[] = [];
   let badges: Badge[] = [];
@@ -63,8 +64,19 @@
       {#each entries as entry, i}
         <div class="entry" class:me={entry.user_id === $auth.user?.id}>
           <span class="rank">{MEDALS[i] ?? `#${entry.rank}`}</span>
+          <Avatar
+            src={entry.avatar_url}
+            name={entry.full_name}
+            size={40}
+            ring={entry.user_id === $auth.user?.id}
+          />
           <div class="user-info">
-            <p class="name">{entry.full_name ?? 'Anonymous'}</p>
+            <p class="name">
+              {entry.full_name ?? 'Anonymous'}
+              {#if entry.employee_code}
+                <span class="code">{entry.employee_code}</span>
+              {/if}
+            </p>
             {#if entry.department}
               <p class="dept">{entry.department}</p>
             {/if}
@@ -99,15 +111,20 @@
   .badge-icon, .badge-emoji { width: 24px; height: 24px; object-fit: contain; }
   .board { display: flex; flex-direction: column; gap: 0.5rem; }
   .entry {
-    display: flex; align-items: center; gap: 1rem;
+    display: flex; align-items: center; gap: 0.85rem;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 0.85rem 1rem;
     transition: background 0.15s;
   }
   .entry.me { border-color: var(--accent); background: rgba(229,9,20,0.07); }
-  .rank { font-size: 1.3rem; min-width: 2rem; text-align: center; }
-  .user-info { flex: 1; }
-  .name { font-weight: 600; }
+  .rank { font-size: 1.3rem; min-width: 2rem; text-align: center; flex-shrink: 0; }
+  .user-info { flex: 1; min-width: 0; }
+  .name { font-weight: 600; display: flex; align-items: baseline; gap: 0.45rem; flex-wrap: wrap; }
+  .code {
+    font-size: 0.7rem; font-weight: 600; color: var(--muted);
+    background: var(--surface2); border-radius: 999px; padding: 0.1rem 0.45rem;
+    letter-spacing: 0.03em;
+  }
   .dept { font-size: 0.78rem; color: var(--muted); }
   .stats { display: flex; align-items: center; gap: 1rem; }
   .pts { font-weight: 700; color: var(--gold); }

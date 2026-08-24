@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import redis.asyncio as aioredis
 from beanie.operators import Set, Inc, In
 from app.models.user import User
+from app.services.bunny_storage import bunny_storage
 from app.models.gamification import Badge, UserBadge
 from app.models.progress import WatchProgress
 from app.models.assessment import AssessmentAttempt
@@ -338,6 +339,8 @@ class GamificationService:
                     "rank": rank,
                     "user_id": user_id,
                     "full_name": user.full_name,
+                    "employee_code": user.employee_code,
+                    "avatar_url": bunny_storage.avatar_url(user.avatar_bunny_path),
                     "department": user.department,
                     "points": int(score),
                     "streak_days": user.streak_days,

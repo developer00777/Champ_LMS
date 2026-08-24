@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
 from app.models.user import User
+from app.services.bunny_storage import bunny_storage
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,6 +29,9 @@ class UserOut(BaseModel):
     role: str
     department: str | None
     team: str | None = None
+    employee_code: str | None = None
+    # Resolved CDN URL, not the raw storage path — see the /auth/me handler.
+    avatar_url: str | None = None
     must_change_password: bool = False
     points: int
     xp: int
@@ -78,4 +82,8 @@ async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
 
 @router.get("/me", response_model=UserOut)
 async def me(user: Annotated[User, Depends(get_current_user)]):
-    return user
+    # avatar_url is derived, so it can't come straight off the document.
+    return UserOut(
+        **user.model_dump(exclude={"avatar_url"}),
+        avatar_url=bunny_storage.avatar_url(user.avatar_bunny_path),
+    )

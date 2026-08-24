@@ -58,6 +58,18 @@ class BunnyStorageService:
             )
             resp.raise_for_status()
 
+    def avatar_url(self, path: str | None) -> str | None:
+        """
+        CDN URL for a profile picture, or None when none is set.
+
+        Sized down deliberately: avatars appear in navigation and leaderboard
+        rows, so serving the original upload would waste bandwidth on every
+        page view.
+        """
+        if not path:
+            return None
+        return self.cdn_url(path, width=200, height=200)
+
     def cdn_url(self, path: str, width: int | None = None, height: int | None = None) -> str:
         """
         Build a CDN URL for a stored asset.

@@ -9,6 +9,10 @@ class User(Document):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: str
     full_name: str | None = None
+    # Company employee code (e.g. "CHMP-0142"). Admin-assigned and admin-only
+    # editable — an employee must not be able to relabel themselves. Unique
+    # when set; None for accounts created before codes existed.
+    employee_code: str | None = None
     hashed_password: str
     # role: learner | admin | ld_lead
     role: str = "learner"
@@ -66,4 +70,13 @@ class User(Document):
         name = "users"
         indexes = [
             IndexModel([("email", ASCENDING)], unique=True),
+            # Partial, not sparse: Beanie always writes employee_code (as null
+            # when unset), so the field is never actually absent and a sparse
+            # index would still see every null as a duplicate. A partial index
+            # filtered to string values indexes only rows that have a real code.
+            IndexModel(
+                [("employee_code", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"employee_code": {"$type": "string"}},
+            ),
         ]

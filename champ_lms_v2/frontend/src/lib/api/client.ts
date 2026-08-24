@@ -1,10 +1,16 @@
+import type { ProctorEvent } from '$lib/utils/exam-lockdown';
+
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // Structured server detail, when there is one. A failed bulk upload uses
+  // this to carry the per-row errors alongside the summary message.
+  detail?: unknown;
+  constructor(status: number, message: string, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -36,6 +42,26 @@ export const api = {
     });
   },
   me: () => request<User>('/auth/me'),
+  updateProfile: (body: { full_name?: string }) =>
+    request<{ id: string; full_name: string | null; employee_code: string | null; avatar_url: string | null }>(
+      '/auth/me', { method: 'PATCH', body: JSON.stringify(body) },
+    ),
+  uploadAvatar: async (file: File): Promise<{ avatar_url: string }> => {
+    // multipart: let the browser set Content-Type so the boundary is correct
+    const form = new FormData();
+    form.append('file', file);
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/auth/me/avatar`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+    }
+    return res.json();
+  },
+  deleteAvatar: () => request<{ avatar_url: null }>('/auth/me/avatar', { method: 'DELETE' }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ id: string; must_change_password: boolean; password_changed_at: string | null }>(
       '/auth/change-password',
@@ -59,6 +85,27 @@ export const api = {
   resetEmployeePassword: (id: string) =>
     request<Employee & { initial_password: string }>(`/admin/employees/${id}/reset-password`, {
       method: 'POST',
+    }),
+  bulkUploadEmployees: async (file: File, dryRun = false): Promise<BulkUploadResult> => {
+    const form = new FormData();
+    form.append('file', file);
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/employees/bulk-upload?dry_run=${dryRun}`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      // A failed bulk upload returns a structured detail listing each bad row.
+      throw new ApiError(res.status, typeof err.detail === 'string' ? err.detail : (err.detail?.message ?? 'Upload failed'), err.detail);
+    }
+    return res.json();
+  },
+  coachTestCohort: (testId: string) =>
+    request<CohortCoaching>(`/admin/test-series/${testId}/coach`, { method: 'POST' }),
+  suggestTimeLimits: (testId: string, apply = false, onlyMissing = true) =>
+    request<TimeLimitSuggestions>(`/admin/test-series/${testId}/suggest-time-limits`, {
+      method: 'POST', body: JSON.stringify({ apply, only_missing: onlyMissing }),
     }),
   deactivateEmployee: (id: string) =>
     request<{ id: string; is_active: boolean }>(`/admin/employees/${id}`, { method: 'DELETE' }),
@@ -277,10 +324,10 @@ export const api = {
   // Test Series — learner
   testSeries: () => request<LearnerTest[]>('/test-series'),
   takeTest: (id: string) => request<TestPaper>(`/test-series/${id}/take`),
-  submitTest: (id: string, answers: Record<string, number | null>) =>
+  submitTest: (id: string, body: SubmitTestBody) =>
     request<TestResult>(`/test-series/${id}/submit`, {
       method: 'POST',
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify(body),
     }),
   myTestAttempts: () => request<MyAttempt[]>('/test-series/attempts/me'),
   testAttempt: (attemptId: string) => request<AttemptDetail>(`/test-series/attempts/${attemptId}`),
@@ -309,10 +356,13 @@ export interface User {
   role: string; department: string | null; points: number; streak_days: number;
   xp: number; level: number;
   team?: string | null;
+  employee_code?: string | null;
+  avatar_url?: string | null;
   must_change_password?: boolean;
 }
 export interface Employee {
   id: string; email: string; full_name: string | null;
+  employee_code: string | null; avatar_url: string | null;
   role: string; department: string | null; team: string | null;
   is_active: boolean;
   must_change_password: boolean;
@@ -331,18 +381,59 @@ export interface EmployeeRoster {
   teams: string[];
 }
 export interface EmployeeCreate {
-  email: string; full_name: string;
+  email: string; full_name: string; employee_code?: string;
   department?: string; team?: string; role?: string;
   initial_password?: string;
 }
 export interface EmployeeUpdate {
-  full_name?: string; department?: string; team?: string;
+  full_name?: string; department?: string; team?: string; employee_code?: string;
   role?: string; is_active?: boolean;
 }
 
 export interface RequiredModule {
   id: string; title: string; description: string | null;
   category: string | null; thumbnail_url: string | null; total_episodes: number;
+}
+
+export interface BulkUploadRow {
+  id: string; employee_code: string | null; full_name: string | null;
+  email: string; department: string | null; team: string | null;
+  role: string; initial_password: string;
+}
+export interface BulkUploadResult {
+  dry_run: boolean;
+  created_count?: number;
+  created?: BulkUploadRow[];
+  would_create?: number;
+  employees?: Record<string, unknown>[];
+}
+export interface BulkUploadError {
+  message: string;
+  errors: { row: number; email: string | null; error: string }[];
+  error_count: number;
+  valid_count: number;
+}
+export interface CohortCoaching {
+  test_id: string; test_title: string; learners_considered: number;
+  cohort_topics: Record<string, { correct: number; total: number; accuracy: number }>;
+  guidance: {
+    cohort_summary: string;
+    weakest_topics: { topic: string; accuracy: number; why_it_matters: string }[];
+    group_actions: string[];
+    per_learner: {
+      user_id: string; full_name: string; score: number;
+      focus: string; message_to_learner: string;
+    }[];
+  };
+}
+export interface TimeLimitSuggestions {
+  suggestions: {
+    question_id: string; question: string; question_type: string; marks: number;
+    current_seconds: number | null; suggested_seconds: number; why: string | null;
+  }[];
+  applied: boolean;
+  applied_count: number;
+  message?: string;
 }
 
 export type AccessLevel = 'grant' | 'required' | 'revoke';
@@ -459,6 +550,7 @@ export interface ProgressEntry {
 }
 export interface LeaderboardEntry {
   rank: number; user_id: string; full_name: string | null;
+  employee_code: string | null; avatar_url: string | null;
   department: string | null; points: number; streak_days: number;
 }
 export interface Badge {
@@ -642,6 +734,7 @@ export interface TestSeriesCreate {
   pass_threshold?: number;
   duration_minutes?: number | null;
   max_attempts?: number | null;
+  proctoring_enabled?: boolean;
   questions: TestQuestionDraft[];
 }
 export interface AdminTest {
@@ -649,6 +742,7 @@ export interface AdminTest {
   category: string | null; department: string | null;
   pass_threshold: number; duration_minutes: number | null;
   max_attempts: number | null; shuffle_questions: boolean;
+  proctoring_enabled: boolean;
   is_published: boolean; is_ready: boolean;
   unscorable_count: number; total_marks: number; total_questions: number;
   source_filename: string | null; source_parser: string | null;
@@ -669,11 +763,46 @@ export interface LearnerTest {
   my_attempts: number; attempts_left: number | null;
   my_best_score: number | null; passed: boolean;
 }
+export interface TestPaperQuestion {
+  id: string;
+  question: string;
+  question_type: 'mcq' | 'written';
+  options: string[];
+  max_words: number | null;
+  time_limit_seconds: number | null;
+  topic: string | null;
+  marks: number;
+}
 export interface TestPaper {
   id: string; title: string; description: string | null;
   duration_minutes: number | null; pass_threshold: number; total_marks: number;
   attempt_number: number; max_attempts: number | null;
-  questions: { id: string; question: string; options: string[]; topic: string | null; marks: number }[];
+  total_time_limit_seconds: number | null;
+  // * when true the client locks down copy/paste/context menu and reports
+  // * integrity events with the submission
+  proctoring_enabled: boolean;
+  questions: TestPaperQuestion[];
+}
+export interface SubmitTestBody {
+  answers: Record<string, number | null>;
+  text_answers?: Record<string, string>;
+  proctor_events?: ProctorEvent[];
+  elapsed_seconds?: number;
+}
+// * the admin-facing integrity verdict for one attempt. Learners only ever see
+// * `{ proctored: true }` — the risk score is deliberately withheld from them.
+export interface ProctoringReport {
+  risk_level: 'clean' | 'minor' | 'suspicious' | 'high_risk';
+  risk_score: number;
+  summary: string | null;
+  findings: string[];
+  counts: Record<string, number>;
+  away_seconds: number;
+  longest_away_seconds: number;
+  telemetry_missing: boolean;
+  verdict_by: 'rules' | 'ai';
+  event_count: number;
+  events?: ProctorEvent[];
 }
 export interface BreakdownRow {
   question_id: string; question: string; options: string[];
@@ -689,6 +818,8 @@ export interface TestResult {
   correct_count: number; total_questions: number;
   breakdown: BreakdownRow[]; topic_stats: Record<string, TopicStat>;
   rewards?: { pass?: RewardEntry; perfect_quiz?: RewardEntry | null; badges_unlocked?: string[] } | null;
+  proctored?: boolean;
+  proctor_flag_count?: number;
 }
 export interface AiAnalysis {
   summary: string;
@@ -705,6 +836,9 @@ export interface AttemptDetail {
   correct_count: number; total_questions: number; submitted_at: string;
   breakdown: BreakdownRow[]; topic_stats: Record<string, TopicStat>;
   ai_analysis: AiAnalysis | null;
+  // * admins get the full verdict here; a learner viewing their own attempt
+  // * only ever gets { proctored: true }
+  proctoring: ProctoringReport | { proctored: true } | null;
 }
 export interface MyAttempt {
   attempt_id: string; test_id: string; test_title: string;
@@ -714,11 +848,15 @@ export interface MyAttempt {
 export interface TestResultRow {
   attempt_id: string; user_id: string;
   full_name: string | null; email: string | null; department: string | null;
+  employee_code: string | null; avatar_url: string | null;
   score: number; marks_earned: number; marks_total: number;
   correct_count: number; total_questions: number; passed: boolean;
   submitted_at: string; breakdown: BreakdownRow[];
   topic_stats: Record<string, TopicStat>;
   has_ai_analysis: boolean; ai_analysis: AiAnalysis | null;
+  // * null when the attempt was never proctored (predates proctoring, or the
+  // * test has it switched off) — render that as "not proctored", not "clean"
+  proctoring: ProctoringReport | null;
 }
 export interface TestResults {
   test_id: string; title: string; pass_threshold: number;

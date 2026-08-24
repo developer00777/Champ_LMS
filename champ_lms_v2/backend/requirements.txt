@@ -23,3 +23,5 @@ aiofiles==24.1.0
 pypdf==5.1.0
 # Word .docx text extraction for the same ingest (lxml ships prebuilt wheels)
 python-docx==1.2.0
+# Excel master-tracker parsing for bulk employee upload (pure Python)
+openpyxl==3.1.5

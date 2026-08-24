@@ -103,8 +103,16 @@ PDF_QUESTIONS_PROMPT = """You are an exam digitisation assistant. The text below
 
 Rules:
 - Extract ONLY questions that are actually present. Never invent questions.
-- correct_index is the 0-based index into options. If the document does not
-  indicate the answer anywhere (inline or in an answer key), use null.
+- Set "question_type" to "mcq" when the document offers answer choices, or
+  "written" when the candidate is expected to write prose (e.g. "Explain...",
+  "Describe...", "Discuss...", or any question with no choices listed).
+- For "written" questions: use an empty options array, null correct_index, and
+  put any model/sample answer the document provides in "expected_answer"
+  (null if the document gives none). If the question states a word limit, put
+  the number in "max_words".
+- For "mcq" questions: correct_index is the 0-based index into options. If the
+  document does not indicate the answer anywhere (inline or in an answer key),
+  use null.
 - Preserve the original wording of questions and options.
 - If the document marks a topic/section/subject for a question, put it in "topic".
   Otherwise infer a short (1-3 word) topic from the question itself.
@@ -118,13 +126,158 @@ Return ONLY a valid JSON array (no markdown, no commentary):
 [
   {{
     "question": "string",
+    "question_type": "mcq",
     "options": ["A", "B", "C", "D"],
     "correct_index": 0,
     "explanation": "string or null",
+    "expected_answer": null,
+    "max_words": null,
     "topic": "string",
     "marks": 1
   }}
 ]"""
+
+GRADE_WRITTEN_PROMPT = """You are marking a written exam answer. Award marks out of {marks}.
+
+Question: {question}
+Topic: {topic}
+{reference_block}
+Learner's answer:
+\"\"\"
+{answer}
+\"\"\"
+
+Rules:
+- Mark on substance, not length, spelling or phrasing. A short correct answer
+  scores full marks.
+- {reference_rule}
+- Award partial marks for a partially correct answer; be specific in "feedback"
+  about what was missing.
+- An empty, irrelevant, or copy-of-the-question answer scores 0.
+- Never award more than {marks} marks or less than 0.
+- "correct" is true only when the answer is substantially right (>= 60% of marks).
+- "feedback" is 1-2 sentences addressed to the learner as "you".
+
+Return ONLY a valid JSON object (no markdown, no commentary):
+{{
+  "marks_awarded": 0,
+  "correct": false,
+  "feedback": "string",
+  "model_answer": "a brief correct answer, for the learner's review"
+}}"""
+
+SUGGEST_TIME_LIMITS_PROMPT = """You are setting per-question time limits for an exam. For each question below, decide how many seconds a prepared candidate needs.
+
+Guidance:
+- A simple recall multiple-choice question: 30-60 seconds.
+- Multiple choice needing a calculation or reasoning: 60-150 seconds.
+- A short written answer: 120-300 seconds.
+- A long/essay written answer: 300-900 seconds.
+- Scale with the marks available and the reading length of the question.
+- Be realistic, not generous: these are limits, not targets.
+
+Questions (index | type | marks | question text):
+{questions_block}
+
+Return ONLY a valid JSON array with one entry per question, in the same order
+(no markdown, no commentary):
+[
+  {{"index": 0, "seconds": 60, "why": "short recall MCQ"}}
+]"""
+
+PROCTOR_REVIEW_PROMPT = """You are an exam proctor reviewing the integrity of one online test attempt. Decide how likely it is that this candidate cheated.
+
+You are given only behavioural telemetry from the exam page — there is no camera
+and no screen recording. Judge intent from the pattern, and be fair: an honest
+candidate on a real laptop generates some noise.
+
+Attempt duration: {elapsed_label}
+Time with the exam not visible or not focused: {away_seconds}s total, longest single absence {longest_away_seconds}s
+Event tallies: {counts_label}
+Telemetry missing: {telemetry_missing}
+
+Event timeline (mm:ss from the start of the attempt):
+{timeline}
+
+Written answers on this attempt:
+{answer_profile}
+
+A deterministic rule-based pass already scored this {rules_risk_score}/100 and found:
+{rules_findings}
+
+How to weigh the signals:
+- Innocent by itself: one or two brief tab switches, a right-click, a blocked
+  Ctrl+A, exiting fullscreen once. Laptops get notifications and people adjust
+  windows.
+- Meaningful: repeatedly leaving the exam, especially a long absence immediately
+  before a hard question is answered, or absences that cluster on high-mark
+  questions.
+- Strong: a long written answer that appeared as a burst rather than typed;
+  paste attempts into an answer field; developer tools opening; the same exam
+  open in two windows.
+- Correlate timing with content. A 200-word answer submitted right after a
+  90-second absence is a very different story from the same answer typed steadily.
+- If telemetry is missing entirely, say the attempt could not be monitored. Do
+  not call it clean, and do not call it cheating either.
+
+Scoring:
+- 0-14 "clean": nothing meaningful.
+- 15-39 "minor": ordinary noise, no evidence of misconduct.
+- 40-69 "suspicious": a pattern that a human should look at.
+- 70-100 "high_risk": strong behavioural evidence of outside help.
+
+Write for an L&D administrator who must decide whether to act. Never state as
+fact something the telemetry only suggests — say "consistent with" rather than
+"the candidate did". Never name a candidate; you have not been told who this is.
+
+Return ONLY a valid JSON object (no markdown, no commentary):
+{{
+  "risk_score": 0,
+  "risk_level": "clean",
+  "summary": "1-2 sentences an administrator reads next to the score",
+  "findings": ["specific, evidence-anchored observations; [] if there are none"]
+}}"""
+
+
+COHORT_COACHING_PROMPT = """You are advising an L&D administrator on how to coach a team after a test. Base everything on the results below.
+
+Test: {test_title} (pass mark {pass_threshold}%)
+Attempts: {attempt_count} | Passed: {pass_count} | Average score: {average_score}%
+
+Topic accuracy across everyone (worst first):
+{cohort_block}
+
+Individual results (name | score | pass/fail | weakest topics):
+{learner_block}
+
+Rules:
+- Ground every point in the numbers above. Never invent a weakness.
+- "cohort_summary" is 2-3 sentences to the administrator about how the group did.
+- "group_actions" are things to run for the whole team (a refresher, a
+  walkthrough of one topic), each specific enough to schedule.
+- "per_learner" covers only people who need attention (failed, or scored well
+  below the group). For each, "message_to_learner" is written so the admin can
+  send it to that person as-is: direct, encouraging, and specific about what to
+  study.
+- Omit anyone who did fine — a coaching list that includes everyone is noise.
+- If the whole group did well, say so, keep per_learner empty, and suggest a
+  stretch topic.
+
+Return ONLY a valid JSON object (no markdown, no commentary):
+{{
+  "cohort_summary": "string",
+  "weakest_topics": [{{"topic": "string", "accuracy": 50, "why_it_matters": "string"}}],
+  "group_actions": ["string"],
+  "per_learner": [
+    {{
+      "user_id": "string",
+      "full_name": "string",
+      "score": 50,
+      "focus": "string",
+      "message_to_learner": "string"
+    }}
+  ]
+}}"""
 
 IMPROVEMENT_PROMPT = """You are a performance coach reviewing a learner's test result. Identify concrete areas of improvement.
 
@@ -307,6 +460,146 @@ class AIService:
         prompt = PDF_QUESTIONS_PROMPT.format(text=text[:14000])
         out = await self._chat(prompt, max_tokens=8192)
         return _extract_json_array(out)
+
+    async def grade_written_answer(
+        self,
+        question: str,
+        answer: str,
+        marks: int,
+        expected_answer: str | None = None,
+        topic: str | None = None,
+    ) -> dict:
+        """
+        Mark one written answer out of `marks`.
+
+        Works with or without a reference answer: when the source document had
+        no answer key, the model marks on subject-matter correctness instead.
+        Returns {marks_awarded, correct, feedback, model_answer}; the caller
+        clamps the marks and handles failure.
+        """
+        if expected_answer:
+            reference_block = f"Reference answer (the marking guide):\n{expected_answer}\n"
+            reference_rule = (
+                "Compare against the reference answer, but accept any wording "
+                "that conveys the same substance."
+            )
+        else:
+            reference_block = (
+                "No reference answer was supplied with this exam.\n"
+            )
+            reference_rule = (
+                "No reference answer exists, so judge the answer on subject-matter "
+                "correctness using your own knowledge of the topic. Be fair but "
+                "rigorous, and say in the feedback what a correct answer needed."
+            )
+
+        prompt = GRADE_WRITTEN_PROMPT.format(
+            question=question,
+            topic=topic or "General",
+            marks=marks,
+            answer=answer[:4000],  # a long essay shouldn't blow the context
+            reference_block=reference_block,
+            reference_rule=reference_rule,
+        )
+        out = await self._chat(prompt, max_tokens=1024)
+        return _extract_json_object(out)
+
+    async def suggest_time_limits(self, questions: list[dict]) -> list[dict]:
+        """
+        Suggest a per-question time limit, in seconds.
+
+        `questions` is [{question, question_type, marks}]. Returns
+        [{index, seconds, why}] which the caller matches back by index.
+        """
+        questions_block = "\n".join(
+            f"{i} | {q.get('question_type', 'mcq')} | {q.get('marks', 1)} marks | "
+            f"{str(q.get('question', ''))[:300]}"
+            for i, q in enumerate(questions)
+        )
+        prompt = SUGGEST_TIME_LIMITS_PROMPT.format(questions_block=questions_block)
+        out = await self._chat(prompt, max_tokens=4096)
+        return _extract_json_array(out)
+
+    async def review_proctoring(
+        self,
+        timeline: str,
+        counts: dict,
+        away_seconds: int,
+        longest_away_seconds: int,
+        elapsed_seconds: int | None,
+        rules_risk_score: int,
+        rules_findings: list[str],
+        answer_profile: str,
+        telemetry_missing: bool,
+    ) -> dict:
+        """
+        Ask the model to judge one attempt's integrity from its event timeline.
+
+        Returns {risk_score, risk_level, summary, findings}. The caller clamps
+        the score against the deterministic one — this verdict is advisory, and
+        must never be the only thing standing between a learner and an
+        accusation.
+        """
+        if elapsed_seconds:
+            mins, secs = divmod(elapsed_seconds, 60)
+            elapsed_label = f"{mins}m {secs}s"
+        else:
+            elapsed_label = "unknown"
+
+        counts_label = ", ".join(
+            f"{k}={v}" for k, v in sorted(counts.items())
+        ) or "none"
+        findings_label = "\n".join(f"- {f}" for f in rules_findings) or "- nothing"
+
+        prompt = PROCTOR_REVIEW_PROMPT.format(
+            timeline=timeline,
+            counts_label=counts_label,
+            away_seconds=away_seconds,
+            longest_away_seconds=longest_away_seconds,
+            elapsed_label=elapsed_label,
+            rules_risk_score=rules_risk_score,
+            rules_findings=findings_label,
+            answer_profile=answer_profile,
+            telemetry_missing="yes" if telemetry_missing else "no",
+        )
+        out = await self._chat(prompt, max_tokens=1024)
+        return _extract_json_object(out)
+
+    async def coach_cohort(
+        self,
+        test_title: str,
+        pass_threshold: int,
+        attempts: list[dict],
+        cohort_topics: dict[str, dict],
+    ) -> dict:
+        """
+        Turn a whole test's results into coaching guidance for the admin,
+        including a ready-to-send message per learner who needs attention.
+        """
+        cohort_block = "\n".join(
+            f"- {topic}: {s['correct']}/{s['total']} correct ({s['accuracy']}%)"
+            for topic, s in sorted(cohort_topics.items(), key=lambda kv: kv[1]["accuracy"])
+        ) or "- (no topics tagged)"
+
+        learner_block = "\n".join(
+            f"- {a.get('user_id')} | {a.get('full_name') or a.get('email') or 'Unknown'} | "
+            f"{a.get('score', 0)}% | {'PASS' if a.get('passed') else 'FAIL'} | "
+            f"weak: {', '.join(a.get('weak_topics') or []) or 'none'}"
+            for a in attempts[:80]
+        ) or "- (no attempts)"
+
+        scores = [a.get("score", 0) for a in attempts]
+        prompt = COHORT_COACHING_PROMPT.format(
+            test_title=test_title,
+            pass_threshold=pass_threshold,
+            attempt_count=len(attempts),
+            pass_count=sum(1 for a in attempts if a.get("passed")),
+            average_score=round(sum(scores) / len(scores)) if scores else 0,
+            cohort_block=cohort_block,
+            learner_block=learner_block,
+        )
+        out = await self._chat(prompt, max_tokens=3072)
+        return _extract_json_object(out)
 
     async def analyze_test_performance(
         self,

@@ -126,6 +126,7 @@
         duration_minutes: test.duration_minutes,
         max_attempts: test.max_attempts,
         shuffle_questions: test.shuffle_questions,
+        proctoring_enabled: test.proctoring_enabled,
         questions,
       });
       questions = test.questions.map((q) => ({ ...q }));
@@ -196,6 +197,17 @@
       <label class="check">
         <input type="checkbox" bind:checked={test.shuffle_questions} />
         <span>Shuffle question order for each learner</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" bind:checked={test.proctoring_enabled} />
+        <span>
+          AI proctoring
+          <small>
+            Blocks copying, pasting and the right-click menu, records tab
+            switches, and gives every attempt an AI integrity verdict you can
+            review with the results.
+          </small>
+        </span>
       </label>
     </div>
 
@@ -341,8 +353,11 @@
     border-radius: 6px; padding: 0.55rem 0.75rem; font-size: 0.88rem; outline: none; font-family: inherit; width: 100%; }
   input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-  .check { flex-direction: row; align-items: center; gap: 0.55rem; }
-  .check input { width: auto; }
+  .check { flex-direction: row; align-items: flex-start; gap: 0.55rem; }
+  .check input { width: auto; margin-top: 0.15rem; }
+  /* The proctoring toggle carries an explanation, so its label stacks. */
+  .check span { display: flex; flex-direction: column; gap: 0.15rem; }
+  .check small { font-weight: 400; font-size: 0.72rem; color: var(--muted); line-height: 1.5; max-width: 46ch; }
 
   .error { color: var(--accent); font-size: 0.85rem; margin-bottom: 1rem; }
   .ok { color: var(--success); font-size: 0.85rem; margin-bottom: 1rem; }

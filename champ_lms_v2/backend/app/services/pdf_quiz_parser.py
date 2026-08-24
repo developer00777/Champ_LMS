@@ -17,7 +17,11 @@ from __future__ import annotations
 import io
 import re
 
-from app.models.test_series import TestQuestion
+from app.models.test_series import (
+    QUESTION_TYPE_MCQ,
+    QUESTION_TYPE_WRITTEN,
+    TestQuestion,
+)
 
 # --- Question stems: "1." / "1)" / "Q1." / "Q.1" / "Question 1:" -------------
 _Q_START = re.compile(
@@ -60,6 +64,28 @@ _KEY_HEADER = re.compile(
     r"^\s*(?:answer\s*key|answers?|solutions?|answer\s*sheet)\s*[:.]?\s*$", re.IGNORECASE
 )
 _KEY_PAIR = re.compile(r"(\d{1,3})\s*[).:\-=]?\s*\(?\s*([A-Ha-h])\s*\)?")
+
+
+# Phrasing that marks an option-less question as a real written-answer prompt
+# rather than a heading the numbered-stem pattern caught by mistake.
+_WRITTEN_HINT = re.compile(
+    r"\b(explain|describe|discuss|justify|elaborate|outline|summari[sz]e|"
+    r"compare|contrast|evaluate|analys[ei]|analyz[ei]|define|illustrate|"
+    r"comment on|write (?:a|an|short|briefly)|state (?:why|how)|"
+    r"in your own words|give (?:reasons|examples)|what (?:steps|would you)|"
+    r"how (?:would|does|do) you|why (?:do|does|is|are|would))\b",
+    re.IGNORECASE,
+)
+# An explicit marks/word allowance is also a strong signal of a written answer.
+_WRITTEN_ALLOWANCE = re.compile(
+    r"\(?\s*(?:in\s+)?(?:about\s+|approx(?:\.|imately)?\s+|max(?:imum)?\s+)?"
+    r"(\d{2,4})\s*words?\s*\)?", re.IGNORECASE
+)
+# A "Answer:" line with prose (not a single letter) is a model answer.
+_MODEL_ANSWER = re.compile(
+    r"^\s*(?:model\s+|expected\s+|sample\s+|correct\s+)?ans(?:wer)?\s*[:.\-]\s*(?P<text>\S.{4,})$",
+    re.IGNORECASE,
+)
 
 
 class PdfParseError(Exception):
@@ -235,6 +261,7 @@ def _flush(cur: dict) -> TestQuestion | None:
         explanation=cur["explanation"] or None,
         topic=cur["topic"] or None,
         marks=cur["marks"],
+        expected_answer=(cur.get("expected_answer") or None),
     )
 
 
@@ -257,15 +284,18 @@ def parse_questions(text: str) -> list[TestQuestion]:
     cur_num: int | None = None
     in_options = False
     numeric_options = False  # this question's options are "1)…2)…", not "A)…B)…"
+    in_answer = False  # inside a multi-line written model answer
     last_q_num = 0
 
     def start(num: int | None, stem: str) -> None:
-        nonlocal cur, cur_num, in_options, numeric_options, last_q_num
+        nonlocal cur, cur_num, in_options, numeric_options, in_answer, last_q_num
         cur = {
             "question": [stem], "options": [], "correct_index": None,
             "explanation": None, "topic": None, "marks": 1,
+            "expected_answer": None,
         }
         cur_num, in_options, numeric_options = num, False, False
+        in_answer = False
         if num is not None:
             last_q_num = num
 
@@ -320,6 +350,7 @@ def parse_questions(text: str) -> list[TestQuestion]:
         if opt:
             cur["options"].append(opt.group("text"))
             in_options = True
+            in_answer = False  # options end any model-answer run
             if opt.group(1).isdigit():
                 numeric_options = True
             continue
@@ -334,6 +365,16 @@ def parse_questions(text: str) -> list[TestQuestion]:
         if m_ans:
             cur["correct_index"] = _letter_to_index(m_ans.group(1))
             continue
+
+        # "Answer: <prose>" on a question with no lettered options is a model
+        # answer for a written question, not an MCQ key. Checked after the
+        # single-letter patterns above so "Answer: B" is still an MCQ key.
+        if not cur["options"]:
+            m_model = _MODEL_ANSWER.match(stripped)
+            if m_model:
+                cur["expected_answer"] = m_model.group("text").strip()
+                in_answer = True
+                continue
 
         m_expl = _EXPLANATION.match(stripped)
         if m_expl:
@@ -350,8 +391,10 @@ def parse_questions(text: str) -> list[TestQuestion]:
             cur["marks"] = max(1, int(m_marks.group(1)))
             continue
 
-        # Continuation line: extends the last option, or the stem.
-        if in_options and cur["options"]:
+        # Continuation line: extends the model answer, the last option, or the stem.
+        if in_answer and cur["expected_answer"]:
+            cur["expected_answer"] += " " + stripped
+        elif in_options and cur["options"]:
             cur["options"][-1] += " " + stripped
         elif cur["explanation"]:
             cur["explanation"] += " " + stripped
@@ -375,9 +418,57 @@ def parse_questions(text: str) -> list[TestQuestion]:
             if idx is not None and idx < len(q.options):
                 q.correct_index = idx
 
-    # Drop fragments with no options — almost always a heading or instructions
-    # line that tripped the numbered-stem pattern.
-    return [q for q in questions if len(q.options) >= 2]
+    return _classify(questions)
+
+
+def _looks_written(q: TestQuestion) -> bool:
+    """
+    Is this option-less question a real written-answer prompt?
+
+    Option-less stems used to be dropped wholesale as heading noise. Written
+    questions look identical structurally, so they are told apart by content:
+    an instruction verb ("explain", "describe"), a word allowance, a model
+    answer captured as the explanation, or simply enough words to be a real
+    question rather than a heading.
+    """
+    text = q.question.strip()
+    if _WRITTEN_HINT.search(text):
+        return True
+    if _WRITTEN_ALLOWANCE.search(text):
+        return True
+    if q.expected_answer:
+        return True
+    # A heading is short and rarely a question. Require either a question mark
+    # or a sentence of real length before treating it as a prompt.
+    return text.endswith("?") and len(text.split()) >= 4
+
+
+def _classify(questions: list[TestQuestion]) -> list[TestQuestion]:
+    """
+    Tag each parsed question as mcq or written, and drop leftover noise.
+
+    Anything with 2+ options is an MCQ, exactly as before. Option-less entries
+    survive only when they read like a written-answer prompt.
+    """
+    out: list[TestQuestion] = []
+    for q in questions:
+        if len(q.options) >= 2:
+            q.question_type = QUESTION_TYPE_MCQ
+            out.append(q)
+            continue
+        if _looks_written(q):
+            q.question_type = QUESTION_TYPE_WRITTEN
+            q.options = []
+            q.correct_index = None
+            m = _WRITTEN_ALLOWANCE.search(q.question)
+            if m:
+                try:
+                    q.max_words = int(m.group(1))
+                except ValueError:
+                    pass
+            out.append(q)
+        # else: a heading or instruction line — dropped, as before.
+    return out
 
 
 def parse_document(data: bytes, filename: str | None = None) -> tuple[list[TestQuestion], str]:
