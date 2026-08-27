@@ -3,6 +3,7 @@ Admin router — module/episode CRUD, video upload to Bunny Stream, analytics.
 Replaces S3 presigned upload + MediaConvert trigger from v1.
 """
 from typing import Annotated, AsyncIterator
+from datetime import datetime, timezone
 import io
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -16,7 +17,7 @@ from app.models.episode import Episode
 from app.models.progress import WatchProgress
 from app.models.enrollment import Enrollment
 from app.services.bunny_stream import bunny_stream
-from app.services.bunny_storage import bunny_storage
+from app.services.bunny_storage import THUMBNAIL_BOX, bunny_storage
 from app.services.ai_service import ai_service
 from app.services.purge_service import (
     PurgeError,
@@ -460,18 +461,37 @@ async def upload_episode_thumbnail(
     admin: Annotated[User, Depends(require_admin)],
     image: UploadFile = File(...),
 ):
-    """Upload thumbnail to Bunny Storage. Served via CDN with Optimizer (auto-WebP)."""
+    """Upload an episode thumbnail to Bunny Storage, resized on the way in.
+
+    Downscaled and re-encoded to WebP here rather than transformed per request
+    by Bunny Optimizer — see the cost note in services/bunny_storage.py.
+    """
     ep = await Episode.get(episode_id)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
 
-    filename = image.filename or "thumb.jpg"
     data = await image.read()
-    path = f"episodes/{episode_id}/{filename}"
-    await bunny_storage.upload_thumbnail(path, data, filename)
+    if not data:
+        raise HTTPException(status_code=422, detail="The uploaded image is empty")
+
+    previous = ep.thumbnail_bunny_path
+    # A stem, not a filename: upload_optimized appends the extension its
+    # encode chose. Stamped so a replacement gets a fresh URL instead of
+    # sitting behind a stale CDN cache entry.
+    stamp = int(datetime.now(timezone.utc).timestamp())
+    path = await bunny_storage.upload_optimized(
+        f"episodes/{episode_id}/thumb-{stamp}", data, THUMBNAIL_BOX
+    )
 
     ep.thumbnail_bunny_path = path
     await ep.save()
+
+    # Best-effort: a leftover old thumbnail is cosmetic, never worth failing on.
+    if previous and previous != path:
+        try:
+            await bunny_storage.delete_thumbnail(previous)
+        except Exception:  # noqa: BLE001
+            pass
 
     return {
         "thumbnail_url": bunny_storage.thumbnail_url(path),

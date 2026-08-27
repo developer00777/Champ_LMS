@@ -289,7 +289,10 @@ async def main() -> None:
     print("── Manual steps remaining ──")
     print("  1. Bunny dashboard → Stream → create a video library (if not already done)")
     print("  2. Stream library → Security → Enable Token Authentication → copy the secret")
-    print("  3. Pull Zones → champ-lms-cdn → Optimizer → Enable Image Optimization")
+    print("  3. Pull Zones → champ-lms-cdn → Optimizer → make sure Image Optimization")
+    print("     is OFF. It bills per transformed request and these URLs render on")
+    print("     nearly every page view; the backend already resizes and encodes to")
+    print("     WebP at upload time. See services/bunny_storage.py.")
     print("  4. Stream → Webhooks → set URL to <your-railway-domain>/api/webhooks/bunny-stream")
 
 

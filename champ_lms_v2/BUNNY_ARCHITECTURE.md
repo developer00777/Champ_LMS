@@ -16,7 +16,7 @@ all of that was part of an earlier v1 plan and does not apply to v2.
 | MongoDB | Railway plugin | Managed, backed up, injects `MONGO_URL` automatically. App data layer (Beanie ODM over Motor) — users, modules, episodes, progress, badges, assessments, etc. |
 | Redis | Railway plugin | Managed, injects `REDIS_URL` automatically. Leaderboard sorted sets, streak counters, a short-lived progress cache — not the source of truth for app data. |
 | Video (raw + transcoded) | Bunny Stream | Auto-transcodes to HLS, token-authenticated playback, ~8x cheaper than CloudFront. Video bytes never touch MongoDB or Redis — the DB only stores the Bunny video GUID/status pointer. |
-| Thumbnails | Bunny Storage + CDN pull zone | Cheap object storage + edge caching, image optimization via URL params |
+| Thumbnails | Bunny Storage + CDN pull zone | Cheap object storage + edge caching. Images are resized/WebP-encoded by the backend at upload time — **Bunny Optimizer is off**, see §3 below |
 
 No custom domain is purchased or required anywhere in this setup. Railway's
 `*.up.railway.app` subdomain and Bunny's `*.b-cdn.net` subdomains both come
@@ -75,7 +75,15 @@ reintroduce them without a deliberate decision to change the architecture:
 ### 3. Bunny CDN Pull Zone
 - Pulls from the `champ-lms-thumbs` storage zone
 - Free `*.b-cdn.net` hostname (no custom domain)
-- Bunny Optimizer for on-the-fly WebP conversion / resizing (`?width=&height=`)
+- **Bunny Optimizer: OFF, deliberately.** It bills per transformed request, and
+  these thumbnail/avatar URLs render in the nav, leaderboard, kudos feed and
+  every module card — so it was charging on effectively every page view
+  ($8.10/mo, against <$0.01 for CDN + Storage combined). The backend now
+  resizes and encodes to WebP **once, at upload time**
+  (`backend/app/services/bunny_storage.py`), so stored objects are already the
+  exact bytes the browser should get and are served with no query params —
+  plain CDN egress plus a better edge cache hit rate. Do not re-enable it, and
+  do not reintroduce `?width=`/`&format=webp` on these URLs.
 - Optional edge rule: block mobile User-Agents (thumbnails are desktop-only)
 
 ### 4. Bunny Token Auth

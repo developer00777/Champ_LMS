@@ -24,7 +24,7 @@ from app.models.content_access import ContentAccessRule
 from app.models.module import Module
 from app.models.user import User
 from app.services import content_access
-from app.services.bunny_storage import bunny_storage
+from app.services.bunny_storage import AVATAR_BOX, bunny_storage
 
 router = APIRouter(tags=["employees"])
 
@@ -695,11 +695,15 @@ async def upload_own_avatar(
         )
 
     stamp = int(datetime.now(timezone.utc).timestamp())
-    path = f"avatars/{user.id}/{stamp}{ext}"
     previous = user.avatar_bunny_path
 
+    # Resized and re-encoded here, once, rather than per request via Bunny
+    # Optimizer — see the cost note in services/bunny_storage.py. The final
+    # extension comes from the encode, so the path is built without `ext`.
     try:
-        await bunny_storage.upload_thumbnail(path, data, f"avatar{ext}")
+        path = await bunny_storage.upload_optimized(
+            f"avatars/{user.id}/{stamp}", data, AVATAR_BOX
+        )
     except Exception as exc:  # noqa: BLE001 - surface a usable message
         raise HTTPException(
             status_code=502, detail=f"Could not upload the image: {exc}"

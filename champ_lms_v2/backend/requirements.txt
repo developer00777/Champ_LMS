@@ -25,3 +25,7 @@ pypdf==5.1.0
 python-docx==1.2.0
 # Excel master-tracker parsing for bulk employee upload (pure Python)
 openpyxl==3.1.5
+
+# Image resize/WebP encode at upload time, so Bunny Optimizer (billed per
+# request) is not needed to serve correctly-sized thumbnails and avatars.
+Pillow==10.4.0
