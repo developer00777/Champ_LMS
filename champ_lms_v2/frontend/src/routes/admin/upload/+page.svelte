@@ -21,7 +21,7 @@
   let uploadMode: 'direct' | 'url' = 'direct'; // direct = file upload, url = external URL
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
-  const MAX_DIRECT_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB limit for direct upload
+  const MAX_DIRECT_UPLOAD_SIZE = 1024 * 1024 * 1024; // 1GB limit for direct upload
 
   function pickedFile(e: Event): File | null {
     return (e.target as HTMLInputElement).files?.[0] ?? null;
@@ -223,7 +223,7 @@
       </div>
 
       {#if uploadMode === 'direct'}
-        <p class="info">Direct file upload. Max: {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}. For larger files, use External URL.</p>
+        <p class="info">Direct file upload, up to {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}. Uploads go straight to Bunny Stream in resumable chunks, so large files are fine. For anything bigger, use External URL.</p>
         <label>Video File *
           <input type="file" accept="video/*" on:change={handleVideoFileChange} />
           {#if videoFile}
@@ -234,7 +234,7 @@
         {#if videoFile && videoFile.size > MAX_DIRECT_UPLOAD_SIZE}
           <div class="warning-card">
             <strong>⚠️ File too large</strong>
-            <p>This file is {formatBytes(videoFile.size)}. Please switch to <strong>External URL</strong> mode and upload to a temporary file host first.</p>
+            <p>This file is {formatBytes(videoFile.size)}, over the {formatBytes(MAX_DIRECT_UPLOAD_SIZE)} direct-upload limit. Switch to <strong>External URL</strong> mode and give Bunny a link to pull from instead.</p>
           </div>
         {/if}
 
@@ -257,17 +257,12 @@
         </button>
 
       {:else}
-        <p class="info">For files larger than {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}, use a temporary file host:</p>
-        <ul class="host-list">
-          <li><a href="https://file.io" target="_blank">file.io</a> — upload file, paste URL here</li>
-          <li><a href="https://transfer.sh" target="_blank">transfer.sh</a> — command line: <code>curl --upload-file vid.mp4 https://transfer.sh/vid.mp4</code></li>
-          <li><a href="https://tmp.link" target="_blank">tmp.link</a> — upload and get direct URL</li>
-        </ul>
+        <p class="info">Point Bunny Stream at a video that already lives somewhere public — S3, Drive direct link, another CDN. Use this for files over {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}, or when you already have a hosted copy.</p>
         
         <label>Video URL *
           <input 
             bind:value={externalVideoUrl} 
-            placeholder="https://file.io/xxxxx or https://transfer.sh/xxxxx/vid.mp4" 
+            placeholder="https://example.com/videos/session.mp4" 
           />
         </label>
         <p class="hint">Bunny Stream will download directly from this URL. Make sure the link is public and doesn't expire immediately.</p>
@@ -369,21 +364,6 @@
   }
   .warning-card strong { display: block; margin-bottom: 0.5rem; }
   .warning-card p { margin: 0; font-size: 0.85rem; }
-  
-  .host-list {
-    margin: 0;
-    padding-left: 1.2rem;
-    font-size: 0.85rem;
-    color: var(--muted);
-  }
-  .host-list li { margin-bottom: 0.4rem; }
-  .host-list a { color: var(--accent); }
-  .host-list code {
-    background: var(--surface2);
-    padding: 0.1rem 0.3rem;
-    border-radius: 3px;
-    font-size: 0.75rem;
-  }
   
   .divider-line {
     border: none;

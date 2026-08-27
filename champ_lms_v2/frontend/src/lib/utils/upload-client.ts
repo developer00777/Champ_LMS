@@ -242,8 +242,11 @@ function uploadViaServer(options: {
     xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
     xhr.addEventListener('timeout', () => reject(new Error('Server upload timed out')));
 
-    // Set timeout for large files (10 minutes)
-    xhr.timeout = 10 * 60 * 1000;
+    // No fixed deadline: this fallback relays files up to 1GB, which can
+    // outlast any wall-clock cap on a slow connection. The upload/error/abort
+    // handlers still settle the promise, and a stalled socket surfaces as an
+    // 'error' event, so dropping the timeout doesn't leak a pending promise.
+    xhr.timeout = 0;
     
     xhr.open('POST', `/api/admin/episodes/${episodeId}/upload`);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);

@@ -5,7 +5,7 @@
   import { uploadVideoHybrid, uploadThumbnail } from '$lib/utils/upload-client';
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
-  const MAX_DIRECT_UPLOAD_SIZE = 50 * 1024 * 1024;
+  const MAX_DIRECT_UPLOAD_SIZE = 1024 * 1024 * 1024;
   const id = $page.params.id;
 
   let mod: AdminModuleDetail | null = null;
@@ -290,7 +290,7 @@
         </div>
 
         {#if addMode === 'file'}
-          <p class="info">Direct upload, max {formatBytes(MAX_DIRECT_UPLOAD_SIZE)}. Larger files go through External URL.</p>
+          <p class="info">Direct upload, up to {formatBytes(MAX_DIRECT_UPLOAD_SIZE)} — sent to Bunny in resumable chunks. Larger files go through External URL.</p>
           <label>Video file *
             <input type="file" accept="video/*" on:change={pickVideo} />
             {#if videoFile}<span class="file-info">{videoFile.name} ({formatBytes(videoFile.size)})</span>{/if}

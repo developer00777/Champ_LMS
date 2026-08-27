@@ -12,10 +12,15 @@ export const handle: Handle = async ({ event, resolve }) => {
     const headers = new Headers(event.request.headers);
     headers.delete('host');
 
+    // Forward the body as a stream rather than buffering it. The video
+    // server-relay fallback carries files up to 1GB; an arrayBuffer() here
+    // would hold the whole upload in the Node process's heap at once.
+    const hasBody = !['GET', 'HEAD'].includes(event.request.method);
+
     const res = await fetch(target, {
       method: event.request.method,
       headers,
-      body: ['GET', 'HEAD'].includes(event.request.method) ? undefined : await event.request.arrayBuffer(),
+      body: hasBody ? event.request.body : undefined,
       // @ts-expect-error - Node fetch requires duplex for streamed bodies
       duplex: 'half',
     });
