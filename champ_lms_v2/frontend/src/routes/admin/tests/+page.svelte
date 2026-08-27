@@ -79,15 +79,29 @@
                 {#if t.duration_minutes}<span class="chip">{t.duration_minutes} min</span>{/if}
               </div>
             </div>
-            <span class="status" class:live={t.is_published}>
-              {t.is_published ? 'Published' : 'Draft'}
-            </span>
+            <div class="badges">
+              <span class="status" class:live={t.is_live}>
+                {t.is_published ? 'Published' : 'Draft'}
+              </span>
+              <span class="status appr {t.approval_status}">
+                {t.approval_status === 'approved' ? 'Approved'
+                  : t.approval_status === 'rejected' ? 'Rejected' : 'Awaiting approval'}
+              </span>
+            </div>
           </div>
 
           {#if !t.is_ready}
             <p class="warn">
               {t.unscorable_count} question{t.unscorable_count === 1 ? '' : 's'} missing a correct
               answer — fix before publishing.
+            </p>
+          {/if}
+          {#if t.approval_status !== 'approved'}
+            <p class="warn">
+              {t.approval_status === 'rejected'
+                ? 'Rejected — nobody can take this test until it is fixed and approved again.'
+                : 'Awaiting approval — nobody can take this test until an admin approves it.'}
+              {#if t.approval_note}<br />{t.approval_note}{/if}
             </p>
           {/if}
 
@@ -100,8 +114,15 @@
           <div class="actions">
             <a href="/admin/tests/{t.id}" class="btn">Review / Edit</a>
             <a href="/admin/tests/{t.id}/results" class="btn">Results</a>
-            <button class="btn" disabled={busy === t.id || (!t.is_ready && !t.is_published)}
-                    on:click={() => togglePublish(t)}>
+            <button
+              class="btn"
+              disabled={busy === t.id
+                || (!t.is_published && (!t.is_ready || t.approval_status !== 'approved'))}
+              title={!t.is_published && t.approval_status !== 'approved'
+                ? 'This test must be approved before it can be published'
+                : ''}
+              on:click={() => togglePublish(t)}
+            >
               {t.is_published ? 'Unpublish' : 'Publish'}
             </button>
             <button class="btn danger" disabled={busy === t.id} on:click={() => remove(t)}>
@@ -131,6 +152,10 @@
   .status { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
             color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.6rem; white-space: nowrap; }
   .status.live { color: var(--success); border-color: var(--success); }
+  .badges { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
+  .status.appr.approved { color: var(--success); border-color: var(--success); }
+  .status.appr.pending { color: #ffc107; border-color: #ffc107; }
+  .status.appr.rejected { color: var(--danger, #ff5470); border-color: var(--danger, #ff5470); }
   .warn { margin-top: 0.75rem; font-size: 0.8rem; color: #ffc107; background: rgba(255,193,7,0.1);
           border: 1px solid rgba(255,193,7,0.35); border-radius: 6px; padding: 0.5rem 0.7rem; }
 

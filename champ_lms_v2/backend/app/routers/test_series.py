@@ -20,9 +20,13 @@ from pydantic import BaseModel, Field
 from app.core.auth import get_current_user, require_admin
 from app.core.redis import get_redis
 from app.models.test_series import (
+    APPROVAL_APPROVED,
+    APPROVAL_PENDING,
+    APPROVAL_REJECTED,
     QUESTION_TYPE_MCQ,
     QUESTION_TYPE_WRITTEN,
     QUESTION_TYPES,
+    AttemptGrant,
     TestAttempt,
     TestQuestion,
     TestSeries,
@@ -32,6 +36,7 @@ from app.services.ai_service import ai_service, fallback_analysis
 from app.services.bunny_storage import bunny_storage
 from app.services.gamification_service import GamificationService
 from app.services.proctor_service import build_report as build_proctor_report
+from app.services.test_approval import attempt_allowance, attempt_status
 from app.services.pdf_quiz_parser import (
     SUPPORTED_EXTENSIONS,
     PdfParseError,
@@ -144,6 +149,14 @@ def _admin_view(t: TestSeries) -> dict:
         "shuffle_questions": t.shuffle_questions,
         "proctoring_enabled": t.proctoring_enabled,
         "is_published": t.is_published,
+        "approval_status": t.approval_status,
+        "approved_by": t.approved_by,
+        "approved_at": t.approved_at,
+        "approval_note": t.approval_note,
+        "submitted_for_approval_at": t.submitted_for_approval_at,
+        # * the one flag the admin UI should trust for "are learners sitting
+        # * this right now" — published alone is not enough
+        "is_live": t.is_live,
         "is_ready": t.is_ready,
         "unscorable_count": t.unscorable_count,
         "total_marks": t.total_marks,
@@ -330,6 +343,45 @@ def _normalize_question(text: str) -> str:
     before comparing — this only drives a warning, never an automatic deletion.
     """
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _require_live(test: TestSeries) -> None:
+    """
+    Refuse the request unless a learner is allowed to sit this test.
+
+    Publication and approval fail with different messages on purpose: "not yet
+    approved" tells an employee the paper exists and is waiting on someone,
+    which is true and saves a support ticket, while still handing back nothing
+    about its contents.
+    """
+    if not test.is_published:
+        raise HTTPException(status_code=403, detail="This test is not published")
+    if not test.is_approved:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This test is awaiting admin approval and cannot be taken yet."
+                if test.approval_status == APPROVAL_PENDING
+                else "This test was not approved and is not available."
+            ),
+        )
+
+
+def _exhausted_message(status: dict) -> str:
+    """
+    Explain a spent allowance, naming the granted attempts when there were any.
+
+    Someone who was given an extra attempt and used it should be told their
+    total was 3, not the test's nominal 2 — otherwise the message contradicts
+    what they were told when the grant was made.
+    """
+    allowed = status["allowed"]
+    if status["granted_extra"]:
+        return (
+            f"You have used all {allowed} attempts for this test "
+            f"(including {status['granted_extra']} granted by an admin)."
+        )
+    return f"You have used all {allowed} attempts for this test."
 
 
 async def _get_test_or_404(test_id: str) -> TestSeries:
@@ -537,6 +589,11 @@ async def list_test_series_admin(admin: Annotated[User, Depends(require_admin)])
             "category": t.category,
             "department": t.department,
             "is_published": t.is_published,
+            "approval_status": t.approval_status,
+            "approval_note": t.approval_note,
+            "approved_at": t.approved_at,
+            "submitted_for_approval_at": t.submitted_for_approval_at,
+            "is_live": t.is_live,
             "is_ready": t.is_ready,
             "unscorable_count": t.unscorable_count,
             "total_questions": len(t.questions),
@@ -579,9 +636,26 @@ async def update_test_series(
         if field in data:
             setattr(test, field, data[field])
 
+    # An approval covers the test the approver actually read. Changing the
+    # questions — or the rules the score depends on — makes it a different test,
+    # so approval is withdrawn and it must be reviewed again. Cosmetic edits
+    # (title, description, category) are left alone: forcing a re-review for a
+    # typo fix would just teach admins to rubber-stamp.
+    MATERIAL = {
+        "questions", "pass_threshold", "duration_minutes", "max_attempts",
+        "shuffle_questions", "proctoring_enabled", "department",
+    }
+    changed = MATERIAL & set(data.keys())
+    revoked = False
+    if changed:
+        revoked = test.revoke_approval(
+            "Approval withdrawn automatically: "
+            f"{', '.join(sorted(changed))} changed after it was approved."
+        )
+
     test.updated_at = datetime.now(timezone.utc)
     await test.save()
-    return _admin_view(test)
+    return {**_admin_view(test), "approval_revoked_by_this_change": revoked}
 
 
 @router.post("/admin/test-series/{test_id}/questions", status_code=201)
@@ -632,6 +706,12 @@ async def append_questions(
         test.is_published = False
         unpublished = True
 
+    # New questions were never seen by the approver, so the approval no longer
+    # covers what learners would sit.
+    revoked = test.revoke_approval(
+        f"Approval withdrawn automatically: {added} question(s) added after approval."
+    )
+
     test.updated_at = datetime.now(timezone.utc)
     await test.save()
 
@@ -640,6 +720,7 @@ async def append_questions(
         **_admin_view(test),
         "added": added,
         "unpublished_by_this_change": unpublished,
+        "approval_revoked_by_this_change": revoked,
         "existing_attempts": attempts,
         "notice": (
             f"{attempts} learner(s) already took the earlier version — their scores "
@@ -663,9 +744,12 @@ async def delete_question(
     test.questions = remaining
     if test.is_published and not test.is_ready:
         test.is_published = False
+    revoked = test.revoke_approval(
+        "Approval withdrawn automatically: a question was removed after approval."
+    )
     test.updated_at = datetime.now(timezone.utc)
     await test.save()
-    return _admin_view(test)
+    return {**_admin_view(test), "approval_revoked_by_this_change": revoked}
 
 
 @router.post("/admin/test-series/{test_id}/parse-pdf")
@@ -800,7 +884,14 @@ async def suggest_time_limits(
             q.time_limit_source = "ai"
             applied += 1
 
+    revoked = False
     if body.apply and applied:
+        # Per-question time limits change how hard the paper is, so applying
+        # them to an approved test needs the approval taken back.
+        revoked = test.revoke_approval(
+            "Approval withdrawn automatically: per-question time limits changed "
+            "after approval."
+        )
         test.updated_at = datetime.now(timezone.utc)
         await test.save()
 
@@ -808,6 +899,7 @@ async def suggest_time_limits(
         "suggestions": suggestions,
         "applied": bool(body.apply and applied),
         "applied_count": applied if body.apply else 0,
+        "approval_revoked_by_this_change": revoked,
     }
 
 
@@ -826,9 +918,178 @@ async def publish_test_series(
                 "answer set." if test.questions else "Cannot publish a test with no questions."
             ),
         )
+    # The gate. Publishing an unapproved test is refused outright rather than
+    # allowed-but-hidden: an admin who flips publish and sees it succeed will
+    # believe their people can sit the test, and finding out otherwise from a
+    # learner is worse than being told no here.
+    if publish and not test.is_approved:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This test needs admin approval before it can be published. "
+                "Submit it for approval first."
+                if test.approval_status == APPROVAL_PENDING
+                else "This test was rejected and cannot be published until it is "
+                     "resubmitted and approved."
+            ),
+        )
     test.is_published = publish
+    test.updated_at = datetime.now(timezone.utc)
     await test.save()
-    return {"id": test.id, "is_published": test.is_published}
+    return {
+        "id": test.id,
+        "is_published": test.is_published,
+        "approval_status": test.approval_status,
+        "is_live": test.is_live,
+    }
+
+
+# ==========================================================================
+# ADMIN — approval gate
+# ==========================================================================
+class ApprovalIn(BaseModel):
+    # Free-text note the author sees. Required on a rejection (a rejection with
+    # no reason is not actionable), optional on an approval.
+    note: str | None = None
+
+
+@router.post("/admin/test-series/{test_id}/submit-for-approval")
+async def submit_for_approval(
+    test_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Put a test into the approval queue.
+
+    Refuses an unready test: sending a paper with unscorable questions to a
+    reviewer wastes their time, and the check already exists for publishing.
+    """
+    test = await _get_test_or_404(test_id)
+    if not test.is_ready:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Cannot submit for approval: {test.unscorable_count} question(s) "
+                "have no correct answer set."
+                if test.questions
+                else "Cannot submit a test with no questions."
+            ),
+        )
+    if test.is_approved:
+        raise HTTPException(status_code=409, detail="This test is already approved.")
+
+    test.approval_status = APPROVAL_PENDING
+    # Clear a previous rejection note — the author has acted on it, and leaving
+    # it would show the reviewer stale feedback about a version that is gone.
+    test.approval_note = None
+    test.submitted_for_approval_at = datetime.now(timezone.utc)
+    test.updated_at = datetime.now(timezone.utc)
+    await test.save()
+    return _admin_view(test)
+
+
+@router.post("/admin/test-series/{test_id}/approve")
+async def approve_test_series(
+    test_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+    body: ApprovalIn | None = None,
+):
+    """
+    Approve a test so learners may sit it.
+
+    Approval and publication are separate: approving does not publish. An admin
+    who approves an unpublished test is saying "this content is cleared", and
+    the author still decides when it goes out.
+    """
+    test = await _get_test_or_404(test_id)
+    if not test.is_ready:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Cannot approve: {test.unscorable_count} question(s) have no "
+                "correct answer set."
+                if test.questions
+                else "Cannot approve a test with no questions."
+            ),
+        )
+
+    test.approval_status = APPROVAL_APPROVED
+    test.approved_by = admin.id
+    test.approved_at = datetime.now(timezone.utc)
+    test.approval_note = (body.note if body else None) or None
+    test.updated_at = datetime.now(timezone.utc)
+    await test.save()
+    return _admin_view(test)
+
+
+@router.post("/admin/test-series/{test_id}/reject")
+async def reject_test_series(
+    test_id: str,
+    body: ApprovalIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Refuse a test, or withdraw an approval already given.
+
+    Rejecting a live test also unpublishes it. Leaving it published would mean
+    a test that the learner list hides but that still claims to be published —
+    two flags telling different stories about the same paper.
+    """
+    note = (body.note or "").strip()
+    if not note:
+        raise HTTPException(
+            status_code=422, detail="A reason is required when rejecting a test."
+        )
+
+    test = await _get_test_or_404(test_id)
+    test.approval_status = APPROVAL_REJECTED
+    test.approved_by = None
+    test.approved_at = None
+    test.approval_note = note
+    test.submitted_for_approval_at = None
+    was_published = test.is_published
+    test.is_published = False
+    test.updated_at = datetime.now(timezone.utc)
+    await test.save()
+    return {**_admin_view(test), "unpublished_by_this_change": was_published}
+
+
+@router.get("/admin/test-series-pending-approval")
+async def list_pending_approval(admin: Annotated[User, Depends(require_admin)]):
+    """
+    The approval queue: everything waiting on a decision, oldest request first.
+
+    A separate endpoint rather than a filter on the main list so the admin
+    dashboard can show a count without pulling every test in the system.
+    """
+    tests = await TestSeries.find(
+        TestSeries.approval_status == APPROVAL_PENDING
+    ).to_list()
+    # Requested tests first and oldest-requested at the top; drafts nobody has
+    # submitted sort last, since they are not actually waiting on the approver.
+    tests.sort(
+        key=lambda t: (
+            t.submitted_for_approval_at is None,
+            t.submitted_for_approval_at or t.created_at,
+        )
+    )
+    return [
+        {
+            "id": t.id,
+            "title": t.title,
+            "category": t.category,
+            "department": t.department,
+            "total_questions": len(t.questions),
+            "is_ready": t.is_ready,
+            "is_published": t.is_published,
+            "unscorable_count": t.unscorable_count,
+            "created_by": t.created_by,
+            "created_at": t.created_at,
+            "submitted_for_approval_at": t.submitted_for_approval_at,
+            "awaiting_review": t.submitted_for_approval_at is not None,
+        }
+        for t in tests
+    ]
 
 
 @router.delete("/admin/test-series/{test_id}")
@@ -836,6 +1097,9 @@ async def delete_test_series(
     test_id: str, admin: Annotated[User, Depends(require_admin)]
 ):
     test = await _get_test_or_404(test_id)
+    # Grants belong to the test; leaving them behind would orphan rows that
+    # come back to life if a new test ever reused the id.
+    await AttemptGrant.find(AttemptGrant.test_id == test.id).delete()
     await test.delete()
     return {"deleted": test_id}
 
@@ -858,6 +1122,33 @@ async def test_results(
         u.id: u for u in await User.find(In(User.id, user_ids)).to_list()
     } if user_ids else {}
 
+    # Grants are loaded once for the whole test rather than per row: the results
+    # page renders every attempt, and a per-row lookup would be one query per
+    # attempt to answer a question about the person.
+    grants = await AttemptGrant.find(AttemptGrant.test_id == test_id).sort(
+        -AttemptGrant.granted_at
+    ).to_list()
+    granted_by_user: dict[str, int] = {}
+    for g in grants:
+        granted_by_user[g.user_id] = granted_by_user.get(g.user_id, 0) + g.extra_attempts
+
+    attempts_by_user: dict[str, int] = {}
+    for a in attempts:
+        attempts_by_user[a.user_id] = attempts_by_user.get(a.user_id, 0) + 1
+
+    def _person_attempts(user_id: str) -> dict:
+        """This person's attempt position, so the admin knows whether to grant."""
+        used = attempts_by_user.get(user_id, 0)
+        extra = granted_by_user.get(user_id, 0)
+        allowed = None if test.max_attempts is None else test.max_attempts + extra
+        return {
+            "attempts_used": used,
+            "extra_attempts_granted": extra,
+            "attempts_allowed": allowed,
+            "attempts_left": None if allowed is None else max(0, allowed - used),
+            "attempts_exhausted": allowed is not None and used >= allowed,
+        }
+
     rows = []
     for a in attempts:
         u = users.get(a.user_id)
@@ -876,6 +1167,9 @@ async def test_results(
             "total_questions": a.total_questions,
             "passed": a.passed,
             "submitted_at": a.submitted_at,
+            # * per-person attempt position, repeated on each of their rows so
+            # * the UI can offer "grant another attempt" from any row
+            **_person_attempts(a.user_id),
             "breakdown": a.breakdown,
             "topic_stats": _topic_stats(a.breakdown),
             "has_ai_analysis": a.ai_analysis is not None,
@@ -906,8 +1200,140 @@ async def test_results(
         "pass_rate": round(sum(1 for a in attempts if a.passed) / len(attempts) * 100)
         if attempts else None,
         "cohort_topic_stats": cohort,
+        "max_attempts": test.max_attempts,
         "attempts": rows,
+        # * the audit trail behind any raised allowance on this test
+        "grants": [
+            {
+                "grant_id": g.id,
+                "user_id": g.user_id,
+                "full_name": (
+                    users[g.user_id].full_name if g.user_id in users else None
+                ),
+                "extra_attempts": g.extra_attempts,
+                "reason": g.reason,
+                "granted_by": g.granted_by,
+                "granted_at": g.granted_at,
+            }
+            for g in grants
+        ],
     }
+
+
+# ==========================================================================
+# ADMIN — extra attempt grants
+# ==========================================================================
+class GrantAttemptsIn(BaseModel):
+    user_id: str
+    # How many extra attempts to add. Capped low deliberately: handing someone
+    # 500 retakes is almost always a typo, and an admin who genuinely wants the
+    # test uncapped for everyone should clear max_attempts instead.
+    extra_attempts: int = Field(default=1, ge=1, le=20)
+    reason: str | None = None
+
+
+@router.post("/admin/test-series/{test_id}/grants", status_code=201)
+async def grant_extra_attempts(
+    test_id: str,
+    body: GrantAttemptsIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Give one person extra attempts on one test.
+
+    Additive: granting twice gives two extra attempts, which is what an admin
+    means when they click the button a second time after the learner burned the
+    first grant. Refused on an uncapped test — there is nothing to extend, and
+    storing the row would imply a limit that does not exist.
+    """
+    test = await _get_test_or_404(test_id)
+    if test.max_attempts is None:
+        raise HTTPException(
+            status_code=422,
+            detail="This test has unlimited attempts — there is nothing to grant.",
+        )
+
+    target = await User.get(body.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    grant = AttemptGrant(
+        test_id=test.id,
+        user_id=target.id,
+        extra_attempts=body.extra_attempts,
+        reason=(body.reason or "").strip() or None,
+        granted_by=admin.id,
+    )
+    await grant.insert()
+
+    status = await attempt_status(test, target.id)
+    return {
+        "grant_id": grant.id,
+        "test_id": test.id,
+        "user_id": target.id,
+        "full_name": target.full_name,
+        "extra_attempts": grant.extra_attempts,
+        "reason": grant.reason,
+        "granted_at": grant.granted_at,
+        **status,
+    }
+
+
+@router.get("/admin/test-series/{test_id}/grants")
+async def list_extra_attempt_grants(
+    test_id: str, admin: Annotated[User, Depends(require_admin)]
+):
+    """Every grant issued on this test, newest first, with names resolved."""
+    test = await _get_test_or_404(test_id)
+    grants = await AttemptGrant.find(AttemptGrant.test_id == test.id).sort(
+        -AttemptGrant.granted_at
+    ).to_list()
+
+    ids = list({g.user_id for g in grants} | {g.granted_by for g in grants})
+    users = {u.id: u for u in await User.find(In(User.id, ids)).to_list()} if ids else {}
+
+    return [
+        {
+            "grant_id": g.id,
+            "user_id": g.user_id,
+            "full_name": (users[g.user_id].full_name if g.user_id in users else None),
+            "employee_code": (
+                users[g.user_id].employee_code if g.user_id in users else None
+            ),
+            "extra_attempts": g.extra_attempts,
+            "reason": g.reason,
+            "granted_by": g.granted_by,
+            "granted_by_name": (
+                users[g.granted_by].full_name if g.granted_by in users else None
+            ),
+            "granted_at": g.granted_at,
+        }
+        for g in grants
+    ]
+
+
+@router.delete("/admin/test-series/{test_id}/grants/{grant_id}")
+async def revoke_extra_attempt_grant(
+    test_id: str,
+    grant_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Withdraw a grant issued by mistake.
+
+    Only removes the unused allowance — attempts the learner already sat stay
+    on their record. Deleting a grant they have spent lowers their ceiling
+    below what they used, which the take/submit checks read simply as "out of
+    attempts"; it never invalidates a score.
+    """
+    grant = await AttemptGrant.get(grant_id)
+    if not grant or grant.test_id != test_id:
+        raise HTTPException(status_code=404, detail="Grant not found on this test")
+    user_id = grant.user_id
+    await grant.delete()
+
+    test = await _get_test_or_404(test_id)
+    return {"revoked": grant_id, **await attempt_status(test, user_id)}
 
 
 @router.post("/admin/test-series/{test_id}/coach")
@@ -1005,8 +1431,16 @@ async def analyze_attempt_admin(
 # ==========================================================================
 @router.get("/test-series")
 async def list_tests(user: Annotated[User, Depends(get_current_user)]):
-    """Published tests visible to this user, with their own attempt history."""
-    tests = await TestSeries.find(TestSeries.is_published == True).to_list()  # noqa: E712
+    """
+    Tests this user may actually sit, with their own attempt history.
+
+    Filtered on approval as well as publication: an unapproved test must not
+    appear at all, or a learner would see a paper they cannot open.
+    """
+    tests = await TestSeries.find(
+        TestSeries.is_published == True,  # noqa: E712
+        TestSeries.approval_status == APPROVAL_APPROVED,
+    ).to_list()
     out = []
     for t in tests:
         if t.department and user.department and t.department != user.department:
@@ -1015,9 +1449,11 @@ async def list_tests(user: Annotated[User, Depends(get_current_user)]):
             TestAttempt.test_id == t.id, TestAttempt.user_id == user.id
         ).to_list()
         best = max((a.score for a in mine), default=None)
-        attempts_left = (
-            None if t.max_attempts is None else max(0, t.max_attempts - len(mine))
-        )
+        # Allowance includes any extra attempts an admin granted this person,
+        # so someone who was given a retake sees it offered here rather than
+        # being told they are out of attempts right up until they click in.
+        allowed = await attempt_allowance(t, user.id)
+        attempts_left = None if allowed is None else max(0, allowed - len(mine))
         out.append({
             "id": t.id,
             "title": t.title,
@@ -1029,6 +1465,12 @@ async def list_tests(user: Annotated[User, Depends(get_current_user)]):
             "pass_threshold": t.pass_threshold,
             "duration_minutes": t.duration_minutes,
             "max_attempts": t.max_attempts,
+            # What this person is actually allowed, cap plus grants. The UI
+            # shows this rather than max_attempts so a granted retake is visible.
+            "attempts_allowed": allowed,
+            "extra_attempts_granted": (
+                0 if allowed is None else allowed - (t.max_attempts or 0)
+            ),
             "my_attempts": len(mine),
             "attempts_left": attempts_left,
             "my_best_score": best,
@@ -1043,19 +1485,14 @@ async def take_test(
 ):
     """The questionnaire, with correct answers stripped out."""
     test = await _get_test_or_404(test_id)
-    if not test.is_published:
-        raise HTTPException(status_code=403, detail="This test is not published")
+    _require_live(test)
     if test.department and user.department and test.department != user.department:
         raise HTTPException(status_code=403, detail="This test is not available to you")
 
-    used = await TestAttempt.find(
-        TestAttempt.test_id == test_id, TestAttempt.user_id == user.id
-    ).count()
-    if test.max_attempts is not None and used >= test.max_attempts:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You have used all {test.max_attempts} attempts for this test.",
-        )
+    status = await attempt_status(test, user.id)
+    if status["exhausted"]:
+        raise HTTPException(status_code=403, detail=_exhausted_message(status))
+    used = status["used"]
 
     questions = [q for q in test.questions if q.scorable]
     if test.shuffle_questions:
@@ -1072,6 +1509,11 @@ async def take_test(
         "total_marks": sum(q.marks for q in questions),
         "attempt_number": used + 1,
         "max_attempts": test.max_attempts,
+        # The real ceiling for this person: the test cap plus any attempts an
+        # admin granted them. The paper header shows "Attempt 3 of 3", so it
+        # must be the granted number, not the test's nominal cap.
+        "attempts_allowed": status["allowed"],
+        "extra_attempts_granted": status["granted_extra"],
         # * when true the client blocks copy/paste/context menu and reports
         # * integrity events with the submission
         "proctoring_enabled": test.proctoring_enabled,
@@ -1108,17 +1550,16 @@ async def submit_test(
 ):
     """Score the submission, persist it, and return the reviewable result."""
     test = await _get_test_or_404(test_id)
-    if not test.is_published:
-        raise HTTPException(status_code=403, detail="This test is not published")
+    # Re-checked here, not just in /take: the gate is only real if the endpoint
+    # that creates the attempt enforces it. A paper opened while the test was
+    # live must not score after approval is withdrawn mid-exam.
+    _require_live(test)
+    if test.department and user.department and test.department != user.department:
+        raise HTTPException(status_code=403, detail="This test is not available to you")
 
-    used = await TestAttempt.find(
-        TestAttempt.test_id == test_id, TestAttempt.user_id == user.id
-    ).count()
-    if test.max_attempts is not None and used >= test.max_attempts:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You have used all {test.max_attempts} attempts for this test.",
-        )
+    status = await attempt_status(test, user.id)
+    if status["exhausted"]:
+        raise HTTPException(status_code=403, detail=_exhausted_message(status))
 
     scorable = [q for q in test.questions if q.scorable]
     if not scorable:

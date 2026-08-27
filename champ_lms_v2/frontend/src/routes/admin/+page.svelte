@@ -1,13 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type AnalyticsData } from '$lib/api/client';
+  import { api, type AnalyticsData, type PendingApprovalRow } from '$lib/api/client';
 
   let analytics: AnalyticsData | null = null;
   let loading = true;
+  // Tests waiting on an approval decision. Surfaced here because nobody can sit
+  // a test until someone acts on it, so a queue nobody sees is a stalled test.
+  let pending: PendingApprovalRow[] = [];
 
   onMount(async () => {
     try { analytics = await api.analytics(); }
     finally { loading = false; }
+    try { pending = (await api.pendingApprovalTests()).filter((t) => t.awaiting_review); }
+    catch { /* non-critical: the queue also lives on the Test Series page */ }
   });
 </script>
 
@@ -64,6 +69,11 @@
       <div class="icon">📝</div>
       <h3>Test Series</h3>
       <p>Turn a Q&amp;A PDF or Word doc into a scored test with AI improvement insights</p>
+      {#if pending.length > 0}
+        <span class="pending-badge">
+          {pending.length} awaiting approval
+        </span>
+      {/if}
     </a>
     <a href="/admin/daily" class="link-card">
       <div class="icon">🔥</div>
@@ -106,4 +116,7 @@
   h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.4rem; }
   p { font-size: 0.83rem; color: var(--muted); line-height: 1.4; }
   .loading { color: var(--muted); padding: 3rem; text-align: center; }
+  .pending-badge { display: inline-block; margin-top: 0.5rem; font-size: 0.72rem;
+                   font-weight: 700; color: #ffc107; border: 1px solid #ffc107;
+                   border-radius: 999px; padding: 0.15rem 0.6rem; }
 </style>

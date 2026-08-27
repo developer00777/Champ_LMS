@@ -52,9 +52,17 @@
               Best score <b class:pass={t.passed}>{t.my_best_score}%</b>
               · {t.my_attempts} attempt{t.my_attempts === 1 ? '' : 's'}
               {#if t.attempts_left !== null}· {t.attempts_left} left{/if}
+              {#if t.extra_attempts_granted > 0}
+                <span class="granted">+{t.extra_attempts_granted} granted</span>
+              {/if}
             </div>
-          {:else if t.max_attempts}
-            <div class="prev">{t.max_attempts} attempt{t.max_attempts === 1 ? '' : 's'} allowed</div>
+          {:else if t.attempts_allowed}
+            <div class="prev">
+              {t.attempts_allowed} attempt{t.attempts_allowed === 1 ? '' : 's'} allowed
+              {#if t.extra_attempts_granted > 0}
+                <span class="granted">includes +{t.extra_attempts_granted} granted</span>
+              {/if}
+            </div>
           {/if}
 
           {#if t.attempts_left === 0}
@@ -140,4 +148,5 @@
               background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
               background-size: 200% 100%; animation: shimmer 1.4s infinite; }
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .granted { color: var(--success); font-weight: 600; }
 </style>

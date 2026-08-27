@@ -12,7 +12,7 @@ from app.models.quest import Quest, UserQuest
 from app.models.learning_path import LearningPath, UserPathProgress
 from app.models.team import Team, TeamChallenge, TeamProgress
 from app.models.social import SocialPost, Notification
-from app.models.test_series import TestSeries, TestAttempt, TestQuestion
+from app.models.test_series import TestSeries, TestAttempt, TestQuestion, AttemptGrant
 # * ContentAccessRule: per-person module grants/revokes. Note this is unrelated
 # * to models.team.Team, which is a gamification squad; content access keys off
 # * the User.team org field an admin sets on the employee.
@@ -28,7 +28,7 @@ __all__ = [
     "LearningPath", "UserPathProgress",
     "Team", "TeamChallenge", "TeamProgress",
     "SocialPost", "Notification",
-    "TestSeries", "TestAttempt", "TestQuestion",
+    "TestSeries", "TestAttempt", "TestQuestion", "AttemptGrant",
     "ContentAccessRule",
     "DailyChallenge", "DailyChallengeCompletion", "Kudos",
 ]
@@ -41,7 +41,7 @@ DOCUMENT_MODELS = [
     Team, TeamChallenge, TeamProgress,
     SocialPost, Notification,
     # * TestQuestion is an embedded BaseModel, not a Document — not registered here
-    TestSeries, TestAttempt,
+    TestSeries, TestAttempt, AttemptGrant,
     ContentAccessRule,
     DailyChallenge, DailyChallengeCompletion, Kudos,
 ]

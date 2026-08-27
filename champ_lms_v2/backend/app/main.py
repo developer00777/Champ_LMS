@@ -37,6 +37,13 @@ async def lifespan(app: FastAPI):
         await seed_daily_challenges()
     except Exception:
         pass
+    # * Grandfather tests that were already published when the approval gate
+    # * shipped, so deploying it doesn't pull every live test at once.
+    from app.services.test_approval import backfill_approvals
+    try:
+        await backfill_approvals()
+    except Exception:
+        pass
     yield
     await close_redis()
     close_db()

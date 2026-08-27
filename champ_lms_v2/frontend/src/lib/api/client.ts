@@ -312,8 +312,40 @@ export const api = {
   updateTestSeries: (id: string, body: Partial<TestSeriesCreate> & { shuffle_questions?: boolean }) =>
     request<AdminTest>(`/admin/test-series/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   publishTestSeries: (id: string, publish = true) =>
-    request<{ id: string; is_published: boolean }>(
+    request<{ id: string; is_published: boolean; approval_status: ApprovalStatus; is_live: boolean }>(
       `/admin/test-series/${id}/publish?publish=${publish}`, { method: 'PATCH' }),
+
+  // Approval gate — a test may only be published, and only sat, once approved
+  submitTestForApproval: (id: string) =>
+    request<AdminTest>(`/admin/test-series/${id}/submit-for-approval`, { method: 'POST' }),
+  approveTestSeries: (id: string, note?: string) =>
+    request<AdminTest>(`/admin/test-series/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note ?? null }),
+    }),
+  rejectTestSeries: (id: string, note: string) =>
+    request<AdminTest & { unpublished_by_this_change: boolean }>(
+      `/admin/test-series/${id}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ note }),
+      }),
+  pendingApprovalTests: () =>
+    request<PendingApprovalRow[]>('/admin/test-series-pending-approval'),
+
+  // Extra attempts — per person, per test
+  grantExtraAttempts: (
+    testId: string,
+    body: { user_id: string; extra_attempts?: number; reason?: string | null },
+  ) =>
+    request<GrantResult>(`/admin/test-series/${testId}/grants`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  listAttemptGrants: (testId: string) =>
+    request<AttemptGrantRow[]>(`/admin/test-series/${testId}/grants`),
+  revokeAttemptGrant: (testId: string, grantId: string) =>
+    request<{ revoked: string; used: number; allowed: number | null; left: number | null }>(
+      `/admin/test-series/${testId}/grants/${grantId}`, { method: 'DELETE' }),
   deleteTestSeries: (id: string) =>
     request<{ deleted: string }>(`/admin/test-series/${id}`, { method: 'DELETE' }),
   testResults: (id: string) => request<TestResults>(`/admin/test-series/${id}/results`),
@@ -746,9 +778,14 @@ export interface ParsedPdfForTest extends ParsedPdf {
 export interface AppendResult extends AdminTest {
   added: number;
   unpublished_by_this_change: boolean;
+  // * true when the edit pulled an approved test back to pending review
+  approval_revoked_by_this_change?: boolean;
   existing_attempts: number;
   notice: string | null;
 }
+// * A test is only takeable when it is BOTH published and approved. `is_live`
+// * is the server's own answer to that, so the UI never recombines the two.
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export interface TestSeriesCreate {
   title: string;
   description?: string | null;
@@ -767,6 +804,11 @@ export interface AdminTest {
   max_attempts: number | null; shuffle_questions: boolean;
   proctoring_enabled: boolean;
   is_published: boolean; is_ready: boolean;
+  approval_status: ApprovalStatus;
+  approved_by: string | null; approved_at: string | null;
+  approval_note: string | null; submitted_for_approval_at: string | null;
+  is_live: boolean;
+  approval_revoked_by_this_change?: boolean;
   unscorable_count: number; total_marks: number; total_questions: number;
   source_filename: string | null; source_parser: string | null;
   created_at: string; questions: TestQuestionDraft[];
@@ -774,6 +816,9 @@ export interface AdminTest {
 export interface AdminTestSummary {
   id: string; title: string; category: string | null; department: string | null;
   is_published: boolean; is_ready: boolean; unscorable_count: number;
+  approval_status: ApprovalStatus; approval_note: string | null;
+  approved_at: string | null; submitted_for_approval_at: string | null;
+  is_live: boolean;
   total_questions: number; pass_threshold: number; duration_minutes: number | null;
   source_filename: string | null; created_at: string;
   attempt_count: number; average_score: number | null; pass_rate: number | null;
@@ -783,6 +828,8 @@ export interface LearnerTest {
   category: string | null; department: string | null;
   total_questions: number; total_marks: number; pass_threshold: number;
   duration_minutes: number | null; max_attempts: number | null;
+  // * what THIS person may take: the cap plus any admin-granted extras
+  attempts_allowed: number | null; extra_attempts_granted: number;
   my_attempts: number; attempts_left: number | null;
   my_best_score: number | null; passed: boolean;
 }
@@ -800,6 +847,8 @@ export interface TestPaper {
   id: string; title: string; description: string | null;
   duration_minutes: number | null; pass_threshold: number; total_marks: number;
   attempt_number: number; max_attempts: number | null;
+  // * the granted ceiling, so the paper header can say "Attempt 3 of 3"
+  attempts_allowed: number | null; extra_attempts_granted: number;
   total_time_limit_seconds: number | null;
   // * when true the client locks down copy/paste/context menu and reports
   // * integrity events with the submission
@@ -877,16 +926,41 @@ export interface TestResultRow {
   submitted_at: string; breakdown: BreakdownRow[];
   topic_stats: Record<string, TopicStat>;
   has_ai_analysis: boolean; ai_analysis: AiAnalysis | null;
+  // * this person's attempt position on this test, repeated on each of their
+  // * rows so "grant another attempt" can be offered from any row
+  attempts_used: number; extra_attempts_granted: number;
+  attempts_allowed: number | null; attempts_left: number | null;
+  attempts_exhausted: boolean;
   // * null when the attempt was never proctored (predates proctoring, or the
   // * test has it switched off) — render that as "not proctored", not "clean"
   proctoring: ProctoringReport | null;
+}
+export interface AttemptGrantRow {
+  grant_id: string; user_id: string;
+  full_name: string | null; employee_code?: string | null;
+  extra_attempts: number; reason: string | null;
+  granted_by: string; granted_by_name?: string | null; granted_at: string;
+}
+export interface GrantResult {
+  grant_id: string; test_id: string; user_id: string; full_name: string | null;
+  extra_attempts: number; reason: string | null; granted_at: string;
+  used: number; granted_extra: number;
+  allowed: number | null; left: number | null; exhausted: boolean;
+}
+export interface PendingApprovalRow {
+  id: string; title: string; category: string | null; department: string | null;
+  total_questions: number; is_ready: boolean; is_published: boolean;
+  unscorable_count: number; created_by: string | null; created_at: string;
+  submitted_for_approval_at: string | null; awaiting_review: boolean;
 }
 export interface TestResults {
   test_id: string; title: string; pass_threshold: number;
   total_questions: number; attempt_count: number;
   average_score: number | null; pass_rate: number | null;
   cohort_topic_stats: Record<string, TopicStat>;
+  max_attempts: number | null;
   attempts: TestResultRow[];
+  grants: AttemptGrantRow[];
 }
 
 // * Daily engagement types. The rotating pool is server-computed: the client

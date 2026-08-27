@@ -20,6 +20,15 @@ QUESTION_TYPE_WRITTEN = "written"
 QUESTION_TYPES = (QUESTION_TYPE_MCQ, QUESTION_TYPE_WRITTEN)
 
 
+# Approval states. A test only becomes takeable once an admin has explicitly
+# approved it — publishing alone is the author saying "the content is finished",
+# which is a different claim from "this may be put in front of employees".
+APPROVAL_PENDING = "pending"
+APPROVAL_APPROVED = "approved"
+APPROVAL_REJECTED = "rejected"
+APPROVAL_STATES = (APPROVAL_PENDING, APPROVAL_APPROVED, APPROVAL_REJECTED)
+
+
 class TestQuestion(BaseModel):
     """
     One question inside a TestSeries. Embedded, not a collection — questions are
@@ -107,6 +116,28 @@ class TestSeries(Document):
     proctoring_enabled: bool = True
 
     is_published: bool = False
+
+    # --- approval gate ------------------------------------------------------
+    # Publishing is the author's flag; approval is the gate. A learner may only
+    # sit a test that is BOTH published and approved (see `is_live`). Anything
+    # that changes what the questions actually are sends an approved test back
+    # to pending, so nobody can get content in front of employees by approving
+    # a harmless draft and then editing it.
+    #
+    # Tests that existed before approval was introduced are backfilled at
+    # startup: an already-published test is treated as approved, because it was
+    # live under the old rules and silently pulling it would look like an
+    # outage rather than a policy change.
+    approval_status: str = APPROVAL_PENDING
+    approved_by: str | None = None  # users.id of the approver
+    approved_at: datetime | None = None
+    # Why it was rejected (or sent back). Shown to the author so a rejection is
+    # actionable rather than a dead end.
+    approval_note: str | None = None
+    # Set when an author asks for review, so the approver queue has an order and
+    # the author can see their request landed.
+    submitted_for_approval_at: datetime | None = None
+
     # * provenance from the PDF ingest, so the admin can see where this came from
     source_filename: str | None = None
     source_parser: str | None = None  # "pattern" | "ai" | "manual"
@@ -128,11 +159,47 @@ class TestSeries(Document):
         """Publishable only when there's at least one question and all of them score."""
         return bool(self.questions) and self.unscorable_count == 0
 
+    @property
+    def is_approved(self) -> bool:
+        return self.approval_status == APPROVAL_APPROVED
+
+    @property
+    def is_live(self) -> bool:
+        """
+        The single answer to "can a learner sit this test?".
+
+        Both halves are required: the author has published it AND an admin has
+        approved it. Every learner-facing check goes through this property so
+        the two conditions can never drift apart between endpoints.
+        """
+        return self.is_published and self.is_approved
+
+    def revoke_approval(self, reason: str) -> bool:
+        """
+        Send an approved test back to pending because its content changed.
+
+        Returns True if approval was actually withdrawn, so the caller can tell
+        the admin what their edit cost them. A test that was never approved is
+        left alone — there is nothing to revoke and overwriting a rejection
+        note with an edit notice would lose the reviewer's feedback.
+        """
+        if self.approval_status != APPROVAL_APPROVED:
+            return False
+        self.approval_status = APPROVAL_PENDING
+        self.approved_by = None
+        self.approved_at = None
+        self.approval_note = reason
+        self.submitted_for_approval_at = None
+        return True
+
     class Settings:
         name = "test_series"
         indexes = [
             IndexModel([("is_published", ASCENDING), ("department", ASCENDING)]),
             IndexModel([("created_at", DESCENDING)]),
+            # Drives the learner list and the approval queue, both of which
+            # filter on status before anything else.
+            IndexModel([("approval_status", ASCENDING), ("is_published", ASCENDING)]),
         ]
 
 
@@ -261,4 +328,44 @@ class TestAttempt(Document):
         indexes = [
             IndexModel([("test_id", ASCENDING), ("user_id", ASCENDING)]),
             IndexModel([("user_id", ASCENDING), ("submitted_at", DESCENDING)]),
+        ]
+
+
+class AttemptGrant(Document):
+    """
+    Extra attempts an admin has given one person on one test.
+
+    Stored as an append-only ledger rather than a mutable counter on the user or
+    a per-user field on the test. Three reasons:
+
+      * Audit. "Who let them retake it, when, and why" is exactly the question
+        asked about a test someone eventually passed, and a counter cannot
+        answer it. Each grant keeps its own reason and grantor.
+      * Concurrency. Two admins granting an attempt at the same time each insert
+        a row; a shared counter would lose one of the two updates.
+      * Revocation. Withdrawing a grant that was issued by mistake is deleting
+        one row, and the rest of the history stays intact.
+
+    A learner's allowance for a test is `test.max_attempts + sum(extra_attempts
+    of their grants)`. Grants on a test with unlimited attempts are harmless
+    no-ops — the allowance was already unbounded — and are rejected at the API
+    rather than stored, so the ledger never contains rows that mean nothing.
+    """
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    test_id: str  # references test_series.id
+    user_id: str  # references users.id
+    # How many extra attempts this one grant is worth. Almost always 1, but an
+    # admin re-running a whole session for someone may hand out several.
+    extra_attempts: int = 1
+    reason: str | None = None
+    granted_by: str  # users.id of the admin
+    granted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "test_attempt_grants"
+        indexes = [
+            # The hot read: how many extra attempts does this person have on
+            # this test? Hit on every take/submit of a capped test.
+            IndexModel([("test_id", ASCENDING), ("user_id", ASCENDING)]),
+            IndexModel([("granted_at", DESCENDING)]),
         ]

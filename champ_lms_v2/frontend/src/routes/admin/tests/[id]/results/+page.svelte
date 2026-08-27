@@ -110,6 +110,73 @@
   $: cohortRanked = data
     ? Object.entries(data.cohort_topic_stats).sort((a, b) => a[1].accuracy - b[1].accuracy)
     : [];
+
+  // --- extra attempts ------------------------------------------------------
+  // Someone who has used up their attempts can be given more, one person at a
+  // time. Keyed by user rather than attempt: the grant belongs to the person,
+  // and they may have several rows on this page.
+  let grantOpen: Record<string, boolean> = {};
+  let grantCount: Record<string, number> = {};
+  let grantReason: Record<string, string> = {};
+  let grantBusy: Record<string, boolean> = {};
+
+  function toggleGrant(userId: string) {
+    grantOpen[userId] = !grantOpen[userId];
+    if (grantCount[userId] == null) grantCount[userId] = 1;
+    grantOpen = grantOpen; grantCount = grantCount;
+  }
+
+  /** Apply a new allowance to every row belonging to this person. */
+  function applyAllowance(userId: string, allowed: number | null, extra: number) {
+    if (!data) return;
+    for (const row of data.attempts) {
+      if (row.user_id !== userId) continue;
+      row.attempts_allowed = allowed;
+      row.extra_attempts_granted = extra;
+      row.attempts_left = allowed === null ? null : Math.max(0, allowed - row.attempts_used);
+      row.attempts_exhausted = allowed !== null && row.attempts_used >= allowed;
+    }
+    data = data;
+  }
+
+  async function grant(userId: string) {
+    grantBusy[userId] = true; grantBusy = grantBusy; error = '';
+    try {
+      const r = await api.grantExtraAttempts(id, {
+        user_id: userId,
+        extra_attempts: grantCount[userId] || 1,
+        reason: grantReason[userId]?.trim() || null,
+      });
+      applyAllowance(userId, r.allowed, r.granted_extra);
+      if (data) {
+        data.grants = [
+          { grant_id: r.grant_id, user_id: r.user_id, full_name: r.full_name,
+            extra_attempts: r.extra_attempts, reason: r.reason,
+            granted_by: '', granted_at: r.granted_at },
+          ...data.grants,
+        ];
+        data = data;
+      }
+      grantOpen[userId] = false; grantOpen = grantOpen;
+      grantReason[userId] = ''; grantReason = grantReason;
+    } catch (e: any) { error = e.message; }
+    finally { grantBusy[userId] = false; grantBusy = grantBusy; }
+  }
+
+  async function revokeGrant(grantId: string, userId: string) {
+    grantBusy[userId] = true; grantBusy = grantBusy; error = '';
+    try {
+      const r = await api.revokeAttemptGrant(id, grantId);
+      if (data) {
+        data.grants = data.grants.filter((g) => g.grant_id !== grantId);
+        const stillGranted = data.grants
+          .filter((g) => g.user_id === userId)
+          .reduce((sum, g) => sum + g.extra_attempts, 0);
+        applyAllowance(userId, r.allowed, stillGranted);
+      }
+    } catch (e: any) { error = e.message; }
+    finally { grantBusy[userId] = false; grantBusy = grantBusy; }
+  }
 </script>
 
 <div class="page">
@@ -212,6 +279,26 @@
         <p>Once learners take this test, their scores, answers and AI recommendations appear here.</p>
       </div>
     {:else}
+    {#if data.grants.length > 0}
+      <h2 class="section">Extra attempts granted</h2>
+      <div class="grants">
+        {#each data.grants as g (g.grant_id)}
+          <div class="grant-row">
+            <div>
+              <b>{g.full_name || 'Unknown'}</b>
+              <span class="muted"> +{g.extra_attempts} attempt{g.extra_attempts === 1 ? '' : 's'}</span>
+              {#if g.reason}<span class="muted tiny"> · “{g.reason}”</span>{/if}
+              <span class="muted tiny"> · {new Date(g.granted_at).toLocaleString()}</span>
+            </div>
+            <button class="btn tiny-btn" disabled={grantBusy[g.user_id]}
+                    on:click={() => revokeGrant(g.grant_id, g.user_id)}>
+              Revoke
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
       <h2 class="section">Individual results</h2>
       <div class="rows">
         {#each data.attempts as a (a.attempt_id)}
@@ -244,6 +331,16 @@
                     Not proctored
                   </span>
                 {/if}
+                {#if a.attempts_allowed !== null}
+                  <span class="attempts" class:spent={a.attempts_exhausted}>
+                    {a.attempts_used}/{a.attempts_allowed} attempts
+                    {#if a.extra_attempts_granted > 0}
+                      <span class="granted" title="Extra attempts granted by an admin">
+                        +{a.extra_attempts_granted}
+                      </span>
+                    {/if}
+                  </span>
+                {/if}
               </div>
             </div>
 
@@ -256,7 +353,42 @@
                   ? 'Analysing…'
                   : a.has_ai_analysis ? 'Regenerate AI insight' : 'Get AI insight'}
               </button>
+              {#if a.attempts_allowed !== null}
+                <button
+                  class="btn"
+                  class:primary={a.attempts_exhausted}
+                  disabled={grantBusy[a.user_id]}
+                  on:click={() => toggleGrant(a.user_id)}
+                >
+                  {grantOpen[a.user_id] ? 'Cancel' : '+ Grant attempt'}
+                </button>
+              {/if}
             </div>
+
+            {#if grantOpen[a.user_id]}
+              <div class="grant-box">
+                <p class="grant-lead">
+                  {a.full_name || a.email || 'This person'} has used
+                  <b>{a.attempts_used} of {a.attempts_allowed}</b> attempts.
+                  Extra attempts apply to them only.
+                </p>
+                <div class="grant-fields">
+                  <label>
+                    Extra attempts
+                    <input type="number" min="1" max="20" bind:value={grantCount[a.user_id]} />
+                  </label>
+                  <label class="grow">
+                    Reason (optional, kept on the record)
+                    <input bind:value={grantReason[a.user_id]}
+                           placeholder="e.g. Browser crashed mid-exam" />
+                  </label>
+                </div>
+                <button class="btn primary" disabled={grantBusy[a.user_id]}
+                        on:click={() => grant(a.user_id)}>
+                  {grantBusy[a.user_id] ? 'Granting…' : 'Grant'}
+                </button>
+              </div>
+            {/if}
 
             {#if a.proctoring && (a.proctoring.findings.length || a.proctoring.risk_score > 0 || a.proctoring.telemetry_missing)}
               {@const pr = a.proctoring}
@@ -416,6 +548,21 @@
   .rows { display: flex; flex-direction: column; gap: 0.9rem; }
   .row-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.15rem; }
   .row-head { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .attempts { font-size: 0.72rem; color: var(--muted); border: 1px solid var(--border);
+              border-radius: 999px; padding: 0.15rem 0.55rem; }
+  .attempts.spent { color: #ffc107; border-color: #ffc107; }
+  .granted { color: var(--success); font-weight: 700; }
+  .grant-box { margin-top: 0.8rem; padding: 0.9rem; border: 1px solid var(--border);
+               border-radius: 10px; background: var(--surface2); }
+  .grant-lead { font-size: 0.83rem; color: var(--muted); margin-bottom: 0.7rem; }
+  .grant-fields { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+  .grant-fields label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; }
+  .grant-fields .grow { flex: 1; min-width: 220px; }
+  .grants { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }
+  .grant-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+               padding: 0.6rem 0.9rem; border: 1px solid var(--border); border-radius: 10px;
+               font-size: 0.85rem; flex-wrap: wrap; }
+  .tiny-btn { font-size: 0.75rem; padding: 0.25rem 0.6rem; }
   .who { display: flex; align-items: center; gap: 0.7rem; }
   .who-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
   .who .code {

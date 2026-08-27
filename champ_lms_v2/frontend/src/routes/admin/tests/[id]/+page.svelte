@@ -68,14 +68,15 @@
       test = result;
       questions = result.questions.map((q) => ({ ...q }));
       cancelExtend();
-      saved = result.unpublished_by_this_change
+      saved = (result.unpublished_by_this_change
         ? `${result.added} question(s) added. The test was moved back to draft because `
           + `some of them still need a correct answer.`
         : `${result.added} question(s) added.`
           + (result.existing_attempts
             ? ` ${result.existing_attempts} earlier attempt(s) keep the scores they were graded on.`
-            : '');
-      setTimeout(() => (saved = ''), 6000);
+            : ''))
+        + noteApprovalRevoked(result.approval_revoked_by_this_change);
+      setTimeout(() => (saved = ''), 8000);
     } catch (e: any) { extendError = e.message; }
     finally { busy = false; }
   }
@@ -130,8 +131,8 @@
         questions,
       });
       questions = test.questions.map((q) => ({ ...q }));
-      saved = 'Saved.';
-      setTimeout(() => (saved = ''), 2500);
+      saved = 'Saved.' + noteApprovalRevoked(test.approval_revoked_by_this_change);
+      setTimeout(() => (saved = ''), test.approval_revoked_by_this_change ? 7000 : 2500);
     } catch (e: any) { error = e.message; }
     finally { busy = false; }
   }
@@ -142,9 +143,61 @@
     try {
       const r = await api.publishTestSeries(id, !test.is_published);
       test.is_published = r.is_published;
+      test.approval_status = r.approval_status;
+      test.is_live = r.is_live;
       test = test;
     } catch (e: any) { error = e.message; }
     finally { busy = false; }
+  }
+
+  // --- approval gate ------------------------------------------------------
+  // A test cannot be published, and nobody can sit it, until an admin approves
+  // it. Editing the questions of an approved test sends it back to pending, so
+  // the note below is how the author finds out their edit cost the approval.
+  let rejectNote = '';
+  let showReject = false;
+
+  async function submitForApproval() {
+    busy = true; error = '';
+    try {
+      test = await api.submitTestForApproval(id);
+      saved = 'Sent for approval.';
+      setTimeout(() => (saved = ''), 3000);
+    } catch (e: any) { error = e.message; }
+    finally { busy = false; }
+  }
+
+  async function approve() {
+    busy = true; error = '';
+    try {
+      test = await api.approveTestSeries(id);
+      saved = 'Approved. You can publish it now.';
+      setTimeout(() => (saved = ''), 4000);
+    } catch (e: any) { error = e.message; }
+    finally { busy = false; }
+  }
+
+  async function reject() {
+    if (!rejectNote.trim()) { error = 'Give a reason so the author knows what to fix.'; return; }
+    busy = true; error = '';
+    try {
+      const r = await api.rejectTestSeries(id, rejectNote.trim());
+      test = r;
+      showReject = false; rejectNote = '';
+      saved = r.unpublished_by_this_change
+        ? 'Rejected. The test was unpublished and learners can no longer take it.'
+        : 'Rejected.';
+      setTimeout(() => (saved = ''), 5000);
+    } catch (e: any) { error = e.message; }
+    finally { busy = false; }
+  }
+
+  // Any save that touches the questions or the scoring rules withdraws an
+  // existing approval — the server decides, we just report it.
+  function noteApprovalRevoked(revoked: boolean | undefined): string {
+    return revoked
+      ? ' Approval was withdrawn because the content changed — it needs approving again before learners can take it.'
+      : '';
   }
 </script>
 
@@ -165,7 +218,11 @@
         </p>
       </div>
       <div class="head-actions">
-        <span class="status" class:live={test.is_published}>{test.is_published ? 'Published' : 'Draft'}</span>
+        <span class="status" class:live={test.is_live}>{test.is_published ? 'Published' : 'Draft'}</span>
+        <span class="status appr {test.approval_status}">
+          {test.approval_status === 'approved' ? 'Approved'
+            : test.approval_status === 'rejected' ? 'Rejected' : 'Awaiting approval'}
+        </span>
         <button class="btn primary" on:click={() => (showExtend ? cancelExtend() : (showExtend = true))}>
           {showExtend ? 'Cancel' : '+ Add questions from a document'}
         </button>
@@ -290,6 +347,65 @@
       </div>
     {/if}
 
+    <div class="form-card approval {test.approval_status}">
+      <h2>Approval</h2>
+      {#if test.is_live}
+        <p class="info">
+          <b>Live.</b> This test is approved and published — learners can sit it now.
+        </p>
+      {:else if test.approval_status === 'approved'}
+        <p class="info">
+          <b>Approved, not published.</b> Nobody can take it until you publish it below.
+        </p>
+      {:else if test.approval_status === 'rejected'}
+        <p class="warn">
+          <b>Rejected.</b> It cannot be published until it is fixed, resubmitted and approved again.
+          {#if test.approval_note}<br />Reason: “{test.approval_note}”{/if}
+        </p>
+      {:else}
+        <p class="warn">
+          <b>Awaiting approval.</b> No one can take this test until an admin approves it.
+          {#if test.approval_note}<br />{test.approval_note}{/if}
+        </p>
+      {/if}
+
+      {#if test.approved_at && test.approval_status === 'approved'}
+        <p class="meta">Approved {new Date(test.approved_at).toLocaleString()}</p>
+      {:else if test.submitted_for_approval_at}
+        <p class="meta">Sent for approval {new Date(test.submitted_for_approval_at).toLocaleString()}</p>
+      {/if}
+
+      <div class="approval-actions">
+        {#if test.approval_status !== 'approved'}
+          <button class="btn" disabled={busy || unscorable > 0} on:click={submitForApproval}>
+            Send for approval
+          </button>
+          <button class="btn primary" disabled={busy || unscorable > 0} on:click={approve}>
+            Approve
+          </button>
+        {/if}
+        {#if test.approval_status !== 'rejected'}
+          <button class="btn danger-btn" disabled={busy} on:click={() => (showReject = !showReject)}>
+            {test.approval_status === 'approved' ? 'Withdraw approval' : 'Reject'}
+          </button>
+        {/if}
+      </div>
+
+      {#if showReject}
+        <label class="reject-note">
+          Reason (the author sees this)
+          <input bind:value={rejectNote} placeholder="e.g. Question 3 is out of scope" />
+        </label>
+        <button class="btn danger-btn" disabled={busy || !rejectNote.trim()} on:click={reject}>
+          {busy ? 'Working…' : 'Confirm'}
+        </button>
+      {/if}
+
+      {#if unscorable > 0}
+        <p class="meta">Set a correct answer on every question before sending it for approval.</p>
+      {/if}
+    </div>
+
     {#if unscorable > 0}
       <p class="warn">{unscorable} question(s) have no correct answer marked — set them to publish.</p>
     {/if}
@@ -326,7 +442,14 @@
 
     <div class="save-bar">
       <button class="btn primary" disabled={busy} on:click={save}>{busy ? 'Saving…' : 'Save changes'}</button>
-      <button class="btn" disabled={busy || (!test.is_published && unscorable > 0)} on:click={togglePublish}>
+      <button
+        class="btn"
+        disabled={busy || (!test.is_published && (unscorable > 0 || test.approval_status !== 'approved'))}
+        title={!test.is_published && test.approval_status !== 'approved'
+          ? 'This test must be approved before it can be published'
+          : ''}
+        on:click={togglePublish}
+      >
         {test.is_published ? 'Unpublish' : 'Publish'}
       </button>
     </div>
@@ -344,6 +467,17 @@
   .status { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--muted);
             border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.6rem; }
   .status.live { color: var(--success); border-color: var(--success); }
+  .status.appr.approved { color: var(--success); border-color: var(--success); }
+  .status.appr.pending { color: #ffc107; border-color: #ffc107; }
+  .status.appr.rejected { color: var(--danger, #ff5470); border-color: var(--danger, #ff5470); }
+  .approval { border-left: 3px solid var(--border); }
+  .approval.approved { border-left-color: var(--success); }
+  .approval.pending { border-left-color: #ffc107; }
+  .approval.rejected { border-left-color: var(--danger, #ff5470); }
+  .approval-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
+  .reject-note { display: block; margin-top: 0.8rem; }
+  .btn.danger-btn { color: var(--danger, #ff5470); border-color: var(--danger, #ff5470); }
+  .meta { font-size: 0.78rem; color: var(--muted); margin-top: 0.5rem; }
 
   .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
                padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.25rem; }
