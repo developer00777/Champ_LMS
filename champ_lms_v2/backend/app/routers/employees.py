@@ -15,6 +15,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Annotated
 
+from beanie.operators import In
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, EmailStr, Field
 
@@ -22,8 +23,10 @@ from app.core.auth import get_current_user, hash_password, require_admin, verify
 from app.core import password_vault
 from app.models.content_access import ContentAccessRule
 from app.models.module import Module
+from app.models.test_series import AttemptGrant, TestSeries
 from app.models.user import User
 from app.services import content_access
+from app.services.test_attempts import attempt_status
 from app.services.bunny_storage import AVATAR_BOX, bunny_storage
 
 router = APIRouter(tags=["employees"])
@@ -774,13 +777,19 @@ async def change_own_password(
 # Admin: content targeting
 #
 # Two levers, described in app/services/content_access.py:
-#   * module audience  — teams / departments / roles that can see a module,
-#                        and the teams it is required of.
+#   * audience         — teams / departments / roles that can see a piece of
+#                        content, and the teams it is required of.
 #   * per-person rule  — grant, require or revoke for one individual.
+#
+# Both levers apply to two kinds of content — learning modules and test series.
+# The endpoints below are written once over a `kind` and mounted under both
+# /content-access/modules/... and /content-access/tests/..., because an admin
+# uses the same screen for both and two copies of this logic is how the two
+# drift apart.
 # --------------------------------------------------------------------------
 class ModuleAudienceIn(BaseModel):
     """
-    Set a module's audience. Passing [] clears a dimension (opening it up);
+    Set content's audience. Passing [] clears a dimension (opening it up);
     omitting a field leaves that dimension untouched.
     """
     audience_teams: list[str] | None = None
@@ -792,6 +801,16 @@ class ModuleAudienceIn(BaseModel):
 class AccessRuleIn(BaseModel):
     user_id: str
     access: str  # grant | required | revoke
+    reason: str | None = None
+
+
+class GrantAttemptsIn(BaseModel):
+    """Give one person extra attempts on one test."""
+    user_id: str
+    # How many extra attempts to add. Capped low deliberately: handing someone
+    # 500 retakes is almost always a typo, and an admin who genuinely wants the
+    # test uncapped for everyone should clear max_attempts instead.
+    extra_attempts: int = Field(default=1, ge=1, le=20)
     reason: str | None = None
 
 
@@ -809,31 +828,219 @@ def _clean_list(values: list[str] | None) -> list[str] | None:
     return out
 
 
-def _audience_out(module: Module) -> dict:
+# The two kinds of content this section administers, and how to load each.
+_KIND_MODULE = ContentAccessRule.KIND_MODULE
+_KIND_TEST = ContentAccessRule.KIND_TEST
+_CONTENT_DOCS = {_KIND_MODULE: Module, _KIND_TEST: TestSeries}
+_NOT_FOUND = {_KIND_MODULE: "Module not found", _KIND_TEST: "Test series not found"}
+
+
+async def _get_content_or_404(kind: str, content_id: str):
+    doc = await _CONTENT_DOCS[kind].get(content_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND[kind])
+    return doc
+
+
+def _audience_out(content, kind: str = _KIND_MODULE) -> dict:
+    """
+    One module or test with its audience.
+
+    `id` is kept as the key name for both so the admin screen renders either
+    without a branch; `kind` tells it which endpoints to call back into.
+    """
+    out = {
+        "id": content.id,
+        "kind": kind,
+        "title": content.title,
+        "category": content.category,
+        "is_published": content.is_published,
+        "audience_teams": content.audience_teams or [],
+        "audience_departments": content.audience_departments or [],
+        "target_roles": content.target_roles or [],
+        "required_for_teams": content.required_for_teams or [],
+        "is_restricted": content_access.is_restricted(content),
+    }
+    if kind == _KIND_TEST:
+        # Extra context the admin needs to judge a test row: the legacy
+        # single-department targeting (which still counts as an audience), and
+        # whether the paper is actually sittable.
+        out["department"] = content.department
+        out["total_questions"] = len(content.questions)
+    return out
+
+
+async def _content_people(kind: str, content_id: str) -> dict:
+    """
+    Who can currently open this module/test, and why.
+
+    For a test this also carries each person's attempt position, so the one
+    screen that decides who may sit a test is also where an admin hands back a
+    retake — rather than making them find the same person again elsewhere.
+    """
+    content = await _get_content_or_404(kind, content_id)
+
+    users = await User.find_all().to_list()
+    rules = await ContentAccessRule.find(
+        ContentAccessRule.module_id == content_id,
+        ContentAccessRule.content_kind == kind,
+    ).to_list()
+    by_user = {r.user_id: r for r in rules}
+
+    people = []
+    for u in sorted(users, key=lambda x: (x.full_name or x.email or "").lower()):
+        rule = by_user.get(u.id)
+        override = {content_id: rule.access} if rule else {}
+        allowed = content_access.can_access(content, u, override)
+        if content_access.is_admin(u):
+            why = "admin"
+        elif rule:
+            why = f"rule: {rule.access}"
+        elif content_access.matches_audience(content, u):
+            why = "audience" if content_access.is_restricted(content) else "open to everyone"
+        else:
+            why = "not in audience"
+        row = {
+            "user_id": u.id,
+            "full_name": u.full_name,
+            "email": u.email,
+            "team": u.team,
+            "department": u.department,
+            "role": u.role,
+            "is_active": u.is_active,
+            "can_access": allowed,
+            "required": content_access.is_required(content, u, override),
+            "rule": rule.access if rule else None,
+            "reason": rule.reason if rule else None,
+            "why": why,
+        }
+        if kind == _KIND_TEST:
+            # used / granted_extra / allowed / left / exhausted for this person.
+            row["attempts"] = await attempt_status(content, u.id)
+        people.append(row)
+
+    out = {
+        **_audience_out(content, kind),
+        "people": people,
+        "can_access_count": sum(1 for p in people if p["can_access"]),
+    }
+    if kind == _KIND_TEST:
+        # None = uncapped, in which case granting extra attempts is meaningless
+        # and the UI hides the control rather than offering a no-op.
+        out["max_attempts"] = content.max_attempts
+    return out
+
+
+async def _set_audience(kind: str, content_id: str, body: ModuleAudienceIn) -> dict:
+    """Restrict a module/test to teams/departments/roles, or open it up again."""
+    content = await _get_content_or_404(kind, content_id)
+
+    if body.target_roles is not None:
+        bad = [r for r in body.target_roles if r not in ASSIGNABLE_ROLES]
+        if bad:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown role(s): {', '.join(bad)}. Valid: {', '.join(ASSIGNABLE_ROLES)}",
+            )
+
+    if body.audience_teams is not None:
+        content.audience_teams = _clean_list(body.audience_teams)
+    if body.audience_departments is not None:
+        content.audience_departments = _clean_list(body.audience_departments)
+    if body.target_roles is not None:
+        content.target_roles = _clean_list(body.target_roles)
+    if body.required_for_teams is not None:
+        content.required_for_teams = _clean_list(body.required_for_teams)
+
+    await content.save()
+    return _audience_out(content, kind)
+
+
+async def _set_person_rule(
+    kind: str, content_id: str, body: AccessRuleIn, admin: User
+) -> dict:
+    """Grant, require or revoke one piece of content for one person."""
+    valid = (ContentAccessRule.GRANT, ContentAccessRule.REQUIRED, ContentAccessRule.REVOKE)
+    if body.access not in valid:
+        raise HTTPException(
+            status_code=422, detail=f"access must be one of: {', '.join(valid)}"
+        )
+
+    await _get_content_or_404(kind, content_id)
+    target = await User.get(body.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    existing = await ContentAccessRule.find_one(
+        ContentAccessRule.user_id == body.user_id,
+        ContentAccessRule.module_id == content_id,
+    )
+    if existing:
+        existing.access = body.access
+        existing.reason = body.reason
+        existing.created_by_admin_id = admin.id
+        # Repair the kind on a rule written before test series were covered.
+        existing.content_kind = kind
+        await existing.save()
+        rule = existing
+    else:
+        rule = ContentAccessRule(
+            user_id=body.user_id,
+            module_id=content_id,
+            content_kind=kind,
+            access=body.access,
+            reason=body.reason,
+            created_by_admin_id=admin.id,
+        )
+        await rule.insert()
+
     return {
-        "id": module.id,
-        "title": module.title,
-        "category": module.category,
-        "is_published": module.is_published,
-        "audience_teams": module.audience_teams or [],
-        "audience_departments": module.audience_departments or [],
-        "target_roles": module.target_roles or [],
-        "required_for_teams": module.required_for_teams or [],
-        "is_restricted": content_access.is_restricted(module),
+        "content_id": content_id,
+        "kind": kind,
+        # Kept for the module screen, which has always read module_id.
+        "module_id": content_id,
+        "user_id": rule.user_id,
+        "access": rule.access,
+        "reason": rule.reason,
+    }
+
+
+async def _clear_person_rule(kind: str, content_id: str, user_id: str) -> dict:
+    """Drop a per-person rule, so the audience rules apply again."""
+    rule = await ContentAccessRule.find_one(
+        ContentAccessRule.user_id == user_id,
+        ContentAccessRule.module_id == content_id,
+    )
+    if not rule:
+        raise HTTPException(status_code=404, detail="No rule set for that person")
+    await rule.delete()
+    return {
+        "content_id": content_id,
+        "kind": kind,
+        "module_id": content_id,
+        "user_id": user_id,
+        "access": None,
     }
 
 
 @router.get("/admin/content-access/modules")
 async def list_module_audiences(admin: Annotated[User, Depends(require_admin)]):
     """
-    Every module with its audience, plus the teams/departments available to
-    assign (taken from real employee records, so the admin picks from what
-    actually exists rather than retyping names).
+    Every module and every test series with its audience, plus the
+    teams/departments available to assign (taken from real employee records, so
+    the admin picks from what actually exists rather than retyping names).
+
+    Tests are returned alongside modules because they are content an admin
+    targets the same way. `tests` is a separate key rather than being mixed into
+    `modules` so the screen can show them as their own section — and so an older
+    client that only reads `modules` keeps working unchanged.
     """
     modules = await Module.find_all().sort(-Module.created_at).to_list()
+    tests = await TestSeries.find_all().sort(-TestSeries.created_at).to_list()
     users = await User.find_all().to_list()
     return {
-        "modules": [_audience_out(m) for m in modules],
+        "modules": [_audience_out(m, _KIND_MODULE) for m in modules],
+        "tests": [_audience_out(t, _KIND_TEST) for t in tests],
         "teams": sorted({u.team for u in users if u.team}),
         "departments": sorted({u.department for u in users if u.department}),
         "roles": list(ASSIGNABLE_ROLES),
@@ -847,29 +1054,7 @@ async def set_module_audience(
     admin: Annotated[User, Depends(require_admin)],
 ):
     """Restrict a module to teams/departments/roles, or open it up again."""
-    module = await Module.get(module_id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-
-    if body.target_roles is not None:
-        bad = [r for r in body.target_roles if r not in ASSIGNABLE_ROLES]
-        if bad:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown role(s): {', '.join(bad)}. Valid: {', '.join(ASSIGNABLE_ROLES)}",
-            )
-
-    if body.audience_teams is not None:
-        module.audience_teams = _clean_list(body.audience_teams)
-    if body.audience_departments is not None:
-        module.audience_departments = _clean_list(body.audience_departments)
-    if body.target_roles is not None:
-        module.target_roles = _clean_list(body.target_roles)
-    if body.required_for_teams is not None:
-        module.required_for_teams = _clean_list(body.required_for_teams)
-
-    await module.save()
-    return _audience_out(module)
+    return await _set_audience(_KIND_MODULE, module_id, body)
 
 
 @router.get("/admin/content-access/modules/{module_id}/people")
@@ -882,47 +1067,7 @@ async def module_access_people(
     per-person rule, or admin bypass. Lets an admin verify the effect of a
     restriction instead of guessing.
     """
-    module = await Module.get(module_id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-
-    users = await User.find_all().to_list()
-    rules = await ContentAccessRule.find(ContentAccessRule.module_id == module_id).to_list()
-    by_user = {r.user_id: r for r in rules}
-
-    people = []
-    for u in sorted(users, key=lambda x: (x.full_name or x.email or "").lower()):
-        rule = by_user.get(u.id)
-        override = {module_id: rule.access} if rule else {}
-        allowed = content_access.can_access(module, u, override)
-        if content_access.is_admin(u):
-            why = "admin"
-        elif rule:
-            why = f"rule: {rule.access}"
-        elif content_access.matches_audience(module, u):
-            why = "audience" if content_access.is_restricted(module) else "open to everyone"
-        else:
-            why = "not in audience"
-        people.append({
-            "user_id": u.id,
-            "full_name": u.full_name,
-            "email": u.email,
-            "team": u.team,
-            "department": u.department,
-            "role": u.role,
-            "is_active": u.is_active,
-            "can_access": allowed,
-            "required": content_access.is_required(module, u, override),
-            "rule": rule.access if rule else None,
-            "reason": rule.reason if rule else None,
-            "why": why,
-        })
-
-    return {
-        **_audience_out(module),
-        "people": people,
-        "can_access_count": sum(1 for p in people if p["can_access"]),
-    }
+    return await _content_people(_KIND_MODULE, module_id)
 
 
 @router.put("/admin/content-access/modules/{module_id}/people")
@@ -932,45 +1077,7 @@ async def set_person_access(
     admin: Annotated[User, Depends(require_admin)],
 ):
     """Grant, require or revoke this module for one person."""
-    valid = (ContentAccessRule.GRANT, ContentAccessRule.REQUIRED, ContentAccessRule.REVOKE)
-    if body.access not in valid:
-        raise HTTPException(
-            status_code=422, detail=f"access must be one of: {', '.join(valid)}"
-        )
-
-    module = await Module.get(module_id)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-    target = await User.get(body.user_id)
-    if not target:
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    existing = await ContentAccessRule.find_one(
-        ContentAccessRule.user_id == body.user_id,
-        ContentAccessRule.module_id == module_id,
-    )
-    if existing:
-        existing.access = body.access
-        existing.reason = body.reason
-        existing.created_by_admin_id = admin.id
-        await existing.save()
-        rule = existing
-    else:
-        rule = ContentAccessRule(
-            user_id=body.user_id,
-            module_id=module_id,
-            access=body.access,
-            reason=body.reason,
-            created_by_admin_id=admin.id,
-        )
-        await rule.insert()
-
-    return {
-        "module_id": module_id,
-        "user_id": rule.user_id,
-        "access": rule.access,
-        "reason": rule.reason,
-    }
+    return await _set_person_rule(_KIND_MODULE, module_id, body, admin)
 
 
 @router.delete("/admin/content-access/modules/{module_id}/people/{user_id}")
@@ -980,14 +1087,154 @@ async def clear_person_access(
     admin: Annotated[User, Depends(require_admin)],
 ):
     """Drop a per-person rule, so the module's audience rules apply again."""
-    rule = await ContentAccessRule.find_one(
-        ContentAccessRule.user_id == user_id,
-        ContentAccessRule.module_id == module_id,
+    return await _clear_person_rule(_KIND_MODULE, module_id, user_id)
+
+
+# --- the same four levers, for test series -------------------------------
+# Separate paths rather than a `kind` query parameter: the ids live in
+# different collections, so a typo'd id should 404 as "test not found" rather
+# than silently resolving to a module with the same id shape.
+@router.patch("/admin/content-access/tests/{test_id}")
+async def set_test_audience(
+    test_id: str,
+    body: ModuleAudienceIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Restrict a test series to teams/departments/roles, or open it up again."""
+    return await _set_audience(_KIND_TEST, test_id, body)
+
+
+@router.get("/admin/content-access/tests/{test_id}/people")
+async def test_access_people(
+    test_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Who can currently sit this test, and why."""
+    return await _content_people(_KIND_TEST, test_id)
+
+
+@router.put("/admin/content-access/tests/{test_id}/people")
+async def set_test_person_access(
+    test_id: str,
+    body: AccessRuleIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Grant, require or revoke this test for one person."""
+    return await _set_person_rule(_KIND_TEST, test_id, body, admin)
+
+
+@router.delete("/admin/content-access/tests/{test_id}/people/{user_id}")
+async def clear_test_person_access(
+    test_id: str,
+    user_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """Drop a per-person rule, so the test's audience rules apply again."""
+    return await _clear_person_rule(_KIND_TEST, test_id, user_id)
+
+
+# --- extra attempts (retakes) -------------------------------------------
+# Mounted here rather than under /admin/test-series because deciding who may
+# sit a test and handing one person another go at it are the same decision,
+# made about the same person, on the same screen.
+@router.post("/admin/content-access/tests/{test_id}/grants", status_code=201)
+async def grant_extra_attempts(
+    test_id: str,
+    body: GrantAttemptsIn,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Give one person extra attempts on one test.
+
+    Additive: granting twice gives two extra attempts, which is what an admin
+    means when they click the button a second time after the learner burned the
+    first grant. Refused on an uncapped test — there is nothing to extend, and
+    storing the row would imply a limit that does not exist.
+    """
+    test = await _get_content_or_404(_KIND_TEST, test_id)
+    if test.max_attempts is None:
+        raise HTTPException(
+            status_code=422,
+            detail="This test has unlimited attempts — there is nothing to grant.",
+        )
+
+    target = await User.get(body.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    grant = AttemptGrant(
+        test_id=test.id,
+        user_id=target.id,
+        extra_attempts=body.extra_attempts,
+        reason=(body.reason or "").strip() or None,
+        granted_by=admin.id,
     )
-    if not rule:
-        raise HTTPException(status_code=404, detail="No rule set for that person")
-    await rule.delete()
-    return {"module_id": module_id, "user_id": user_id, "access": None}
+    await grant.insert()
+
+    return {
+        "grant_id": grant.id,
+        "test_id": test.id,
+        "user_id": target.id,
+        "full_name": target.full_name,
+        "extra_attempts": grant.extra_attempts,
+        "reason": grant.reason,
+        "granted_at": grant.granted_at,
+        "attempts": await attempt_status(test, target.id),
+    }
+
+
+@router.get("/admin/content-access/tests/{test_id}/grants")
+async def list_extra_attempt_grants(
+    test_id: str, admin: Annotated[User, Depends(require_admin)]
+):
+    """Every grant issued on this test, newest first, with names resolved."""
+    test = await _get_content_or_404(_KIND_TEST, test_id)
+    grants = await AttemptGrant.find(AttemptGrant.test_id == test.id).sort(
+        -AttemptGrant.granted_at
+    ).to_list()
+
+    ids = list({g.user_id for g in grants} | {g.granted_by for g in grants})
+    users = {u.id: u for u in await User.find(In(User.id, ids)).to_list()} if ids else {}
+
+    return [
+        {
+            "grant_id": g.id,
+            "user_id": g.user_id,
+            "full_name": (users[g.user_id].full_name if g.user_id in users else None),
+            "extra_attempts": g.extra_attempts,
+            "reason": g.reason,
+            "granted_by": g.granted_by,
+            "granted_by_name": (
+                users[g.granted_by].full_name if g.granted_by in users else None
+            ),
+            "granted_at": g.granted_at,
+        }
+        for g in grants
+    ]
+
+
+@router.delete("/admin/content-access/tests/{test_id}/grants/{grant_id}")
+async def revoke_extra_attempt_grant(
+    test_id: str,
+    grant_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Withdraw a grant issued by mistake.
+
+    Only removes the unused allowance — attempts the learner already sat stay
+    on their record. Deleting a grant they have spent lowers their ceiling
+    below what they used, which the take/submit checks read simply as "out of
+    attempts"; it never invalidates a score.
+    """
+    grant = await AttemptGrant.get(grant_id)
+    if not grant or grant.test_id != test_id:
+        raise HTTPException(status_code=404, detail="Grant not found on this test")
+    user_id = grant.user_id
+    await grant.delete()
+
+    test = await _get_content_or_404(_KIND_TEST, test_id)
+    return {"revoked": grant_id, "attempts": await attempt_status(test, user_id)}
 
 
 @router.get("/admin/content-access/employees/{user_id}")
@@ -1004,7 +1251,10 @@ async def employee_access_overview(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     modules = await Module.find_all().sort(-Module.created_at).to_list()
+    tests = await TestSeries.find_all().sort(-TestSeries.created_at).to_list()
+    # Rules are read per kind so a module rule is never applied to a test.
     overrides = await content_access.rules_for_user(user_id)
+    test_overrides = await content_access.test_rules_for_user(user_id)
 
     items = [
         {
@@ -1019,6 +1269,19 @@ async def employee_access_overview(
         }
         for m in modules
     ]
+    test_items = [
+        {
+            "test_id": t.id,
+            "title": t.title,
+            "category": t.category,
+            "is_published": t.is_published,
+            "is_restricted": content_access.is_restricted(t),
+            "can_access": content_access.can_access(t, target, test_overrides),
+            "required": content_access.is_required(t, target, test_overrides),
+            "rule": test_overrides.get(t.id),
+        }
+        for t in tests
+    ]
     return {
         "user_id": target.id,
         "full_name": target.full_name,
@@ -1027,6 +1290,11 @@ async def employee_access_overview(
         "department": target.department,
         "role": target.role,
         "modules": items,
+        "tests": test_items,
+        # Counts stay module-only so an existing caller's numbers don't change
+        # meaning; the test totals are their own keys.
         "accessible_count": sum(1 for i in items if i["can_access"]),
         "required_count": sum(1 for i in items if i["required"]),
+        "tests_accessible_count": sum(1 for i in test_items if i["can_access"]),
+        "tests_required_count": sum(1 for i in test_items if i["required"]),
     }

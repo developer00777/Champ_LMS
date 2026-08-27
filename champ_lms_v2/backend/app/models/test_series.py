@@ -20,15 +20,6 @@ QUESTION_TYPE_WRITTEN = "written"
 QUESTION_TYPES = (QUESTION_TYPE_MCQ, QUESTION_TYPE_WRITTEN)
 
 
-# Approval states. A test only becomes takeable once an admin has explicitly
-# approved it — publishing alone is the author saying "the content is finished",
-# which is a different claim from "this may be put in front of employees".
-APPROVAL_PENDING = "pending"
-APPROVAL_APPROVED = "approved"
-APPROVAL_REJECTED = "rejected"
-APPROVAL_STATES = (APPROVAL_PENDING, APPROVAL_APPROVED, APPROVAL_REJECTED)
-
-
 class TestQuestion(BaseModel):
     """
     One question inside a TestSeries. Embedded, not a collection — questions are
@@ -99,8 +90,23 @@ class TestSeries(Document):
     title: str
     description: str | None = None
     category: str | None = None
+    # Legacy single-department targeting, kept because tests created before
+    # audiences existed carry it and admins still set it from the test editor.
+    # It is read as one more audience dimension (see services/content_access),
+    # not as a separate gate, so the two can't contradict each other.
     department: str | None = None  # None = visible to everyone
     questions: list[TestQuestion] = Field(default_factory=list)
+
+    # --- audience -----------------------------------------------------------
+    # Who this test is for, mirroring Module exactly: an empty set on every
+    # dimension means "everyone", and populated dimensions are OR-ed. Sharing
+    # the module shape is what lets one access service and one admin screen
+    # serve both, instead of tests growing their own parallel rules.
+    audience_teams: list[str] | None = None
+    audience_departments: list[str] | None = None
+    target_roles: list[str] | None = None
+    # Teams this test is mandatory for. Being required also grants access.
+    required_for_teams: list[str] | None = None
 
     pass_threshold: int = 70  # percent
     duration_minutes: int | None = None  # None = untimed
@@ -116,28 +122,6 @@ class TestSeries(Document):
     proctoring_enabled: bool = True
 
     is_published: bool = False
-
-    # --- approval gate ------------------------------------------------------
-    # Publishing is the author's flag; approval is the gate. A learner may only
-    # sit a test that is BOTH published and approved (see `is_live`). Anything
-    # that changes what the questions actually are sends an approved test back
-    # to pending, so nobody can get content in front of employees by approving
-    # a harmless draft and then editing it.
-    #
-    # Tests that existed before approval was introduced are backfilled at
-    # startup: an already-published test is treated as approved, because it was
-    # live under the old rules and silently pulling it would look like an
-    # outage rather than a policy change.
-    approval_status: str = APPROVAL_PENDING
-    approved_by: str | None = None  # users.id of the approver
-    approved_at: datetime | None = None
-    # Why it was rejected (or sent back). Shown to the author so a rejection is
-    # actionable rather than a dead end.
-    approval_note: str | None = None
-    # Set when an author asks for review, so the approver queue has an order and
-    # the author can see their request landed.
-    submitted_for_approval_at: datetime | None = None
-
     # * provenance from the PDF ingest, so the admin can see where this came from
     source_filename: str | None = None
     source_parser: str | None = None  # "pattern" | "ai" | "manual"
@@ -159,47 +143,11 @@ class TestSeries(Document):
         """Publishable only when there's at least one question and all of them score."""
         return bool(self.questions) and self.unscorable_count == 0
 
-    @property
-    def is_approved(self) -> bool:
-        return self.approval_status == APPROVAL_APPROVED
-
-    @property
-    def is_live(self) -> bool:
-        """
-        The single answer to "can a learner sit this test?".
-
-        Both halves are required: the author has published it AND an admin has
-        approved it. Every learner-facing check goes through this property so
-        the two conditions can never drift apart between endpoints.
-        """
-        return self.is_published and self.is_approved
-
-    def revoke_approval(self, reason: str) -> bool:
-        """
-        Send an approved test back to pending because its content changed.
-
-        Returns True if approval was actually withdrawn, so the caller can tell
-        the admin what their edit cost them. A test that was never approved is
-        left alone — there is nothing to revoke and overwriting a rejection
-        note with an edit notice would lose the reviewer's feedback.
-        """
-        if self.approval_status != APPROVAL_APPROVED:
-            return False
-        self.approval_status = APPROVAL_PENDING
-        self.approved_by = None
-        self.approved_at = None
-        self.approval_note = reason
-        self.submitted_for_approval_at = None
-        return True
-
     class Settings:
         name = "test_series"
         indexes = [
             IndexModel([("is_published", ASCENDING), ("department", ASCENDING)]),
             IndexModel([("created_at", DESCENDING)]),
-            # Drives the learner list and the approval queue, both of which
-            # filter on status before anything else.
-            IndexModel([("approval_status", ASCENDING), ("is_published", ASCENDING)]),
         ]
 
 

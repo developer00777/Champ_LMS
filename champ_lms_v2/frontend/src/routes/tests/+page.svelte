@@ -35,6 +35,7 @@
         <div class="card">
           <div class="card-head">
             <h2>{t.title}</h2>
+            {#if t.required && !t.passed}<span class="badge req">Required</span>{/if}
             {#if t.passed}<span class="badge pass">Passed</span>{/if}
           </div>
           {#if t.description}<p class="desc">{t.description}</p>{/if}
@@ -52,14 +53,14 @@
               Best score <b class:pass={t.passed}>{t.my_best_score}%</b>
               · {t.my_attempts} attempt{t.my_attempts === 1 ? '' : 's'}
               {#if t.attempts_left !== null}· {t.attempts_left} left{/if}
-              {#if t.extra_attempts_granted > 0}
+              {#if t.extra_attempts_granted}
                 <span class="granted">+{t.extra_attempts_granted} granted</span>
               {/if}
             </div>
           {:else if t.attempts_allowed}
             <div class="prev">
               {t.attempts_allowed} attempt{t.attempts_allowed === 1 ? '' : 's'} allowed
-              {#if t.extra_attempts_granted > 0}
+              {#if t.extra_attempts_granted}
                 <span class="granted">includes +{t.extra_attempts_granted} granted</span>
               {/if}
             </div>
@@ -111,6 +112,7 @@
   .badge { font-size: 0.65rem; font-weight: 800; letter-spacing: 0.05em; border-radius: 999px;
            padding: 0.15rem 0.5rem; white-space: nowrap; }
   .badge.pass { color: var(--success); border: 1px solid var(--success); }
+  .badge.req { background: color-mix(in srgb, orange 30%, transparent); color: var(--text); }
   .desc { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
   .meta { display: flex; flex-wrap: wrap; gap: 0.35rem; }
   .chip { font-size: 0.71rem; color: var(--muted); background: var(--surface2);
@@ -148,5 +150,8 @@
               background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
               background-size: 200% 100%; animation: shimmer 1.4s infinite; }
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-  .granted { color: var(--success); font-weight: 600; }
+  .granted {
+    margin-left: 0.35rem; font-size: 0.72rem; padding: 0.1rem 0.4rem;
+    border-radius: 999px; background: color-mix(in srgb, orange 28%, transparent);
+  }
 </style>

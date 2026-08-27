@@ -230,14 +230,7 @@
       <div>
         <h1>{paper.title}</h1>
         <p class="sub">
-          <!-- attempts_allowed already includes any extra attempts an admin
-               granted this person, so a granted retake never reads "3 of 2" -->
-          Attempt {paper.attempt_number}{paper.attempts_allowed ? ` of ${paper.attempts_allowed}` : ''}
-          {#if paper.extra_attempts_granted > 0}
-            <span class="granted-note">
-              (+{paper.extra_attempts_granted} granted by an admin)
-            </span>
-          {/if}
+          Attempt {paper.attempt_number}{paper.max_attempts ? ` of ${paper.max_attempts}` : ''}
           · pass mark {paper.pass_threshold}% · {paper.total_marks} marks
         </p>
       </div>
@@ -420,5 +413,4 @@
               background-size: 200% 100%; animation: shimmer 1.4s infinite; }
   .skeleton.big { height: 400px; }
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-  .granted-note { color: var(--success); font-weight: 600; }
 </style>

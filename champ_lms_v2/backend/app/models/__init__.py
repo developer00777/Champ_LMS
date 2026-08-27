@@ -12,7 +12,7 @@ from app.models.quest import Quest, UserQuest
 from app.models.learning_path import LearningPath, UserPathProgress
 from app.models.team import Team, TeamChallenge, TeamProgress
 from app.models.social import SocialPost, Notification
-from app.models.test_series import TestSeries, TestAttempt, TestQuestion, AttemptGrant
+from app.models.test_series import AttemptGrant, TestSeries, TestAttempt, TestQuestion
 # * ContentAccessRule: per-person module grants/revokes. Note this is unrelated
 # * to models.team.Team, which is a gamification squad; content access keys off
 # * the User.team org field an admin sets on the employee.
