@@ -31,6 +31,7 @@ export function buildResultsCsv(m: TestReportModel): string {
   const lines: string[] = [];
 
   lines.push(row(['Champ LMS — test results analysis']));
+  lines.push(row(['Classification', 'L&D confidential document']));
   lines.push(row(['Test', m.title]));
   lines.push(row(['Generated', m.generatedAt.toISOString()]));
   lines.push(row(['Pass mark', `${m.passThreshold}%`]));

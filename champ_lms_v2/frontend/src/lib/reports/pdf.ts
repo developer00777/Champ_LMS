@@ -13,6 +13,7 @@
  * legible when printed, and carries PDF bookmarks plus clickable page nav.
  */
 import { downloadBlob, reportSlug, type ReportPerson, type TestReportModel } from './model';
+import { CHAMPIONS_LOGO_ASPECT, CHAMPIONS_LOGO_PNG } from './brand';
 
 // Landscape A4, in millimetres.
 const W = 297;
@@ -25,6 +26,15 @@ const MUTED = '#6f6f80';
 const HAIRLINE = '#d9d9e2';
 const PANEL = '#f5f5f9';
 const ACCENT = '#e50914';
+
+// Running header mark. Height first: it has to sit inside the 17mm header band
+// above the rule, and the width follows from the artwork's own proportions.
+const LOGO_H = 12;
+const LOGO_W = LOGO_H * CHAMPIONS_LOGO_ASPECT;
+
+// Printed on every page, centred in the footer. The board names individuals and
+// their standing, so it should never circulate without saying what it is.
+const CLASSIFICATION = 'L&D CONFIDENTIAL DOCUMENT';
 
 type Doc = import('jspdf').jsPDF;
 
@@ -594,12 +604,21 @@ function drawChrome(doc: Doc, m: TestReportModel, titles: string[]): void {
 
   for (let i = 1; i <= total; i++) {
     doc.setPage(i);
-    text(doc, 'Champions Group - Champ LMS', M, 14, { size: 7.4, bold: true, color: MUTED });
+    // The alias is what keeps this one image embedded once and referenced per
+    // page, rather than a fresh copy of the artwork in every page's resources.
+    doc.addImage(CHAMPIONS_LOGO_PNG, 'PNG', M, 5.5, LOGO_W, LOGO_H, 'cg-logo', 'FAST');
     text(doc, titles[i - 1] ?? 'Report', M + CONTENT, 14, { size: 7.4, color: MUTED, align: 'right' });
-    rule(doc, M, 17, CONTENT);
+    rule(doc, M, 20, CONTENT);
 
     rule(doc, M, H - 14, CONTENT);
-    text(doc, `${m.title} - generated ${stamp}`, M, H - 9, { size: 6.8, color: MUTED });
+    // Truncated so a long test title can never reach the classification mark.
+    const footprint = `${m.title} - generated ${stamp}`;
+    text(doc, fit(doc, footprint, W / 2 - M - 26, 6.8), M, H - 9, { size: 6.8, color: MUTED });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.2);
+    doc.setTextColor(INK);
+    doc.text(CLASSIFICATION, W / 2, H - 9, { align: 'center', charSpace: 0.6 });
 
     // Clickable page nav, so the PDF reads like the interactive board it came
     // from rather than a flat printout.
