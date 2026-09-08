@@ -125,6 +125,12 @@
     reportBusy = kind;
     reportError = '';
     const model = buildTestReport(data, coaching);
+    if (model.attemptCount === 0) {
+      reportBusy = '';
+      reportError =
+        'Every attempt on this test was made by an admin account, so there is nothing to report yet.';
+      return;
+    }
     const run = kind === 'csv'
       ? Promise.resolve(downloadResultsCsv(model))
       // jsPDF is ~350KB - loaded only when an admin actually asks for the PDF.
@@ -175,7 +181,9 @@
         </div>
         <p class="report-note">
           PDF: landscape A4 with bookmarks and clickable page navigation — cover board,
-          four-tier roster, and key points for improvisation.
+          four-tier roster, and key points for improvisation. Attempts made by admin and
+          L&amp;D lead accounts are left out of both files, so the numbers can differ from
+          the totals above.
           {#if coaching}Includes the AI coaching plan generated above.{/if}
         </p>
         {#if reportError}<p class="error">{reportError}</p>{/if}

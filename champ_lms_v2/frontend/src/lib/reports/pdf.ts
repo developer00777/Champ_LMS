@@ -128,10 +128,16 @@ function coverPage(doc: Doc, m: TestReportModel): void {
     size: titleSize,
     bold: true,
   });
+  // The excluded count is printed rather than silently applied: these figures
+  // will be read next to the on-screen ones, which still count every attempt.
+  const excluded =
+    m.excludedStaffCount > 0
+      ? ` - ${m.excludedStaffCount} staff attempt${m.excludedStaffCount === 1 ? '' : 's'} excluded`
+      : '';
   text(
     doc,
     `Results report - pass mark ${m.passThreshold}% - ${m.totalQuestions} questions - ` +
-      `${m.attemptCount} learner${m.attemptCount === 1 ? '' : 's'} scored`,
+      `${m.attemptCount} learner${m.attemptCount === 1 ? '' : 's'} scored${excluded}`,
     M,
     39,
     { size: 8.5, color: MUTED },

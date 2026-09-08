@@ -77,11 +77,26 @@ export interface TestReportModel {
   passedCount: number;
   /** At Risk + Lagging combined — the group needing intervention. */
   needsWorkCount: number;
+  /** Attempts left out because they were made by an admin / L&D lead account. */
+  excludedStaffCount: number;
   flaggedCount: number;
   narrative: string;
   recommendations: string[];
   /** True when the narrative and actions came from the AI coaching panel. */
   aiAssisted: boolean;
+}
+
+/**
+ * Accounts that administer the platform. Their attempts are left out of the
+ * report: this document is circulated as a board of the people being assessed,
+ * and an admin who sat the paper to check it is not one of them. `ld_lead` is
+ * included because the backend grants it the same administrative standing as
+ * `admin` (see require_admin).
+ */
+const STAFF_ROLES = new Set(['admin', 'ld_lead']);
+
+export function isStaffAccount(role: string | null | undefined): boolean {
+  return STAFF_ROLES.has((role ?? '').toLowerCase());
 }
 
 /**
@@ -123,9 +138,11 @@ export function buildTestReport(
   coaching: CohortCoaching | null = null,
 ): TestReportModel {
   const specs = bandSpecs(data.pass_threshold);
-  const rows = latestPerLearner(data.attempts).sort(
-    (a, b) => b.score - a.score || displayName(a).localeCompare(displayName(b)),
-  );
+  const latest = latestPerLearner(data.attempts);
+  const rows = latest
+    .filter((a) => !isStaffAccount(a.role))
+    .sort((a, b) => b.score - a.score || displayName(a).localeCompare(displayName(b)));
+  const excludedStaffCount = latest.length - rows.length;
 
   const people: ReportPerson[] = rows.map((a, i) => ({
     rank: i + 1,
@@ -152,12 +169,25 @@ export function buildTestReport(
   const topScore = scores.length ? Math.max(...scores) : 0;
   const lowScore = scores.length ? Math.min(...scores) : 0;
 
-  const topics: ReportTopic[] = Object.entries(data.cohort_topic_stats)
-    .map(([topic, s]) => ({
+  // Aggregated here rather than taken from `cohort_topic_stats`: the server's
+  // figure spans every attempt by everyone, including the staff rows just
+  // dropped and superseded earlier attempts, so a report quoting it would
+  // contradict its own roster.
+  const totals = new Map<string, { correct: number; total: number }>();
+  for (const p of people) {
+    for (const [topic, st] of Object.entries(p.topics)) {
+      const agg = totals.get(topic) ?? { correct: 0, total: 0 };
+      agg.correct += st.correct;
+      agg.total += st.total;
+      totals.set(topic, agg);
+    }
+  }
+  const topics: ReportTopic[] = [...totals.entries()]
+    .map(([topic, st]) => ({
       topic,
-      correct: s.correct,
-      total: s.total,
-      accuracy: s.accuracy,
+      correct: st.correct,
+      total: st.total,
+      accuracy: st.total ? Math.round((st.correct / st.total) * 100) : 0,
       zeroCount: people.filter((p) => p.topics[topic] && p.topics[topic].correct === 0).length,
       perfectCount: people.filter((p) => p.topics[topic] && p.topics[topic].accuracy === 100).length,
     }))
@@ -201,6 +231,7 @@ export function buildTestReport(
     strongest,
     passedCount,
     needsWorkCount,
+    excludedStaffCount,
     flaggedCount: people.filter(
       (p) => p.riskLevel === 'suspicious' || p.riskLevel === 'high_risk',
     ).length,

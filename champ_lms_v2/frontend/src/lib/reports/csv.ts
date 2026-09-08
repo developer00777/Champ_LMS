@@ -41,6 +41,9 @@ export function buildResultsCsv(m: TestReportModel): string {
   lines.push(row(['Highest score', `${m.topScore}%`]));
   lines.push(row(['Lowest score', `${m.lowScore}%`]));
   lines.push(row(['Flagged by proctoring', m.flaggedCount]));
+  if (m.excludedStaffCount > 0) {
+    lines.push(row(['Staff attempts excluded', m.excludedStaffCount]));
+  }
   lines.push('');
 
   lines.push(row(['Band summary']));

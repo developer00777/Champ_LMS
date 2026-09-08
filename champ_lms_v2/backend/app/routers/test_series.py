@@ -897,6 +897,9 @@ async def test_results(
             "avatar_url": bunny_storage.avatar_url(u.avatar_bunny_path) if u else None,
             "email": u.email if u else None,
             "department": u.department if u else None,
+            # * the account's role, so a report meant for circulation can leave
+            # * out attempts made by the staff who administer the test
+            "role": u.role if u else None,
             "score": a.score,
             "marks_earned": a.marks_earned,
             "marks_total": a.marks_total,

@@ -939,6 +939,8 @@ export interface TestResultRow {
   attempt_id: string; user_id: string;
   full_name: string | null; email: string | null; department: string | null;
   employee_code: string | null; avatar_url: string | null;
+  // learner | admin | ld_lead — reports for circulation drop the staff rows
+  role: string | null;
   score: number; marks_earned: number; marks_total: number;
   correct_count: number; total_questions: number; passed: boolean;
   submitted_at: string; breakdown: BreakdownRow[];
