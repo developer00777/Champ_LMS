@@ -3,6 +3,8 @@
   import { page } from '$app/stores';
   import { api, type TestResults, type AiAnalysis, type CohortCoaching } from '$lib/api/client';
   import Avatar from '$lib/components/Avatar.svelte';
+  import { buildTestReport } from '$lib/reports/model';
+  import { downloadResultsCsv } from '$lib/reports/csv';
 
   const id = $page.params.id;
   let data: TestResults | null = null;
@@ -110,6 +112,27 @@
   $: cohortRanked = data
     ? Object.entries(data.cohort_topic_stats).sort((a, b) => a[1].accuracy - b[1].accuracy)
     : [];
+
+  // --- downloadable report -------------------------------------------------
+  // Both exports read the same derived analysis, so the spreadsheet and the
+  // board PDF can never disagree. A coaching plan generated above is folded in
+  // when it exists, rather than telling a second, separate story.
+  let reportBusy = '';
+  let reportError = '';
+
+  function download(kind: 'csv' | 'pdf') {
+    if (!data) return;
+    reportBusy = kind;
+    reportError = '';
+    const model = buildTestReport(data, coaching);
+    const run = kind === 'csv'
+      ? Promise.resolve(downloadResultsCsv(model))
+      // jsPDF is ~350KB - loaded only when an admin actually asks for the PDF.
+      : import('$lib/reports/pdf').then((mod) => mod.downloadResultsPdf(model));
+    run
+      .catch((e: any) => { reportError = e?.message ?? 'Could not build the report.'; })
+      .finally(() => { reportBusy = ''; });
+  }
 </script>
 
 <div class="page">
@@ -129,6 +152,35 @@
       <div class="kpi"><b>{data.average_score ?? '—'}{data.average_score != null ? '%' : ''}</b><span>average score</span></div>
       <div class="kpi"><b>{data.pass_rate ?? '—'}{data.pass_rate != null ? '%' : ''}</b><span>pass rate</span></div>
     </div>
+
+    {#if data.attempts.length > 0}
+      <div class="panel report-panel">
+        <div class="report-head">
+          <div>
+            <h2>⬇ Download the report</h2>
+            <p class="panel-sub">
+              The whole analysis — bands, topic accuracy, per-person scores and the
+              recommended focus — as a spreadsheet, or as the leadership-board deck
+              you can circulate as-is.
+            </p>
+          </div>
+          <div class="report-actions">
+            <button class="btn" disabled={reportBusy === 'csv'} on:click={() => download('csv')}>
+              {reportBusy === 'csv' ? 'Building…' : 'Analysis (CSV)'}
+            </button>
+            <button class="btn primary" disabled={reportBusy === 'pdf'} on:click={() => download('pdf')}>
+              {reportBusy === 'pdf' ? 'Building…' : 'Leadership board (PDF)'}
+            </button>
+          </div>
+        </div>
+        <p class="report-note">
+          PDF: landscape A4 with bookmarks and clickable page navigation — cover board,
+          four-tier roster, and key points for improvisation.
+          {#if coaching}Includes the AI coaching plan generated above.{/if}
+        </p>
+        {#if reportError}<p class="error">{reportError}</p>{/if}
+      </div>
+    {/if}
 
     {#if cohortRanked.length}
       <div class="panel">
@@ -395,6 +447,14 @@
   .fill.low { background: #e05260; }
   .bar-val { flex: 0 0 90px; text-align: right; font-variant-numeric: tabular-nums; }
   .bar-val em { color: var(--muted); font-style: normal; font-size: 0.72rem; }
+
+  .report-panel { border-left: 3px solid var(--gold); }
+  .report-head { display: flex; justify-content: space-between; gap: 1rem;
+                 align-items: flex-start; flex-wrap: wrap; }
+  .report-panel h2 { font-size: 1.05rem; font-weight: 700; }
+  .report-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .report-note { font-size: 0.72rem; color: var(--muted); margin-top: 0.6rem;
+                 border-top: 1px solid var(--border); padding-top: 0.6rem; }
 
   .coach-panel { border-left: 3px solid var(--accent); }
   .coach-head { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
