@@ -341,7 +341,7 @@ async def module_leaderboard(
     rank = 0
     for e in enrollments:
         u = users.get(e.user_id)
-        if not u:
+        if not u or u.is_staff:
             continue
         if department and u.department != department:
             continue
@@ -447,8 +447,11 @@ async def recent_activity(
 
     items = []
     for e in enrollments:
+        # Staff completions are left out for the same reason they are left off
+        # the boards: this feed celebrates the cohort, and an admin opening an
+        # episode to check it is not one of its achievements.
         u = users.get(e.user_id)
-        if not u:
+        if not u or u.is_staff:
             continue
         if department and u.department != department:
             continue

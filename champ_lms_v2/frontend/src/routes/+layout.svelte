@@ -55,16 +55,20 @@
       {/if}
     </div>
     <div class="nav-user">
-      <div class="user-stats">
-        <span class="stat points">
-          <span class="stat-icon">⭐</span>
-          {$auth.user?.points ?? 0}
-        </span>
-        <span class="stat streak">
-          <span class="stat-icon">🔥</span>
-          {$auth.user?.streak_days ?? 0}
-        </span>
-      </div>
+      <!-- Staff carry no score: they are kept off every board, so showing them
+           points and a streak would be a number that leads nowhere. -->
+      {#if !$isAdmin}
+        <div class="user-stats">
+          <span class="stat points">
+            <span class="stat-icon">⭐</span>
+            {$auth.user?.points ?? 0}
+          </span>
+          <span class="stat streak">
+            <span class="stat-icon">🔥</span>
+            {$auth.user?.streak_days ?? 0}
+          </span>
+        </div>
+      {/if}
       {#if $gamification.levelInfo}
         <a href="/my-learning" class="level-link" title="Level {$gamification.levelInfo.level}">
           <LevelBadge

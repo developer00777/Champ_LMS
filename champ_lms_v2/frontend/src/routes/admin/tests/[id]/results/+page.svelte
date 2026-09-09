@@ -16,6 +16,11 @@
   // only wanted when an admin is actually investigating one result.
   let timelineOpen: Record<string, boolean> = {};
 
+  // Mirrors STAFF_ROLES on the backend: these accounts administer the platform,
+  // so their attempts are shown but never counted.
+  const STAFF_ROLES = ['admin', 'ld_lead'];
+  const isStaff = (role: string | null) => STAFF_ROLES.includes(role ?? '');
+
   const RISK_LABELS: Record<string, string> = {
     clean: 'No issues',
     minor: 'Minor flags',
@@ -159,6 +164,14 @@
       <div class="kpi"><b>{data.pass_rate ?? '—'}{data.pass_rate != null ? '%' : ''}</b><span>pass rate</span></div>
     </div>
 
+    {#if data.excluded_staff_count > 0}
+      <p class="staff-note">
+        {data.excluded_staff_count} attempt{data.excluded_staff_count === 1 ? '' : 's'} by admin
+        or L&amp;D lead account{data.excluded_staff_count === 1 ? '' : 's'} {data.excluded_staff_count === 1 ? 'is' : 'are'}
+        listed below but left out of these figures, the topic accuracy and the downloads.
+      </p>
+    {/if}
+
     {#if data.attempts.length > 0}
       <div class="panel report-panel">
         <div class="report-head">
@@ -182,8 +195,7 @@
         <p class="report-note">
           PDF: landscape A4 with bookmarks and clickable page navigation — cover board,
           four-tier roster, and key points for improvisation. Attempts made by admin and
-          L&amp;D lead accounts are left out of both files, so the numbers can differ from
-          the totals above.
+          L&amp;D lead accounts are left out, matching the figures above.
           {#if coaching}Includes the AI coaching plan generated above.{/if}
         </p>
         {#if reportError}<p class="error">{reportError}</p>{/if}
@@ -283,6 +295,7 @@
                   <b>
                     {a.full_name || a.email || 'Unknown'}
                     {#if a.employee_code}<span class="code">{a.employee_code}</span>{/if}
+                    {#if isStaff(a.role)}<span class="staff-tag">not counted</span>{/if}
                   </b>
                   <span class="muted">{a.email}{a.department ? ` · ${a.department}` : ''}</span>
                   <span class="muted tiny">{new Date(a.submitted_at).toLocaleString()}</span>
@@ -455,6 +468,12 @@
   .fill.low { background: #e05260; }
   .bar-val { flex: 0 0 90px; text-align: right; font-variant-numeric: tabular-nums; }
   .bar-val em { color: var(--muted); font-style: normal; font-size: 0.72rem; }
+
+  .staff-note { font-size: 0.76rem; color: var(--muted); margin: -0.5rem 0 1.25rem;
+                border-left: 2px solid var(--border); padding-left: 0.7rem; }
+  .staff-tag { font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+               letter-spacing: 0.04em; color: var(--muted); background: var(--surface2);
+               border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.45rem; }
 
   .report-panel { border-left: 3px solid var(--gold); }
   .report-head { display: flex; justify-content: space-between; gap: 1rem;

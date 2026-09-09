@@ -5,6 +5,14 @@ from pydantic import Field
 from pymongo import IndexModel, ASCENDING
 
 
+# Roles that administer the platform rather than learn on it. They are kept off
+# every ranking and out of every cohort statistic: an admin who watched an
+# episode to check it, or sat a paper to proof it, is not competing with the
+# people those boards are for. Defined on the model because the access gate,
+# the leaderboards and the results aggregates must all agree on who is staff.
+STAFF_ROLES = ("admin", "ld_lead")
+
+
 class User(Document):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: str
@@ -47,6 +55,10 @@ class User(Document):
     last_activity_at: datetime | None = None
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def is_staff(self) -> bool:
+        return self.role in STAFF_ROLES
 
     def update_level(self) -> bool:
         """Recompute level from XP. Returns True if the user levelled up."""

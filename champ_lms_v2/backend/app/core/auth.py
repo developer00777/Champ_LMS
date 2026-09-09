@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from app.core.config import get_settings
-from app.models.user import User
+from app.models.user import User, STAFF_ROLES
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -60,7 +60,7 @@ async def get_current_user(
 
 
 async def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
-    if user.role not in ("admin", "ld_lead"):
+    if user.role not in STAFF_ROLES:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 

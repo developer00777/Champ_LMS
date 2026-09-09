@@ -953,6 +953,9 @@ export interface TestResultRow {
 export interface TestResults {
   test_id: string; title: string; pass_threshold: number;
   total_questions: number; attempt_count: number;
+  // Staff attempts are listed but excluded from every figure below, so the
+  // count is sent alongside them rather than left to be inferred.
+  excluded_staff_count: number;
   average_score: number | null; pass_rate: number | null;
   cohort_topic_stats: Record<string, TopicStat>;
   attempts: TestResultRow[];

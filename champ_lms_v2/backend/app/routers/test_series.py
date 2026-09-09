@@ -916,10 +916,20 @@ async def test_results(
             "proctoring": _proctor_summary(a),
         })
 
-    scores = [a.score for a in attempts]
-    # * aggregate topic accuracy across everyone — shows what the whole cohort fails
+    # * Staff attempts stay in `attempts` — an admin proofing a paper should be
+    # * able to see their own run — but they are kept out of every aggregate
+    # * below. One admin sitting a paper otherwise moves the team average, the
+    # * pass rate and the weakest-topic figure the coaching argues from.
+    cohort_attempts = [
+        a for a in attempts
+        if not (users.get(a.user_id) and users[a.user_id].is_staff)
+    ]
+    excluded_staff = len(attempts) - len(cohort_attempts)
+
+    scores = [a.score for a in cohort_attempts]
+    # * aggregate topic accuracy across the cohort — shows what the team fails
     cohort: dict[str, dict] = {}
-    for a in attempts:
+    for a in cohort_attempts:
         for topic, s in _topic_stats(a.breakdown).items():
             agg = cohort.setdefault(topic, {"correct": 0, "total": 0, "accuracy": 0})
             agg["correct"] += s["correct"]
@@ -932,10 +942,13 @@ async def test_results(
         "title": test.title,
         "pass_threshold": test.pass_threshold,
         "total_questions": len(test.questions),
-        "attempt_count": len(attempts),
+        "attempt_count": len(cohort_attempts),
+        "excluded_staff_count": excluded_staff,
         "average_score": round(sum(scores) / len(scores)) if scores else None,
-        "pass_rate": round(sum(1 for a in attempts if a.passed) / len(attempts) * 100)
-        if attempts else None,
+        "pass_rate": round(
+            sum(1 for a in cohort_attempts if a.passed) / len(cohort_attempts) * 100
+        )
+        if cohort_attempts else None,
         "cohort_topic_stats": cohort,
         "attempts": rows,
     }
@@ -970,10 +983,20 @@ async def coach_test_cohort(
     users = {u.id: u for u in await User.find(In(User.id, user_ids)).to_list()}
 
     # Keep only each person's latest attempt: coaching someone on a score they
-    # already improved on would be actively misleading.
+    # already improved on would be actively misleading. Staff attempts are
+    # dropped outright — the guidance is addressed to the learners, and an
+    # admin's proofing run is not a person to write a coaching note to.
     latest: dict[str, TestAttempt] = {}
     for a in sorted(attempts, key=lambda x: x.submitted_at):
+        u = users.get(a.user_id)
+        if u and u.is_staff:
+            continue
         latest[a.user_id] = a
+    if not latest:
+        raise HTTPException(
+            status_code=422,
+            detail="Every attempt on this test was made by an admin account.",
+        )
 
     rows = []
     cohort: dict[str, dict] = {}

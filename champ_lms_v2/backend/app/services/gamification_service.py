@@ -4,7 +4,7 @@ Gamification service — points, streaks, leaderboard via Redis sorted sets.
 from datetime import datetime, timezone, timedelta
 import redis.asyncio as aioredis
 from beanie.operators import Set, Inc, In
-from app.models.user import User
+from app.models.user import User, STAFF_ROLES
 from app.services.bunny_storage import bunny_storage
 from app.models.gamification import Badge, UserBadge
 from app.models.progress import WatchProgress
@@ -148,12 +148,22 @@ async def rehydrate_leaderboards(redis: aioredis.Redis) -> None:
     Redis sorted sets are ephemeral; Mongo User.points is the source of truth.
     On boot, replay every user's points into the global + department boards so a
     Redis flush cannot silently wipe the rankings.
+
+    Staff are replayed as a removal rather than skipped. Skipping alone would
+    leave an admin who was ranked before this rule existed sitting at the top of
+    a board forever, because zadd never clears what is already there.
     """
     users = await User.find(User.points > 0).to_list()
     for u in users:
-        await redis.zadd("leaderboard:global", {u.id: u.points})
+        keys = ["leaderboard:global"]
         if u.department:
-            await redis.zadd(f"leaderboard:dept:{u.department}", {u.id: u.points})
+            keys.append(f"leaderboard:dept:{u.department}")
+        if u.is_staff:
+            for key in keys:
+                await redis.zrem(key, u.id)
+            continue
+        for key in keys:
+            await redis.zadd(key, {u.id: u.points})
 
 
 class GamificationService:
@@ -170,10 +180,14 @@ class GamificationService:
     async def _award_points_amount(self, user_id: str, pts: int, department: str) -> int:
         if pts <= 0:
             return 0
-        await self.redis.zincrby("leaderboard:global", pts, user_id)
-        if department:
-            await self.redis.zincrby(f"leaderboard:dept:{department}", pts, user_id)
         user = await User.get(user_id)
+        # Their own totals still accrue — their profile, level and streak are
+        # theirs — but the sorted sets that rank people never see them, so no
+        # later rehydrate or read can put them back on a board.
+        if user and not user.is_staff:
+            await self.redis.zincrby("leaderboard:global", pts, user_id)
+            if department:
+                await self.redis.zincrby(f"leaderboard:dept:{department}", pts, user_id)
         if user:
             await user.update(Inc({User.points: pts}))
         return pts
@@ -355,7 +369,11 @@ class GamificationService:
 
     async def get_leaderboard(self, department: str | None = None, limit: int = 10) -> list[dict]:
         key = f"leaderboard:dept:{department}" if department else "leaderboard:global"
-        entries = await self.redis.zrevrange(key, 0, limit - 1, withscores=True)
+        # Over-fetch: staff and deleted accounts are dropped below, and a board
+        # that returned nine rows because one of them was an admin would just
+        # move the problem. The write path already keeps staff out of the set —
+        # this is the second line, for entries written before that was true.
+        entries = await self.redis.zrevrange(key, 0, limit * 2 + 5, withscores=True)
         if not entries:
             return []
 
@@ -363,9 +381,13 @@ class GamificationService:
         users = {u.id: u for u in await User.find(In(User.id, user_ids)).to_list()}
 
         result = []
-        for rank, (user_id, score) in enumerate(entries, 1):
+        rank = 0
+        for user_id, score in entries:
             user = users.get(user_id)
-            if user:
+            if user and not user.is_staff:
+                rank += 1
+                if rank > limit:
+                    break
                 result.append({
                     "rank": rank,
                     "user_id": user_id,
