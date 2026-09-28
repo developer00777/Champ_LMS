@@ -37,6 +37,10 @@ class Episode(Document):
     # "- " bullets). ai = drafted from the transcript; manual = admin-written.
     notes: str | None = None
     notes_source: str | None = None
+    # Name of the file the admin uploaded. Lets the canvas match a file picked
+    # again later (to transcribe a video uploaded before transcripts worked)
+    # to its episode.
+    source_filename: str | None = None
 
     # Bunny Storage path for episode thumbnail (manually uploaded)
     thumbnail_bunny_path: str | None = None

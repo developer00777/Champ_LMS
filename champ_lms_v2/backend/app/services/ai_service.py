@@ -428,6 +428,7 @@ class AIService:
         prompt: str,
         max_tokens: int = 4096,
         audio: tuple[str, str] | None = None,
+        model: str | None = None,
     ) -> str:
         """
         Single chat completion via OpenRouter.
@@ -437,9 +438,9 @@ class AIService:
         always means OPENROUTER_MODEL names a model OpenRouter has retired,
         which is a config fix, not a transient failure.
         """
-        model = self.settings.openrouter_model
+        model = model or self.settings.openrouter_model
         # `audio` is (base64 data, format), sent as an input_audio part next to
-        # the prompt. The default Gemini model accepts audio directly.
+        # the prompt, for a model that accepts audio.
         content: str | list = prompt
         if audio:
             content = [
@@ -472,6 +473,13 @@ class AIService:
                 "OpenRouter rejected the API key (check OPENROUTER_API_KEY)."
             )
         if resp.status_code == 402:
+            # Audio has its own floor: OpenRouter refuses it below $0.50 of
+            # account balance even when text calls still go through.
+            if audio:
+                raise AIServiceError(
+                    "OpenRouter refused the audio: the account balance is below the $0.50 "
+                    "it needs for audio. Add credits at openrouter.ai/settings/credits."
+                )
             raise AIServiceError("OpenRouter credits exhausted — top up the account.")
         if resp.status_code == 429:
             raise AIServiceError("OpenRouter rate-limited this request; try again shortly.")
@@ -499,15 +507,30 @@ class AIService:
         text = await self._chat(prompt, max_tokens=2048)
         return _extract_json_array(text)
 
-    async def transcribe_audio(self, wav_base64: str, offset_seconds: float = 0.0) -> list[dict]:
+    async def transcribe_audio(
+        self,
+        wav_base64: str,
+        offset_seconds: float = 0.0,
+        clip_seconds: float | None = None,
+    ) -> list[dict]:
         """
         Timed transcript lines for one audio clip.
 
         The browser cuts a video's audio into short clips and sends them one at
         a time, so each call is small. Times come back relative to the clip and
         are shifted by `offset_seconds` to place them in the whole video.
+
+        When the clip's length is known, times are held inside it. Audio models
+        sometimes run a timestamp past the end of the clip; left alone, that
+        line would claim a moment in the next clip and the synced transcript
+        would jump ahead of the video.
         """
-        text = await self._chat(TRANSCRIBE_PROMPT, max_tokens=8192, audio=(wav_base64, "wav"))
+        text = await self._chat(
+            TRANSCRIBE_PROMPT,
+            max_tokens=8192,
+            audio=(wav_base64, "wav"),
+            model=self.settings.openrouter_transcribe_model,
+        )
         try:
             raw = _extract_json_array(text)
         except (ValueError, json.JSONDecodeError) as exc:
@@ -524,6 +547,8 @@ class AIService:
                 end = max(start, float(seg.get("end") or start))
             except (TypeError, ValueError):
                 continue
+            if clip_seconds:
+                start, end = min(start, clip_seconds), min(end, clip_seconds)
             segments.append({
                 "start": round(start + offset_seconds, 2),
                 "end": round(end + offset_seconds, 2),

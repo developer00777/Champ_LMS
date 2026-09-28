@@ -388,6 +388,7 @@ async def prepare_upload(
     ep.bunny_video_id = video_guid
     ep.bunny_video_guid = video_guid
     ep.status = "processing"
+    ep.source_filename = body.file_name
     await ep.save()
 
     return {
@@ -445,6 +446,7 @@ async def upload_episode_video(
     ep.bunny_video_id = video_guid
     ep.bunny_video_guid = video_guid
     ep.status = "processing"
+    ep.source_filename = video.filename
     await ep.save()
 
     return {

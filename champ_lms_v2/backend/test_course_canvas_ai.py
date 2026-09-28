@@ -33,8 +33,8 @@ def check(cond, label):
         print(f"  FAIL  {label}")
 
 
-async def fake_chat(prompt, max_tokens=4096, audio=None):
-    calls.append({"prompt": prompt, "audio": audio})
+async def fake_chat(prompt, max_tokens=4096, audio=None, model=None):
+    calls.append({"prompt": prompt, "audio": audio, "model": model})
     if audio:
         return '```json\n[{"start": 0, "end": 3.5, "text": "Hello team."}, {"start": 3.5, "end": 8, "text": "Today: discovery."}, {"start": 1, "text": ""}]\n```'
     if "checkpoint quiz" in prompt:
@@ -69,6 +69,14 @@ with TestClient(app) as c:
     check(r.status_code == 200 and len(segs) == 2, "clip becomes two lines, empty line dropped")
     check(segs and segs[0]["start"] == 120 and segs[1]["end"] == 128, "times shifted by the clip offset")
     check(calls[-1]["audio"] and calls[-1]["audio"][1] == "wav", "audio sent to the model as wav")
+    check(calls[-1]["model"] == ai_service.settings.openrouter_transcribe_model == "google/gemini-3.1-flash-lite",
+          "transcripts use the transcript model, not the default chat model")
+    r = c.post(f"/admin/episodes/{v1['ref_id']}/transcribe-chunk",
+               files={"audio": ("c.wav", b"RIFF....WAVEfmt fake", "audio/wav")},
+               data={"offset_seconds": "240", "clip_seconds": "6"}, headers=A)
+    clamped = r.json()["segments"]
+    check(max(x["end"] for x in clamped) == 246 and all(240 <= x["start"] <= 246 for x in clamped),
+          "a timestamp past the end of the clip is held inside it")
     big = c.post(f"/admin/episodes/{v1['ref_id']}/transcribe-chunk",
                  files={"audio": ("c.wav", b"0" * (12 * 1024 * 1024 + 1), "audio/wav")}, headers=A)
     check(big.status_code == 413, "oversized clip refused")
@@ -105,6 +113,40 @@ with TestClient(app) as c:
     ts = c.post(f"/admin/courses/{cid}/items", json={"kind": "test", "section_id": sec}, headers=A).json()
     r = c.post(f"/admin/courses/{cid}/tests/{ts['ref_id']}/generate", json={"count": 10}, headers=A).json()
     check(r["question_count"] == 2 and r["is_ready"] and r["source_parser"] == "ai", "AI test paper is ready to publish")
+
+print("\n== out of credit for audio ==")
+# The real _chat against a faked HTTP 402, as OpenRouter sends when the
+# account balance is under the $0.50 it requires for audio.
+import asyncio  # noqa: E402
+
+from app.services import ai_service as ai_module  # noqa: E402
+from app.services.ai_service import AIService, AIServiceError  # noqa: E402
+
+
+class _Resp:
+    status_code = 402
+    text = '{"error":{"message":"This request requires at least $0.50 in balance for audio"}}'
+
+    def json(self):
+        return {"error": {"message": "This request requires at least $0.50 in balance for audio"}}
+
+
+class _Client:
+    def __init__(self, *a, **k): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+    async def post(self, *a, **k): return _Resp()
+
+
+_real_client = ai_module.httpx.AsyncClient
+ai_module.httpx.AsyncClient = _Client
+try:
+    asyncio.run(AIService().transcribe_audio("AAAA", 0))
+    check(False, "a 402 on audio raises")
+except AIServiceError as e:
+    check("$0.50" in str(e) and "credits" in str(e), "a 402 on audio explains the audio balance minimum")
+finally:
+    ai_module.httpx.AsyncClient = _real_client
 
 print(f"\n{PASSED} passed, {len(FAILED)} failed")
 for f in FAILED:

@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # NOTE: OpenRouter retires model ids without notice, and a retired id 404s
     # every AI call. Verify against openrouter.ai/api/v1/models when changing.
     openrouter_model: str = "google/gemini-2.5-flash"  # cheap + fast; change freely in .env
+    # Model for automatic transcripts only. Chosen in a side-by-side test on
+    # real speech (Sept 2026): among the cheapest audio models (~$0.08 per hour
+    # of video) and the only one whose timestamps stayed inside every clip,
+    # which the synced transcript depends on. 2.5 Flash / Flash-Lite were as
+    # accurate on words but put lines past the end of the clip.
+    openrouter_transcribe_model: str = "google/gemini-3.1-flash-lite"
 
     # Zoom
     zoom_webhook_secret: str = ""

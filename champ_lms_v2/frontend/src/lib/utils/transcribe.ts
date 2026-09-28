@@ -42,7 +42,7 @@ function rms(samples: Float32Array): number {
 }
 
 /** The file's audio as 16 kHz mono clips, with each clip's start time. */
-export async function audioClips(file: File): Promise<{ start: number; wav: Blob }[]> {
+export async function audioClips(file: File): Promise<{ start: number; seconds: number; wav: Blob }[]> {
   if (file.size > MAX_AUTO_TRANSCRIPT_BYTES) {
     throw new TranscribeError('This file is too large for an automatic transcript. Upload a caption file instead.');
   }
@@ -63,11 +63,11 @@ export async function audioClips(file: File): Promise<{ start: number; wav: Blob
     for (let i = 0; i < length; i++) mono[i] += data[i] / audio.numberOfChannels;
   }
   const per = CLIP_SECONDS * SAMPLE_RATE;
-  const clips: { start: number; wav: Blob }[] = [];
+  const clips: { start: number; seconds: number; wav: Blob }[] = [];
   for (let at = 0; at < length; at += per) {
     const slice = mono.subarray(at, Math.min(length, at + per));
     if (rms(slice) < SILENCE_RMS) continue;
-    clips.push({ start: at / SAMPLE_RATE, wav: encodeWav(slice) });
+    clips.push({ start: at / SAMPLE_RATE, seconds: slice.length / SAMPLE_RATE, wav: encodeWav(slice) });
   }
   return clips;
 }
@@ -92,7 +92,7 @@ export async function autoTranscribe(
     async function worker() {
       while (next < clips.length) {
         const clip = clips[next++];
-        const res = await api.transcribeChunk(episodeId, clip.wav, clip.start);
+        const res = await api.transcribeChunk(episodeId, clip.wav, clip.start, clip.seconds);
         segments.push(...res.segments);
         onProgress?.(++done, clips.length);
       }

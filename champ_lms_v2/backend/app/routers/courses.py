@@ -103,6 +103,8 @@ class ItemCreateIn(BaseModel):
     # Quizzes only: which episodes to write from. Omit to use the videos just
     # above the quiz in its section.
     source_episode_ids: list[str] | None = None
+    # Videos only: the name of the file being uploaded.
+    source_filename: str | None = Field(default=None, max_length=300)
 
 
 class SegmentIn(BaseModel):
@@ -366,6 +368,7 @@ async def _admin_item(it: CourseItem, refs: _Refs, numbers: dict[str, int]) -> d
             "duration_seconds": ep.duration_seconds,
             "thumbnail_url": _thumb(ep),
             "has_remote_video": bool(ep.bunny_video_guid or ep.bunny_video_id),
+            "source_filename": ep.source_filename,
             "transcript_status": ep.transcript_status or ("ready" if ep.transcript_segments else None),
             "transcript_source": ep.transcript_source,
             "transcript_segments": ep.transcript_segments or [],
@@ -610,6 +613,7 @@ async def add_item(
             title=title or "Untitled episode",
             sequence_order=0,
             status="pending",
+            source_filename=body.source_filename,
         )
         await doc.insert()
     elif body.kind == ITEM_QUIZ:
@@ -740,6 +744,7 @@ async def transcribe_chunk(
     admin: Annotated[User, Depends(require_admin)],
     audio: UploadFile = File(...),
     offset_seconds: float = Form(0.0),
+    clip_seconds: float | None = Form(None),
 ):
     """
     Timed transcript lines for one short audio clip of an episode.
@@ -762,7 +767,9 @@ async def transcribe_chunk(
         raise HTTPException(status_code=413, detail="Audio clip too large; send shorter clips")
     try:
         segments = await ai_service.transcribe_audio(
-            base64.b64encode(data).decode("ascii"), max(0.0, offset_seconds)
+            base64.b64encode(data).decode("ascii"),
+            max(0.0, offset_seconds),
+            clip_seconds if clip_seconds and clip_seconds > 0 else None,
         )
     except AIServiceError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

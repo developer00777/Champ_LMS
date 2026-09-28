@@ -4,7 +4,7 @@
   import {
     api, type AdminCourse, type AdminCourseItem, type CourseItemKind, type CourseSection,
   } from '$lib/api/client';
-  import { uploads, startVideoUpload, hasActiveUploads } from '$lib/stores/course-uploads';
+  import { uploads, startVideoUpload, transcribeFiles, hasActiveUploads } from '$lib/stores/course-uploads';
   import { clock, runtime } from '$lib/utils/transcribe';
   import { icons, kindLabel } from '$lib/components/course/icons';
   import VideoInspector from '$lib/components/course/admin/VideoInspector.svelte';
@@ -29,6 +29,7 @@
   let mapFull = false;
   let mapEl: HTMLElement;
   let fileInput: HTMLInputElement;
+  let refileInput: HTMLInputElement;
   let dragId: string | null = null;
   let dropHint: { id?: string; after?: boolean; section?: string } | null = null;
   let dzHot = false;
@@ -104,6 +105,7 @@
       if (it.status === 'pending' && !it.has_remote_video) return 'No video file yet';
       if (it.status !== 'ready') return it.status === 'failed' ? 'Encoding failed' : 'Encoding on Bunny…';
       if (up?.transcript === 'working' || it.transcript_status === 'processing') return 'Writing transcript and notes…';
+      if (up?.transcript === 'waiting' && up.retryAt) return 'Transcript failed, trying again shortly';
       const t = it.transcript_source === 'auto' ? 'auto' : it.transcript_source === 'manual' ? 'edited' : it.transcript_status === 'failed' ? 'failed' : 'none';
       const n = it.notes_source === 'ai' ? 'AI draft' : it.notes_source === 'manual' ? 'written by you' : 'none';
       return `Transcript ${t} · Notes ${n}`;
@@ -226,7 +228,7 @@
     let firstId: string | null = null;
     for (const file of videos) {
       try {
-        const it = await api.addCourseItem(course.id, { kind: 'video', section_id, index: index++, title: prettify(file.name) });
+        const it = await api.addCourseItem(course.id, { kind: 'video', section_id, index: index++, title: prettify(file.name), source_filename: file.name });
         startVideoUpload(it.id, it.ref_id, file, load);
         firstId = firstId ?? it.id;
       } catch (e: any) { error = `${file.name}: ${e.message}`; break; }
@@ -241,6 +243,40 @@
     (e.target as HTMLInputElement).value = '';
     addVideos(files, pendingInsert);
     pendingInsert = null;
+  }
+
+  // ---- transcripts for videos already uploaded ----------------------------
+  // The browser only has a video's file while it uploads it. Videos uploaded
+  // earlier (or whose transcript failed after the tab closed) need their file
+  // picked again; each is matched to its episode by the name it was uploaded
+  // under, or by the title the canvas gave it from that name.
+  $: untranscribed = (course?.items ?? []).filter(i => {
+    if (i.kind !== 'video' || i.transcript_source === 'manual' || i.transcript_segments.length) return false;
+    const up = $uploads[i.id];
+    return !up || up.transcript === 'failed' || (up.transcript === 'done' && !i.transcript_segments.length);
+  });
+
+  function onRefiles(e: Event) {
+    const picked = [...((e.target as HTMLInputElement).files ?? [])];
+    (e.target as HTMLInputElement).value = '';
+    if (!picked.length) return;
+    const open = [...untranscribed];
+    const jobs: { itemId: string; episodeId: string; file: File }[] = [];
+    const unmatched: string[] = [];
+    for (const file of picked) {
+      const byName = open.findIndex(i => i.kind === 'video' && i.source_filename === file.name);
+      const byTitle = byName >= 0 ? byName : open.findIndex(i => i.title.trim().toLowerCase() === prettify(file.name).toLowerCase());
+      if (byTitle < 0) { unmatched.push(file.name); continue; }
+      const [it] = open.splice(byTitle, 1);
+      jobs.push({ itemId: it.id, episodeId: it.ref_id, file });
+    }
+    if (jobs.length) transcribeFiles(jobs, load);
+    notice = jobs.length
+      ? `Transcribing ${plural(jobs.length, 'video', 'videos')} from the files you picked. Keep this tab open until they finish.`
+      : '';
+    error = unmatched.length
+      ? `No episode without a transcript matches ${unmatched.join(', ')}. Pick the file from the episode's details panel instead.`
+      : '';
   }
 
   // ---- deleting ----------------------------------------------------------
@@ -336,6 +372,7 @@
 <svelte:window on:keydown={onKey} on:click={e => { if (insKey && !(e.target instanceof Element && e.target.closest('.ins'))) insKey = null; }} />
 
 <input bind:this={fileInput} type="file" accept="video/*" multiple hidden on:change={onFiles} />
+<input bind:this={refileInput} type="file" accept="video/*,audio/*" multiple hidden on:change={onRefiles} />
 
 {#if !course}
   {#if error}<p class="error">{error}</p>{:else}<p class="muted">Loading the canvas…</p>{/if}
@@ -383,6 +420,17 @@
           {:else}<b>Empty course.</b> Drop videos below to start.{/if}
         </div>
       </div>
+
+      {#if untranscribed.length}
+        <div class="banner warn refile">
+          <span>
+            <b>{plural(untranscribed.length, 'video has', 'videos have')} no transcript yet:</b>
+            {untranscribed.map(i => i.title).join(', ')}.
+            Files aren't kept after upload, so pick them again and each is transcribed here, matched to its episode by name.
+          </span>
+          <button class="btn sm" on:click={() => refileInput.click()}>{@html icons.upload} Pick their files</button>
+        </div>
+      {/if}
 
       <div class="cv-grid">
         <aside class="panel map" class:is-full={mapFull} bind:this={mapEl} aria-label="Course map">
@@ -572,6 +620,8 @@
   .banner { display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; padding: 0.6rem 0.9rem; border-radius: 10px; font-size: 0.85rem; }
   .banner.ok { background: rgba(46, 204, 113, 0.1); }
   .banner.warn { background: rgba(240, 165, 64, 0.12); }
+  .banner.refile { align-items: center; flex-wrap: wrap; }
+  .banner.refile b { font-weight: 600; }
   .banner.bad { background: rgba(255, 91, 98, 0.12); color: #ffb3b6; }
   .tabs { display: flex; gap: 1.2rem; border-bottom: 1px solid var(--border); }
   .tabs button { padding: 0.4rem 0 0.6rem; font-weight: 600; font-size: 0.9rem; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }

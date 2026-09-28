@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { api, type AdminVideoItem } from '$lib/api/client';
-  import { uploads, startVideoUpload } from '$lib/stores/course-uploads';
-  import { autoTranscribe, clock, parseCaptions, segmentsToText, textToSegments } from '$lib/utils/transcribe';
+  import { uploads, startVideoUpload, transcribeFiles, retryTranscript } from '$lib/stores/course-uploads';
+  import { clock, parseCaptions, segmentsToText, textToSegments } from '$lib/utils/transcribe';
   import { icons } from '../icons';
 
   export let item: AdminVideoItem;
@@ -18,7 +19,6 @@
   let message = '';
   let error = '';
   let shownId = item.id;
-  let rerunProgress = 0;
 
   // A different item selected, or fresh data from the server for this one.
   $: if (item.id !== shownId) {
@@ -74,9 +74,9 @@
     const f = (e.target as HTMLInputElement).files?.[0];
     (e.target as HTMLInputElement).value = '';
     if (!f) return;
-    rerunProgress = 0;
-    run('rerun', () => autoTranscribe(item.ref_id, f, (d, t) => (rerunProgress = t ? d / t : 1)),
-      'New transcript saved. Notes will update in a moment.');
+    // Through the shared queue, so a passing failure is retried on its own.
+    transcribeFiles([{ itemId: item.id, episodeId: item.ref_id, file: f }], onReload);
+    message = `Transcribing ${f.name}. Notes follow once the transcript is saved.`;
   }
 
   // Retry a failed upload, or give an empty episode its file.
@@ -93,7 +93,11 @@
     run('redraft', async () => { await api.generateEpisodeNotes(item.ref_id); notesDirty = false; }, 'Notes redrafted from the transcript.');
   }
 
-  $: tStatus = up?.transcript === 'working' ? 'working' : item.transcript_status;
+  $: tStatus = up?.transcript === 'working' ? 'working' : up?.transcript === 'waiting' && up.retryAt ? 'retrying' : item.transcript_status;
+  // Ticks once a second so the retry countdown stays current.
+  let now = Date.now();
+  const clockTimer = setInterval(() => (now = Date.now()), 1000);
+  onDestroy(() => clearInterval(clockTimer));
 </script>
 
 <div class="insp-body">
@@ -143,10 +147,12 @@
 
   {#if tab === 'transcript'}
     <div class="src-row">
-      {#if tStatus === 'working' || tStatus === 'processing' || busy === 'rerun'}
+      {#if tStatus === 'working' || tStatus === 'processing'}
         <span class="pill course"><span class="spin"></span>
-          Writing transcript{#if up?.transcript === 'working'} · {Math.round(up.transcriptProgress * 100)}%{:else if busy === 'rerun'} · {Math.round(rerunProgress * 100)}%{/if}
+          Writing transcript{#if up?.transcript === 'working'} · {Math.round(up.transcriptProgress * 100)}%{/if}
         </span>
+      {:else if tStatus === 'retrying' && up?.retryAt}
+        <span class="pill warn" title={up.transcriptError ?? ''}>Trying again in {Math.max(0, Math.ceil((up.retryAt - now) / 1000))} s</span>
       {:else if tStatus === 'failed'}
         <span class="pill bad" title={up?.transcriptError ?? ''}>Automatic transcript failed</span>
       {:else if item.transcript_source === 'auto'}
@@ -165,7 +171,10 @@
         {/if}
       </div>
     </div>
-    {#if up?.transcript === 'failed'}<p class="error">{up.transcriptError}</p>{/if}
+    {#if up?.transcriptError && (up.transcript === 'failed' || up.transcript === 'waiting')}
+      <p class="error">{up.transcriptError}</p>
+      {#if up.transcript === 'failed'}<button class="btn sm" on:click={() => retryTranscript(item.id, onReload)}>Try again now</button>{/if}
+    {/if}
     <textarea class="mono" rows="12" bind:value={transcriptText} on:input={() => (transcriptDirty = true)}
       placeholder="[0:00] First line of what is said…"></textarea>
     <p class="hint">One line per caption, starting with its time as [m:ss]. The learner's transcript follows the video using these times.</p>

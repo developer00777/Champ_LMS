@@ -362,14 +362,15 @@ export const api = {
     request<AdminCourse & { warnings: string[] }>(`/admin/courses/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   setCourseStructure: (id: string, sections: CourseSection[], order: { id: string; section_id: string }[]) =>
     request<AdminCourse>(`/admin/courses/${id}/structure`, { method: 'PUT', body: JSON.stringify({ sections, order }) }),
-  addCourseItem: (id: string, body: { kind: CourseItemKind; section_id: string; index?: number; title?: string; source_episode_ids?: string[] }) =>
+  addCourseItem: (id: string, body: { kind: CourseItemKind; section_id: string; index?: number; title?: string; source_episode_ids?: string[]; source_filename?: string }) =>
     request<AdminCourseItem>(`/admin/courses/${id}/items`, { method: 'POST', body: JSON.stringify(body) }),
   deleteCourseItem: (id: string, itemId: string) =>
     request<AdminCourse>(`/admin/courses/${id}/items/${itemId}`, { method: 'DELETE' }),
-  transcribeChunk: async (episodeId: string, wav: Blob, offsetSeconds: number): Promise<{ segments: TranscriptSegment[] }> => {
+  transcribeChunk: async (episodeId: string, wav: Blob, offsetSeconds: number, clipSeconds?: number): Promise<{ segments: TranscriptSegment[] }> => {
     const form = new FormData();
     form.append('audio', wav, 'clip.wav');
     form.append('offset_seconds', String(offsetSeconds));
+    if (clipSeconds) form.append('clip_seconds', String(clipSeconds));
     const token = localStorage.getItem('champ_token');
     const res = await fetch(`${BASE}/admin/episodes/${episodeId}/transcribe-chunk`, {
       method: 'POST', body: form,
@@ -740,6 +741,7 @@ export interface AdminVideoItem extends AdminItemBase {
   kind: 'video'; description: string | null; episode_number: number | null;
   status: string; duration_seconds: number | null; thumbnail_url: string | null;
   has_remote_video: boolean;
+  source_filename: string | null;
   transcript_status: 'processing' | 'ready' | 'failed' | null;
   transcript_source: 'auto' | 'manual' | null;
   transcript_segments: TranscriptSegment[];
