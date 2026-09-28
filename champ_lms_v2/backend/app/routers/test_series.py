@@ -27,6 +27,7 @@ from app.models.test_series import (
     TestQuestion,
     TestSeries,
 )
+from app.models.module import Module
 from app.models.user import User
 from app.services import content_access
 from app.services.ai_service import ai_service, fallback_analysis
@@ -364,6 +365,16 @@ async def _require_test_access(test: TestSeries, user: User) -> None:
     """
     if not await content_access.can_access_test(test, user):
         raise HTTPException(status_code=403, detail="This test is not available to you")
+    # A test on a canvas course is only sittable while its course is live and
+    # open to this person: withdrawing someone's watch access, or pulling the
+    # course, also stops the exam.
+    if test.module_id and not content_access.is_admin(user):
+        module = await Module.get(test.module_id)
+        if (
+            not module or not module.is_published
+            or not await content_access.can_access_module_id(module.id, user)
+        ):
+            raise HTTPException(status_code=403, detail="This test is not available to you")
 
 
 # ==========================================================================
@@ -1064,6 +1075,14 @@ async def list_tests(user: Annotated[User, Depends(get_current_user)]):
     # Audience rules plus any per-person grant/revoke an admin set in Content
     # access. Loaded once for the whole list rather than per test.
     tests = await content_access.filter_visible_tests(tests, user)
+    # A course test is listed only while its course is published and open to
+    # this person, matching what /take enforces.
+    course_ids = {t.module_id for t in tests if t.module_id}
+    live_courses: dict[str, str] = {}
+    for m in await Module.find(In(Module.id, list(course_ids))).to_list() if course_ids else []:
+        if m.is_published and await content_access.can_access_module_id(m.id, user):
+            live_courses[m.id] = m.title
+    tests = [t for t in tests if not t.module_id or t.module_id in live_courses]
     required_ids = await content_access.required_test_ids(user)
     out = []
     for t in tests:
@@ -1100,6 +1119,11 @@ async def list_tests(user: Annotated[User, Depends(get_current_user)]):
             # Mandatory for this person — either their team is in
             # required_for_teams or an admin marked them individually.
             "required": t.id in required_ids,
+            # Course tests are sat from inside their course, one approved
+            # attempt at a time; the list links there instead of to /take.
+            "course_id": t.module_id,
+            "course_title": live_courses.get(t.module_id) if t.module_id else None,
+            "requires_approval": t.requires_approval,
         })
     return out
 

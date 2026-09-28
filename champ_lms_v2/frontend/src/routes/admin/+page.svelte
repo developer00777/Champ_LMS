@@ -50,6 +50,16 @@
       <h3>Content Access</h3>
       <p>Project modules team-wise and grant or revoke access per person</p>
     </a>
+    <a href="/admin/courses" class="link-card">
+      <div class="icon">🎬</div>
+      <h3>Courses</h3>
+      <p>Build a course on one canvas: videos, AI quizzes, tests and notes, with access you control</p>
+    </a>
+    <a href="/admin/test-requests" class="link-card">
+      <div class="icon">🔔</div>
+      <h3>Test requests</h3>
+      <p>Approve who sits a course test, and how many attempts they get</p>
+    </a>
     <a href="/admin/upload" class="link-card">
       <div class="icon">📤</div>
       <h3>Upload Video</h3>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Module } from '$lib/api/client';
+  import { moduleHref, type Module } from '$lib/api/client';
   export let module: Module | null = null;
 </script>
 
@@ -20,10 +20,10 @@
         <p class="desc">Start learning with this module.</p>
       {/if}
       <div class="hero-actions">
-        <a href="/module/{module.id}" class="btn-primary">
+        <a href={moduleHref(module)} class="btn-primary">
           <span class="play-icon">▶</span> Play
         </a>
-        <a href="/module/{module.id}" class="btn-ghost">More Info</a>
+        <a href={moduleHref(module)} class="btn-ghost">More Info</a>
       </div>
     </div>
   </div>

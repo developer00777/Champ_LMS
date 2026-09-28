@@ -7,6 +7,8 @@
   import LevelBadge from '$lib/components/LevelBadge.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
   import RewardModal from '$lib/components/RewardModal.svelte';
+  import ApprovalPopup from '$lib/components/ApprovalPopup.svelte';
+  import { pendingRequests, startRequestPolling, stopRequestPolling } from '$lib/stores/test-requests';
   import '../app.css';
 
   onMount(() => {
@@ -15,6 +17,9 @@
   });
 
   $: isAuthPage = $page.url.pathname.startsWith('/auth');
+  // Admins get test requests as a pop-up on any screen, so poll while one is
+  // signed in and stop the moment they are not.
+  $: if ($isAdmin) startRequestPolling(); else stopRequestPolling();
   $: if (!$isLoggedIn && !isAuthPage && !$auth.loading) goto('/auth/login');
 </script>
 
@@ -51,6 +56,9 @@
       {#if $isAdmin}
         <a href="/admin" class:active={$page.url.pathname.startsWith('/admin')}>
           <span class="nav-icon">⚙️</span> Admin
+          {#if $pendingRequests.length}
+            <span class="nav-count" title="Test requests waiting">{$pendingRequests.length}</span>
+          {/if}
         </a>
       {/if}
     </div>
@@ -98,6 +106,7 @@
     </div>
   </nav>
   <RewardModal />
+  {#if $isAdmin}<ApprovalPopup />{/if}
   {#if $auth.user?.must_change_password && !$page.url.pathname.startsWith('/auth')}
     <!-- Signed in with an admin-issued password: nudge, don't lock them out,
          so they can still reach their learning first. -->
@@ -200,6 +209,12 @@
   
   .nav-icon {
     font-size: 1rem;
+  }
+
+  .nav-count {
+    min-width: 18px; height: 18px; padding: 0 5px;
+    border-radius: 999px; background: var(--accent); color: #fff;
+    font-size: 0.68rem; font-weight: 700; line-height: 18px; text-align: center;
   }
   
   .nav-user { 

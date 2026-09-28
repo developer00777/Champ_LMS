@@ -13,7 +13,9 @@ Content is either open or restricted:
 
   * Open — no team, department or role assignment. Visible to everyone.
     This is the default, so content that predates this feature keeps working
-    exactly as before rather than vanishing on deploy.
+    exactly as before rather than vanishing on deploy. Content created on the
+    course canvas is the exception: it carries access_mode "closed", and with
+    no assignment it is visible to nobody (see is_closed).
   * Restricted — at least one of `audience_teams` / `audience_departments` /
     `target_roles` is set. A learner needs to match ONE of the populated
     dimensions (they are OR-ed, not AND-ed: "Sales team OR engineering
@@ -103,15 +105,26 @@ def is_restricted(content: Content) -> bool:
     )
 
 
+def is_closed(content: Content) -> bool:
+    """
+    True for content created closed (canvas courses and their tests).
+
+    For these an empty audience means nobody rather than everyone, so nothing
+    is visible until an admin names who it is for. Everything created before
+    the canvas carries the default "open" and keeps the historical rule.
+    """
+    return getattr(content, "access_mode", "open") == "closed"
+
+
 def matches_audience(content: Content, user: User) -> bool:
     """
     Does this user fall inside the content's audience?
 
-    Unrestricted content matches everyone. Otherwise the populated dimensions
-    are OR-ed.
+    Unrestricted content matches everyone, unless it is closed, in which case
+    it matches nobody. Otherwise the populated dimensions are OR-ed.
     """
     if not is_restricted(content):
-        return True
+        return not is_closed(content)
 
     teams = _norm_set(content.audience_teams)
     if teams and _norm(user.team) in teams:

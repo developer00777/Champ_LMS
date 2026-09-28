@@ -5,6 +5,7 @@ from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from app.models.user import User
 from app.models.assessment import Assessment, AssessmentAttempt
+from app.services import content_access
 from app.services.gamification_service import GamificationService
 import redis.asyncio as aioredis
 
@@ -20,9 +21,14 @@ async def get_assessment(
     module_id: str,
     user: Annotated[User, Depends(get_current_user)],
 ):
+    if not await content_access.can_access_module_id(module_id, user):
+        raise HTTPException(status_code=404, detail="No assessment for this module")
+    # kind == None: the module quiz, never a canvas checkpoint quiz, which also
+    # has no episode_id but is served through /courses.
     assessment = await Assessment.find_one(
         Assessment.module_id == module_id,
         Assessment.episode_id == None,
+        Assessment.kind == None,
     )
     if not assessment:
         raise HTTPException(status_code=404, detail="No assessment for this module")
@@ -44,8 +50,14 @@ async def submit_attempt(
     assessment = await Assessment.get(assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    # A quiz is part of its module: someone who cannot open the module cannot
+    # score against its quiz either.
+    if not await content_access.can_access_module_id(assessment.module_id, user):
+        raise HTTPException(status_code=404, detail="Assessment not found")
 
     questions = assessment.questions
+    if not questions:
+        raise HTTPException(status_code=422, detail="This quiz has no questions yet")
     if len(body.answers) != len(questions):
         raise HTTPException(status_code=422, detail="Answer count mismatch")
 

@@ -28,7 +28,10 @@ from app.models.assessment import Assessment, AssessmentAttempt
 from app.models.enrollment import Enrollment
 from app.models.episode import Episode
 from app.models.module import Module
+from app.models.note import CourseNote, NoteAttachment
 from app.models.progress import WatchProgress
+from app.models.test_request import TestRequest
+from app.models.test_series import AttemptGrant, TestAttempt, TestSeries
 from app.models.zoom_session import ZoomSession
 from app.services.bunny_storage import bunny_storage
 from app.services.bunny_stream import bunny_stream
@@ -275,6 +278,25 @@ async def purge_episode(episode: Episode, redis=None) -> dict:
     }
 
 
+async def purge_note(note: CourseNote) -> None:
+    """Delete a notes page and its attached PDF."""
+    await NoteAttachment.find(NoteAttachment.note_id == note.id).delete()
+    await note.delete()
+
+
+async def purge_course_test(test: TestSeries) -> None:
+    """
+    Delete a test that sat on a course, with its attempts, grants and requests.
+
+    Only used when the course item (or the whole course) is being deleted, so
+    there is nowhere left for those rows to be read from.
+    """
+    await TestAttempt.find(TestAttempt.test_id == test.id).delete()
+    await AttemptGrant.find(AttemptGrant.test_id == test.id).delete()
+    await TestRequest.find(TestRequest.test_id == test.id).delete()
+    await test.delete()
+
+
 async def purge_module(module: Module, redis=None) -> dict:
     """
     Permanently delete a module: every episode's Bunny video and thumbnail,
@@ -294,6 +316,15 @@ async def purge_module(module: Module, redis=None) -> dict:
         deleted["assessment_attempts"] += getattr(res, "deleted_count", 0) or 0
         await Assessment.find(In(Assessment.id, ids)).delete()
         deleted["assessments"] += len(ids)
+
+    # Canvas courses also own notes pages and tests. Neither lives on Bunny,
+    # so they go after the remote assets like every other local row.
+    for note in await CourseNote.find(CourseNote.module_id == module.id).to_list():
+        await purge_note(note)
+        deleted["notes"] = deleted.get("notes", 0) + 1
+    for test in await TestSeries.find(TestSeries.module_id == module.id).to_list():
+        await purge_course_test(test)
+        deleted["tests"] = deleted.get("tests", 0) + 1
 
     enr_res = await Enrollment.find(Enrollment.module_id == module.id).delete()
     deleted["enrollments"] = getattr(enr_res, "deleted_count", 0) or 0

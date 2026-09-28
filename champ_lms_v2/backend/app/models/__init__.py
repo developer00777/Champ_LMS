@@ -20,6 +20,10 @@ from app.models.content_access import ContentAccessRule
 # * Daily engagement: rotating challenge pool + directed peer kudos. Streaks
 # * stay in User/GamificationService rather than getting a second home here.
 from app.models.daily import DailyChallenge, DailyChallengeCompletion, Kudos
+# * Course canvas: notes pages (and their PDFs, kept in Mongo, not Bunny) and
+# * per-attempt test approval requests.
+from app.models.note import CourseNote, NoteAttachment
+from app.models.test_request import TestRequest
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -31,6 +35,7 @@ __all__ = [
     "TestSeries", "TestAttempt", "TestQuestion", "AttemptGrant",
     "ContentAccessRule",
     "DailyChallenge", "DailyChallengeCompletion", "Kudos",
+    "CourseNote", "NoteAttachment", "TestRequest",
 ]
 
 DOCUMENT_MODELS = [
@@ -44,4 +49,5 @@ DOCUMENT_MODELS = [
     TestSeries, TestAttempt, AttemptGrant,
     ContentAccessRule,
     DailyChallenge, DailyChallengeCompletion, Kudos,
+    CourseNote, NoteAttachment, TestRequest,
 ]

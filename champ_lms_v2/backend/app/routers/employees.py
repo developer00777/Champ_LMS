@@ -26,7 +26,7 @@ from app.models.module import Module
 from app.models.test_series import AttemptGrant, TestSeries
 from app.models.user import User
 from app.services import content_access
-from app.services.test_attempts import attempt_status
+from app.services.test_attempts import attempt_status, base_attempts
 from app.services.bunny_storage import AVATAR_BOX, bunny_storage
 
 router = APIRouter(tags=["employees"])
@@ -860,6 +860,8 @@ def _audience_out(content, kind: str = _KIND_MODULE) -> dict:
         "target_roles": content.target_roles or [],
         "required_for_teams": content.required_for_teams or [],
         "is_restricted": content_access.is_restricted(content),
+        # "closed" content with no audience is visible to nobody, not everyone.
+        "access_mode": getattr(content, "access_mode", "open"),
     }
     if kind == _KIND_TEST:
         # Extra context the admin needs to judge a test row: the legacy
@@ -898,6 +900,8 @@ async def _content_people(kind: str, content_id: str) -> dict:
             why = f"rule: {rule.access}"
         elif content_access.matches_audience(content, u):
             why = "audience" if content_access.is_restricted(content) else "open to everyone"
+        elif not content_access.is_restricted(content) and content_access.is_closed(content):
+            why = "closed until you add people"
         else:
             why = "not in audience"
         row = {
@@ -1152,7 +1156,9 @@ async def grant_extra_attempts(
     storing the row would imply a limit that does not exist.
     """
     test = await _get_content_or_404(_KIND_TEST, test_id)
-    if test.max_attempts is None:
+    # A test that needs approval counts only granted attempts, so granting is
+    # meaningful there even though it has no max_attempts of its own.
+    if base_attempts(test) is None:
         raise HTTPException(
             status_code=422,
             detail="This test has unlimited attempts — there is nothing to grant.",

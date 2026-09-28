@@ -13,6 +13,8 @@
   onMount(async () => {
     try {
       module = await api.module(id);
+      // Canvas courses have their own player.
+      if (module.layout === 'canvas') { goto(`/course/${id}`, { replaceState: true }); return; }
     } catch (e: any) {
       error = e.message;
     } finally {

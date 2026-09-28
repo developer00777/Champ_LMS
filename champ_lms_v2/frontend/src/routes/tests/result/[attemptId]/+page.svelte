@@ -4,6 +4,8 @@
   import { api, type AttemptDetail, type AiAnalysis } from '$lib/api/client';
 
   const attemptId = $page.params.attemptId;
+  // Course tests are retaken through an approval in the course, not from here.
+  const courseParam = $page.url.searchParams.get('course');
 
   let data: AttemptDetail | null = null;
   let analysis: AiAnalysis | null = null;
@@ -163,8 +165,12 @@
     </div>
 
     <div class="footer-actions">
-      <a href="/tests" class="btn">Back to tests</a>
-      <a href="/tests/{data.test_id}" class="btn primary">Retake test</a>
+      {#if courseParam}
+        <a href="/course/{courseParam}" class="btn primary">Back to course</a>
+      {:else}
+        <a href="/tests" class="btn">Back to tests</a>
+        <a href="/tests/{data.test_id}" class="btn primary">Retake test</a>
+      {/if}
     </div>
   {/if}
 </div>

@@ -18,6 +18,19 @@ from __future__ import annotations
 from app.models.test_series import AttemptGrant, TestAttempt, TestSeries
 
 
+def base_attempts(test: TestSeries) -> int | None:
+    """
+    The allowance before any grant: the test's cap, or None for unlimited.
+
+    A test that needs approval starts every person at zero. Approving a
+    request writes an AttemptGrant, so their allowance is exactly the
+    attempts they were approved for, and max_attempts plays no part.
+    """
+    if test.requires_approval:
+        return 0
+    return test.max_attempts
+
+
 async def granted_extra_attempts(test_id: str, user_id: str) -> int:
     """Total extra attempts this person has been granted on this test."""
     grants = await AttemptGrant.find(
@@ -33,9 +46,10 @@ async def attempt_allowance(test: TestSeries, user_id: str) -> int | None:
     None means unlimited — the test has no cap, so grants are irrelevant and we
     skip the query entirely.
     """
-    if test.max_attempts is None:
+    base = base_attempts(test)
+    if base is None:
         return None
-    return test.max_attempts + await granted_extra_attempts(test.id, user_id)
+    return base + await granted_extra_attempts(test.id, user_id)
 
 
 async def attempt_status(test: TestSeries, user_id: str) -> dict:
@@ -48,17 +62,16 @@ async def attempt_status(test: TestSeries, user_id: str) -> dict:
     used = await TestAttempt.find(
         TestAttempt.test_id == test.id, TestAttempt.user_id == user_id
     ).count()
-    granted = (
-        0 if test.max_attempts is None
-        else await granted_extra_attempts(test.id, user_id)
-    )
-    allowed = None if test.max_attempts is None else test.max_attempts + granted
+    base = base_attempts(test)
+    granted = 0 if base is None else await granted_extra_attempts(test.id, user_id)
+    allowed = None if base is None else base + granted
     return {
         "used": used,
         "granted_extra": granted,
         "allowed": allowed,
         "left": None if allowed is None else max(0, allowed - used),
         "exhausted": allowed is not None and used >= allowed,
+        "requires_approval": test.requires_approval,
     }
 
 
@@ -71,6 +84,13 @@ def exhausted_message(status: dict) -> str:
     what they were told when the grant was made.
     """
     allowed = status["allowed"]
+    if status.get("requires_approval"):
+        if not allowed:
+            return "This test needs your admin's approval. Send a request from the course."
+        return (
+            f"You have used the {allowed} attempt{'s' if allowed != 1 else ''} "
+            "your admin approved. Ask for another from the course."
+        )
     if status["granted_extra"]:
         return (
             f"You have used all {allowed} attempts for this test "

@@ -73,6 +73,7 @@ async def _has_passed_module_quiz(user_id: str, module_id: str) -> bool:
     assessment = await Assessment.find_one(
         Assessment.module_id == module_id,
         Assessment.episode_id == None,  # noqa: E711
+        Assessment.kind == None,  # noqa: E711 — the module quiz, not a checkpoint
     )
     if not assessment:
         return False

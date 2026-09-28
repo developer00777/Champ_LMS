@@ -36,6 +36,23 @@
 
   export let onComplete: (() => void) | undefined = undefined;
   export let onAutoAdvance: (() => void) | undefined = undefined;
+  // Reports the playhead so a synced transcript can follow along.
+  export let onTime: ((seconds: number) => void) | undefined = undefined;
+  // Where to start, e.g. to resume an episode part-way through.
+  export let startAt = 0;
+
+  /** Jump to a point in the video (a transcript line was clicked). */
+  export function seek(seconds: number) {
+    if (!videoEl) return;
+    videoEl.currentTime = seconds;
+    videoEl.play().catch(() => {});
+  }
+
+  function applyStart() {
+    if (startAt > 0 && videoEl && videoEl.duration && startAt < videoEl.duration - 5) {
+      videoEl.currentTime = startAt;
+    }
+  }
 
   onMount(async () => {
     player.startTracking(episodeId);
@@ -58,10 +75,12 @@
       });
       hls.loadSource(streamUrl);
       hls.attachMedia(videoEl);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => videoEl.play());
+      hls.on(Hls.Events.MANIFEST_PARSED, () => videoEl.play().catch(() => {}));
+      videoEl.addEventListener('loadedmetadata', applyStart, { once: true });
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS
       videoEl.src = streamUrl;
+      videoEl.addEventListener('loadedmetadata', applyStart, { once: true });
       videoEl.addEventListener('error', () => fallbackToEmbed('safari-native'));
       videoEl.play();
     } else {
@@ -78,6 +97,7 @@
   function onTimeUpdate() {
     if (!videoEl) return;
     player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
+    onTime?.(videoEl.currentTime);
   }
 
   async function onEnded() {

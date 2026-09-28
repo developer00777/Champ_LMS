@@ -311,6 +311,63 @@ Return ONLY a valid JSON object (no markdown, no commentary):
 }}"""
 
 
+TRANSCRIBE_PROMPT = """Transcribe the speech in this audio clip, word for word, in the language spoken.
+
+Split it into segments of roughly one sentence (about 4 to 15 seconds each). Give each
+segment its start and end time in seconds, measured from the start of THIS clip.
+Leave out filler sounds and music. If there is no speech at all, return [].
+
+Return ONLY a valid JSON array (no markdown, no commentary):
+[{{"start": 0.0, "end": 4.2, "text": "string"}}]"""
+
+CHECKPOINT_QUIZ_PROMPT = """You are writing a checkpoint quiz for an internal company course.
+Write exactly {count} multiple-choice questions from the episode transcripts below.
+
+Rules:
+- Every question must be answerable from the transcripts alone.
+- Difficulty: {difficulty}. Easy = recall of stated facts; medium = applying an idea to a
+  short work situation; hard = judging between close alternatives.
+- One clearly correct answer and three plausible distractors per question.
+- Spread the questions across the episodes rather than drawing them all from one.
+- "episode" is the number of the episode the question comes from.
+- Keep the explanation to one sentence.
+
+{transcripts}
+
+Return ONLY a valid JSON array (no markdown, no commentary):
+[
+  {{
+    "question": "string",
+    "options": ["string", "string", "string", "string"],
+    "correct_index": 0,
+    "explanation": "string",
+    "episode": 1
+  }}
+]"""
+
+EPISODE_NOTES_PROMPT = """Write short study notes for the learning video "{title}" from its transcript.
+
+Format, exactly:
+## Key points
+- three to five bullets, each one sentence, in plain words
+## Try this
+- one or two concrete actions the viewer can take at work this week
+
+Use only what the transcript says. No preamble, no closing line, no markdown other than
+"## " headings and "- " bullets.
+
+Transcript:
+{transcript}"""
+
+SECTION_NOTES_PROMPT = """Write a one-page reading for a course section called "{section}", built from
+the videos below. It should stand on its own for someone revising.
+
+Format: "## " headings and "- " bullets only, with short paragraphs where useful. Start
+with the most important idea. Use only what the material says. No preamble.
+
+{material}"""
+
+
 class AIServiceError(RuntimeError):
     """An AI call failed, with a message safe and useful to show an admin."""
 
@@ -366,7 +423,12 @@ class AIService:
             "X-Title": "Champ LMS",
         }
 
-    async def _chat(self, prompt: str, max_tokens: int = 4096) -> str:
+    async def _chat(
+        self,
+        prompt: str,
+        max_tokens: int = 4096,
+        audio: tuple[str, str] | None = None,
+    ) -> str:
         """
         Single chat completion via OpenRouter.
 
@@ -376,7 +438,15 @@ class AIService:
         which is a config fix, not a transient failure.
         """
         model = self.settings.openrouter_model
-        async with httpx.AsyncClient(timeout=120) as client:
+        # `audio` is (base64 data, format), sent as an input_audio part next to
+        # the prompt. The default Gemini model accepts audio directly.
+        content: str | list = prompt
+        if audio:
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "input_audio", "input_audio": {"data": audio[0], "format": audio[1]}},
+            ]
+        async with httpx.AsyncClient(timeout=180) as client:
             try:
                 resp = await client.post(
                     f"{OPENROUTER_BASE}/chat/completions",
@@ -384,7 +454,7 @@ class AIService:
                     json={
                         "model": model,
                         "max_tokens": max_tokens,
-                        "messages": [{"role": "user", "content": prompt}],
+                        "messages": [{"role": "user", "content": content}],
                         "temperature": 0.3,  # low temp for consistent JSON output
                     },
                 )
@@ -428,6 +498,71 @@ class AIService:
         prompt = QUIZ_PROMPT.format(transcript=transcript[:8000])
         text = await self._chat(prompt, max_tokens=2048)
         return _extract_json_array(text)
+
+    async def transcribe_audio(self, wav_base64: str, offset_seconds: float = 0.0) -> list[dict]:
+        """
+        Timed transcript lines for one audio clip.
+
+        The browser cuts a video's audio into short clips and sends them one at
+        a time, so each call is small. Times come back relative to the clip and
+        are shifted by `offset_seconds` to place them in the whole video.
+        """
+        text = await self._chat(TRANSCRIBE_PROMPT, max_tokens=8192, audio=(wav_base64, "wav"))
+        try:
+            raw = _extract_json_array(text)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise AIServiceError("The transcription came back in an unreadable format.") from exc
+        segments = []
+        for seg in raw:
+            if not isinstance(seg, dict):
+                continue
+            words = str(seg.get("text") or "").strip()
+            if not words:
+                continue
+            try:
+                start = max(0.0, float(seg.get("start") or 0))
+                end = max(start, float(seg.get("end") or start))
+            except (TypeError, ValueError):
+                continue
+            segments.append({
+                "start": round(start + offset_seconds, 2),
+                "end": round(end + offset_seconds, 2),
+                "text": words,
+            })
+        return segments
+
+    async def generate_checkpoint_quiz(
+        self, episodes: list[tuple[str, str]], count: int, difficulty: str
+    ) -> list[dict]:
+        """
+        Questions for a canvas checkpoint quiz from several episodes.
+
+        `episodes` is [(title, transcript)] in course order. Each transcript is
+        trimmed so the whole prompt stays a sensible size however many
+        episodes the admin ticks.
+        """
+        budget = max(2000, 24000 // max(1, len(episodes)))
+        blocks = "\n\n".join(
+            f"Episode {i}: {title}\n{transcript[:budget]}"
+            for i, (title, transcript) in enumerate(episodes, start=1)
+        )
+        prompt = CHECKPOINT_QUIZ_PROMPT.format(
+            count=count, difficulty=difficulty, transcripts=blocks
+        )
+        text = await self._chat(prompt, max_tokens=4096)
+        return _extract_json_array(text)
+
+    async def episode_notes(self, title: str, transcript: str) -> str:
+        """Study notes for one video, in the canvas' light markup."""
+        prompt = EPISODE_NOTES_PROMPT.format(title=title, transcript=transcript[:16000])
+        return (await self._chat(prompt, max_tokens=1200)).strip()
+
+    async def section_notes(self, section: str, material: list[tuple[str, str]]) -> str:
+        """A reading page for a course section, from its videos' notes or transcripts."""
+        budget = max(1500, 20000 // max(1, len(material)))
+        blocks = "\n\n".join(f"Video: {t}\n{body[:budget]}" for t, body in material)
+        prompt = SECTION_NOTES_PROMPT.format(section=section, material=blocks)
+        return (await self._chat(prompt, max_tokens=2000)).strip()
 
     async def generate_personalized_rows(
         self, user_profile: dict, available_modules: list[dict]

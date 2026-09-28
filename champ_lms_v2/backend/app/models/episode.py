@@ -24,6 +24,19 @@ class Episode(Document):
     # Transcript + AI outputs
     transcript: str | None = None
     ai_summary: str | None = None
+    # Timed transcript lines [{start, end, text}] in seconds. Drives the
+    # learner's synced transcript; `transcript` above stays the plain-text join
+    # so the quiz generator and Zoom pipeline keep reading what they always did.
+    transcript_segments: list[dict] | None = None
+    # auto = written by the AI from the audio; manual = typed or edited by an
+    # admin. Regenerating never silently replaces a manual transcript.
+    transcript_source: str | None = None
+    # processing | ready | failed | None (nothing attempted yet)
+    transcript_status: str | None = None
+    # Notes shown under the video, in the canvas' light markup ("## " headings,
+    # "- " bullets). ai = drafted from the transcript; manual = admin-written.
+    notes: str | None = None
+    notes_source: str | None = None
 
     # Bunny Storage path for episode thumbnail (manually uploaded)
     thumbnail_bunny_path: str | None = None

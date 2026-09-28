@@ -6,6 +6,8 @@
   import { ExamLockdown, type ProctorEvent } from '$lib/utils/exam-lockdown';
 
   const id = $page.params.id;
+  // Set when the test was opened from a course, so the result can lead back there.
+  const courseParam = $page.url.searchParams.get('course');
 
   let paper: TestPaper | null = null;
   let loading = true;
@@ -186,7 +188,7 @@
       });
       // Release the lockdown before leaving, so the result page behaves normally.
       if (detachLockdown) { detachLockdown(); detachLockdown = null; }
-      goto(`/tests/result/${res.attempt_id}`);
+      goto(`/tests/result/${res.attempt_id}${courseParam ? `?course=${courseParam}` : ''}`);
     } catch (e: any) {
       error = e.message;
       submitting = false;
@@ -201,7 +203,7 @@
     <div class="blocked">
       <h1>Can't start this test</h1>
       <p>{error}</p>
-      <a href="/tests" class="btn">Back to tests</a>
+      <a href={courseParam ? `/course/${courseParam}` : '/tests'} class="btn">{courseParam ? 'Back to course' : 'Back to tests'}</a>
     </div>
   {:else if paper}
     {#if paper.proctoring_enabled}

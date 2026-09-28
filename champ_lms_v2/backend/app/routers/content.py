@@ -51,6 +51,9 @@ class ModuleOut(BaseModel):
     thumbnail_url: str | None
     total_episodes: int
     is_published: bool
+    # "canvas" modules open in the course player (/course/{id}) rather than
+    # the classic module page.
+    layout: str = "classic"
 
     class Config:
         from_attributes = True
@@ -112,6 +115,7 @@ async def get_feed(
                         thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
                         total_episodes=m.total_episodes,
                         is_published=m.is_published,
+                        layout=m.layout,
                     )
                     for m in mods
                 ],
@@ -137,6 +141,7 @@ async def get_feed(
                             thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
                             total_episodes=m.total_episodes,
                             is_published=m.is_published,
+                            layout=m.layout,
                         )
                         for m in mods
                     ],
@@ -158,6 +163,7 @@ async def get_feed(
                         thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
                         total_episodes=m.total_episodes,
                         is_published=m.is_published,
+                        layout=m.layout,
                     )
                     for m in cat_mods
                 ],
@@ -176,6 +182,7 @@ async def get_feed(
                     thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
                     total_episodes=m.total_episodes,
                     is_published=m.is_published,
+                    layout=m.layout,
                 )
                 for m in all_modules[:8]
             ],
@@ -239,6 +246,7 @@ async def list_modules(
             thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
             total_episodes=m.total_episodes,
             is_published=m.is_published,
+            layout=m.layout,
         )
         for m in modules
     ]
@@ -269,6 +277,7 @@ async def get_module(
         "thumbnail_url": _thumbnail_url(module.thumbnail_bunny_path),
         "total_episodes": module.total_episodes,
         "is_published": module.is_published,
+        "layout": module.layout,
         "episodes": [
             {
                 "id": ep.id,

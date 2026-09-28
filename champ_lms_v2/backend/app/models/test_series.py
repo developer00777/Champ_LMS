@@ -108,6 +108,22 @@ class TestSeries(Document):
     # Teams this test is mandatory for. Being required also grants access.
     required_for_teams: list[str] | None = None
 
+    # --- course canvas -----------------------------------------------------
+    # Set when the test sits on a canvas course. Such a test is sat from inside
+    # the course and needs an approval per attempt (see TestRequest).
+    module_id: str | None = None
+    # Same meaning as Module.access_mode: "closed" means an empty audience is
+    # nobody rather than everyone.
+    access_mode: str = "open"
+    # Every attempt must be approved by an admin. The allowance then comes only
+    # from AttemptGrant rows written by approvals, and max_attempts is ignored.
+    requires_approval: bool = False
+    # Attempts pre-filled in the approval pop-up.
+    attempts_per_approval: int = 1
+    # "all_videos": can be requested once every episode in the course is
+    # watched. "any": whenever.
+    unlock_rule: str = "all_videos"
+
     pass_threshold: int = 70  # percent
     duration_minutes: int | None = None  # None = untimed
     max_attempts: int | None = None  # None = unlimited

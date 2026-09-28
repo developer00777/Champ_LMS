@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Module } from '$lib/api/client';
+  import { moduleHref, type Module } from '$lib/api/client';
   export let module: Module;
   export let progress: number = 0; // 0-100
 
@@ -31,7 +31,7 @@
   }
 </script>
 
-<a href="/module/{module.id}" class="card">
+<a href={moduleHref(module)} class="card">
   <div class="thumb-wrap" style={!hasThumbnail ? `background: ${gradientStyle}` : ''}>
     {#if hasThumbnail}
       <img 

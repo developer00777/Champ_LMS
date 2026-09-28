@@ -66,7 +66,14 @@
             </div>
           {/if}
 
-          {#if t.attempts_left === 0}
+          {#if t.requires_approval && t.course_id}
+            <!-- Course tests are asked for, and approved, inside their course. -->
+            {#if t.attempts_left}
+              <a href="/tests/{t.id}?course={t.course_id}" class="btn primary">Start test</a>
+            {:else}
+              <a href="/course/{t.course_id}?ref={t.id}" class="btn">Ask in {t.course_title ?? 'the course'}</a>
+            {/if}
+          {:else if t.attempts_left === 0}
             <button class="btn" disabled>No attempts left</button>
           {:else}
             <a href="/tests/{t.id}" class="btn primary">

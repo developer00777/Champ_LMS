@@ -352,6 +352,104 @@ export const api = {
     request<{ attempt_id: string; ai_analysis: AiAnalysis }>(
       `/test-series/attempts/${attemptId}/analysis`, { method: 'POST' }),
 
+  // Course canvas — admin. One course holds videos, AI checkpoint quizzes,
+  // tests and notes pages in one running order.
+  adminCourses: () => request<AdminCourseSummary[]>('/admin/courses'),
+  createCourse: (body: { title: string; description?: string; category?: string }) =>
+    request<AdminCourse>('/admin/courses', { method: 'POST', body: JSON.stringify(body) }),
+  adminCourse: (id: string) => request<AdminCourse>(`/admin/courses/${id}`),
+  updateCourse: (id: string, body: { title?: string; description?: string | null; category?: string | null; is_published?: boolean }) =>
+    request<AdminCourse & { warnings: string[] }>(`/admin/courses/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  setCourseStructure: (id: string, sections: CourseSection[], order: { id: string; section_id: string }[]) =>
+    request<AdminCourse>(`/admin/courses/${id}/structure`, { method: 'PUT', body: JSON.stringify({ sections, order }) }),
+  addCourseItem: (id: string, body: { kind: CourseItemKind; section_id: string; index?: number; title?: string; source_episode_ids?: string[] }) =>
+    request<AdminCourseItem>(`/admin/courses/${id}/items`, { method: 'POST', body: JSON.stringify(body) }),
+  deleteCourseItem: (id: string, itemId: string) =>
+    request<AdminCourse>(`/admin/courses/${id}/items/${itemId}`, { method: 'DELETE' }),
+  transcribeChunk: async (episodeId: string, wav: Blob, offsetSeconds: number): Promise<{ segments: TranscriptSegment[] }> => {
+    const form = new FormData();
+    form.append('audio', wav, 'clip.wav');
+    form.append('offset_seconds', String(offsetSeconds));
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/episodes/${episodeId}/transcribe-chunk`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, err.detail ?? 'Transcription failed');
+    }
+    return res.json();
+  },
+  // Asks Bunny directly when the encode webhook hasn't arrived yet.
+  episodeStatus: (episodeId: string) =>
+    request<{ episode_id: string; status: string; duration_seconds: number | null; thumbnail_url: string | null }>(
+      `/admin/episodes/${episodeId}/status`),
+  setTranscriptStatus: (episodeId: string, status: 'processing' | 'failed') =>
+    request<{ id: string; transcript_status: string }>(`/admin/episodes/${episodeId}/transcript-status`, {
+      method: 'PATCH', body: JSON.stringify({ status }),
+    }),
+  saveTranscript: (episodeId: string, segments: TranscriptSegment[], source: 'auto' | 'manual') =>
+    request<{ id: string; transcript_status: string; transcript_source: string; transcript_segments: TranscriptSegment[]; notes_will_update: boolean }>(
+      `/admin/episodes/${episodeId}/transcript`, { method: 'PUT', body: JSON.stringify({ segments, source }) }),
+  generateEpisodeNotes: (episodeId: string) =>
+    request<{ id: string; notes: string; notes_source: string }>(`/admin/episodes/${episodeId}/notes/generate`, { method: 'POST' }),
+  saveEpisodeNotes: (episodeId: string, notes: string) =>
+    request<{ id: string; notes: string; notes_source: string }>(`/admin/episodes/${episodeId}/notes`, {
+      method: 'PUT', body: JSON.stringify({ notes }),
+    }),
+  updateQuiz: (quizId: string, body: Partial<Pick<AdminQuizItem, 'title' | 'source_episode_ids' | 'question_count' | 'difficulty' | 'pass_threshold' | 'must_pass' | 'questions'>>) =>
+    request<AdminQuizItem>(`/admin/assessments/${quizId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  generateQuiz: (quizId: string) =>
+    request<{ id: string; questions: QuizQuestion[]; skipped_episodes: string[] }>(`/admin/assessments/${quizId}/generate`, { method: 'POST' }),
+  updateCourseTest: (courseId: string, testId: string, body: Partial<Pick<AdminTestItem, 'title' | 'description' | 'pass_threshold' | 'duration_minutes' | 'proctoring_enabled' | 'shuffle_questions' | 'attempts_per_approval' | 'unlock_rule'>>) =>
+    request<AdminTestItem>(`/admin/courses/${courseId}/tests/${testId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  generateCourseTest: (courseId: string, testId: string, count: number) =>
+    request<AdminTestItem>(`/admin/courses/${courseId}/tests/${testId}/generate`, { method: 'POST', body: JSON.stringify({ count }) }),
+  updateNote: (noteId: string, body: { title?: string; body?: string }) =>
+    request<NoteView>(`/admin/notes/${noteId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  draftNote: (noteId: string) => request<NoteView>(`/admin/notes/${noteId}/draft`, { method: 'POST' }),
+  uploadNoteAttachment: async (noteId: string, file: File): Promise<NoteView> => {
+    const form = new FormData();
+    form.append('file', file);
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/notes/${noteId}/attachment`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+    }
+    return res.json();
+  },
+  deleteNoteAttachment: (noteId: string) => request<NoteView>(`/admin/notes/${noteId}/attachment`, { method: 'DELETE' }),
+  testRequests: (status: 'pending' | 'decided' = 'pending') =>
+    request<TestRequestRow[]>(`/admin/test-requests?status=${status}`),
+  approveTestRequest: (id: string, attempts: number, note?: string) =>
+    request<TestRequestRow>(`/admin/test-requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ attempts, note }) }),
+  denyTestRequest: (id: string, reason?: string) =>
+    request<TestRequestRow>(`/admin/test-requests/${id}/deny`, { method: 'POST', body: JSON.stringify({ reason }) }),
+
+  // Course canvas — learner
+  course: (id: string) => request<CourseView>(`/courses/${id}`),
+  courseTranscript: (courseId: string, episodeId: string) =>
+    request<{ episode_id: string; source: string | null; segments: TranscriptSegment[] }>(
+      `/courses/${courseId}/episodes/${episodeId}/transcript`),
+  courseQuiz: (courseId: string, quizId: string) =>
+    request<{ id: string; title: string; pass_threshold: number; questions: { question: string; options: string[] }[] }>(
+      `/courses/${courseId}/quizzes/${quizId}`),
+  noteAttachment: async (courseId: string, noteId: string): Promise<Blob> => {
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/courses/${courseId}/notes/${noteId}/attachment`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new ApiError(res.status, 'Could not open the attachment');
+    return res.blob();
+  },
+  requestCourseTest: (courseId: string, testId: string) =>
+    request<{ id: string; status: string; created_at: string }>(`/courses/${courseId}/tests/${testId}/request`, { method: 'POST' }),
+
   // Daily engagement: rotating challenge pool, kudos, streak
   dailyChallenges: () => request<DailyChallengeSet>('/daily/challenges'),
   completeDailyChallenge: (id: string) =>
@@ -614,6 +712,12 @@ export interface Module {
   id: string; title: string; description: string | null;
   category: string | null; tags: string[] | null;
   thumbnail_url: string | null; total_episodes: number; is_published: boolean;
+  // "canvas" modules open in the course player at /course/{id}.
+  layout?: 'classic' | 'canvas';
+}
+// Where a module card should link: canvas courses have their own player.
+export function moduleHref(m: { id: string; layout?: string }): string {
+  return m.layout === 'canvas' ? `/course/${m.id}` : `/module/${m.id}`;
 }
 export interface Episode {
   id: string; title: string; description: string | null;
@@ -621,6 +725,92 @@ export interface Episode {
   status: string; thumbnail_url: string | null;
 }
 export interface ModuleDetail extends Module { episodes: Episode[]; }
+
+// * Course canvas types
+export type CourseItemKind = 'video' | 'quiz' | 'test' | 'notes';
+export type CourseFormat = 'series' | 'course' | 'empty';
+export interface CourseSection { id: string; title: string; }
+export interface TranscriptSegment { start: number; end: number; text: string; }
+export interface QuizQuestion {
+  question: string; options: string[]; correct_index: number;
+  explanation?: string | null; source_episode_id?: string | null;
+}
+interface AdminItemBase { id: string; kind: CourseItemKind; ref_id: string; section_id: string; title: string; }
+export interface AdminVideoItem extends AdminItemBase {
+  kind: 'video'; description: string | null; episode_number: number | null;
+  status: string; duration_seconds: number | null; thumbnail_url: string | null;
+  has_remote_video: boolean;
+  transcript_status: 'processing' | 'ready' | 'failed' | null;
+  transcript_source: 'auto' | 'manual' | null;
+  transcript_segments: TranscriptSegment[];
+  notes: string | null; notes_source: 'ai' | 'manual' | null;
+}
+export interface AdminQuizItem extends AdminItemBase {
+  kind: 'quiz'; source_episode_ids: string[]; question_count: number;
+  difficulty: 'easy' | 'medium' | 'hard'; pass_threshold: number; must_pass: boolean;
+  questions: QuizQuestion[];
+}
+export interface AdminTestItem extends AdminItemBase {
+  kind: 'test'; description: string | null; question_count: number; unscorable_count: number;
+  is_ready: boolean; is_published: boolean; pass_threshold: number;
+  duration_minutes: number | null; proctoring_enabled: boolean; shuffle_questions: boolean;
+  attempts_per_approval: number; unlock_rule: 'all_videos' | 'any';
+  source_filename: string | null; source_parser: string | null; pending_requests: number;
+}
+export interface AdminNotesItem extends AdminItemBase {
+  kind: 'notes'; body: string; source: 'ai' | 'manual';
+  attachment_name: string | null; attachment_size: number | null;
+}
+export type AdminCourseItem = AdminVideoItem | AdminQuizItem | AdminTestItem | AdminNotesItem;
+export interface AdminCourse {
+  id: string; title: string; description: string | null; category: string | null;
+  is_published: boolean; access_mode: 'open' | 'closed'; format: CourseFormat;
+  sections: CourseSection[]; items: AdminCourseItem[];
+  can_watch_count: number; created_at: string;
+}
+export interface AdminCourseSummary {
+  id: string; title: string; category: string | null; is_published: boolean;
+  format: CourseFormat; counts: Record<CourseItemKind, number>; runtime_seconds: number;
+  can_watch_count: number; pending_requests: number; thumbnail_url: string | null; created_at: string;
+}
+export interface NoteView {
+  id: string; title: string; body: string; source: 'ai' | 'manual';
+  attachment_name: string | null; attachment_size: number | null;
+}
+export interface TestRequestRow {
+  id: string; status: 'pending' | 'approved' | 'denied';
+  user_id: string; full_name: string; team: string | null; department: string | null;
+  test_id: string; test_title: string; question_count: number;
+  duration_minutes: number | null; pass_threshold: number | null; proctoring_enabled: boolean;
+  attempts_per_approval: number;
+  course_id: string | null; course_title: string | null; course_progress: number;
+  previous_attempts: number; attempts_granted: number | null;
+  note: string | null; reason: string | null; created_at: string; decided_at: string | null;
+}
+export type CourseTestState = 'not_allowed' | 'none' | 'pending' | 'approved' | 'denied' | 'used';
+export interface CourseItemView {
+  id: string; kind: CourseItemKind; ref_id: string; section_id: string;
+  title: string; locked: boolean; done: boolean;
+  // video
+  description?: string | null; episode_number?: number; duration_seconds?: number | null;
+  thumbnail_url?: string | null; has_transcript?: boolean;
+  notes?: string | null; notes_source?: 'ai' | 'manual' | null;
+  watched_seconds?: number; completed?: boolean;
+  // quiz
+  question_count?: number; pass_threshold?: number; must_pass?: boolean;
+  source_episode_numbers?: number[]; best_score?: number | null; attempts?: number; passed?: boolean;
+  // notes
+  body?: string; source?: 'ai' | 'manual'; attachment_name?: string | null; attachment_size?: number | null;
+  // test
+  duration_minutes?: number | null; proctoring_enabled?: boolean; unlock_rule?: 'all_videos' | 'any';
+  state?: CourseTestState; unlocked?: boolean; attempts_left?: number; attempts_used?: number;
+  attempts_allowed?: number; last_score?: number | null; last_attempt_id?: string | null;
+  requested_at?: string | null; note?: string | null; reason?: string | null;
+}
+export interface CourseView {
+  id: string; title: string; description: string | null; category: string | null;
+  format: CourseFormat; sections: CourseSection[]; items: CourseItemView[]; runtime_seconds: number;
+}
 export interface FeedRow { row_title: string; modules: Module[]; }
 export interface StreamUrlResponse { stream_url: string; embed_url: string; expires_in: number; }
 export interface SearchResult { modules: Module[]; episodes: { id: string; title: string; module_id: string }[]; }
@@ -852,6 +1042,8 @@ export interface LearnerTest {
   // Mandatory for this learner — their team is in required_for_teams, or an
   // admin marked them individually in Content access.
   required: boolean;
+  // Course tests: sat from inside the course, one approved attempt at a time.
+  course_id?: string | null; course_title?: string | null; requires_approval?: boolean;
 }
 export interface TestPaperQuestion {
   id: string;
