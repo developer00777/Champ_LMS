@@ -40,6 +40,67 @@
   export let onTime: ((seconds: number) => void) | undefined = undefined;
   // Where to start, e.g. to resume an episode part-way through.
   export let startAt = 0;
+  // Course videos: how far past the furthest point reached a learner may jump
+  // ahead in one go, in seconds. null = seek freely (classic modules, finished
+  // episodes, admins). The server holds recorded progress to the same limit.
+  export let skipLimitSeconds: number | null = null;
+  // The furthest point already recorded for this learner, so the limit
+  // carries over from an earlier session.
+  export let furthestStart = 0;
+
+  let furthest = 0;
+  let skipNotice = '';
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  let reportedStart = false;
+  // The furthest point as it stood when the current seek began. The browser
+  // fires a time update just before "seeked", which already moves `furthest`,
+  // so the end of a seek compares against this instead.
+  let furthestAtSeek: number | null = null;
+
+  function showSkipNotice() {
+    const mins = Math.round((skipLimitSeconds ?? 0) / 60);
+    skipNotice = `You can skip ahead up to ${mins} minute${mins === 1 ? '' : 's'} at a time.`;
+    if (noticeTimer) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => (skipNotice = ''), 3500);
+  }
+
+  // Every seek comes through here: the scrub bar, the keyboard, a transcript
+  // line. A jump further than the limit past the furthest point reached is
+  // held at the limit. Going back, and returning to where you were, is free.
+  function onSeeking() {
+    if (!videoEl) return;
+    if (furthestAtSeek === null) furthestAtSeek = furthest;
+    if (skipLimitSeconds == null) return;
+    const limit = furthestAtSeek + skipLimitSeconds;
+    if (videoEl.currentTime > limit + 0.5) {
+      videoEl.currentTime = limit;
+      showSkipNotice();
+    }
+  }
+
+  // After a skip past the furthest point, report it straight away so each skip
+  // reaches the server on its own rather than several at once.
+  function onSeeked() {
+    if (!videoEl) return;
+    const before = furthestAtSeek ?? furthest;
+    furthestAtSeek = null;
+    if (videoEl.currentTime > before + 1) {
+      furthest = Math.max(furthest, videoEl.currentTime);
+      if (skipLimitSeconds != null) {
+        player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
+        player.sync();
+      }
+    }
+  }
+
+  // The first report marks when watching began, which the server's limit
+  // counts real playback time from.
+  function onPlaying() {
+    if (reportedStart || skipLimitSeconds == null || !videoEl) return;
+    reportedStart = true;
+    player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
+    player.sync();
+  }
 
   /** Jump to a point in the video (a transcript line was clicked). */
   export function seek(seconds: number) {
@@ -56,6 +117,7 @@
 
   onMount(async () => {
     player.startTracking(episodeId);
+    furthest = Math.max(furthestStart, startAt);
 
     if (!streamUrl) return;
 
@@ -92,11 +154,13 @@
     hls?.destroy();
     player.stopTracking();
     if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
+    if (noticeTimer) clearTimeout(noticeTimer);
   });
 
   function onTimeUpdate() {
     if (!videoEl) return;
     player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
+    if (!videoEl.seeking) furthest = Math.max(furthest, videoEl.currentTime);
     onTime?.(videoEl.currentTime);
   }
 
@@ -137,6 +201,9 @@
       controls
       preload="metadata"
       on:timeupdate={onTimeUpdate}
+      on:seeking={onSeeking}
+      on:seeked={onSeeked}
+      on:playing={onPlaying}
       on:ended={onEnded}
     ></video>
   {:else if embedUrl}
@@ -151,6 +218,10 @@
     ></iframe>
   {:else}
     <div class="placeholder">Loading video...</div>
+  {/if}
+
+  {#if skipNotice}
+    <div class="skip-notice" role="status">{skipNotice}</div>
   {/if}
 
   {#if showAutoAdvance}
@@ -176,6 +247,14 @@
   .placeholder {
     display: flex; align-items: center; justify-content: center;
     height: 100%; color: var(--muted);
+  }
+  .skip-notice {
+    position: absolute; left: 50%; top: 1.25rem; transform: translateX(-50%);
+    max-width: calc(100% - 2rem); text-align: center;
+    background: rgba(0,0,0,0.82); color: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.55rem 0.9rem; font-size: 0.88rem;
+    pointer-events: none;
   }
   .auto-advance {
     position: absolute; bottom: 1.5rem; right: 1.5rem;

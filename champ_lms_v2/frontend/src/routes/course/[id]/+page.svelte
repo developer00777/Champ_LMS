@@ -35,6 +35,13 @@
 
   const seenKey = () => `champ_seen_notes_${id}`;
 
+  // A learner may skip ahead at most this far past the furthest point they have
+  // reached in a course video (the server holds recorded progress to the same
+  // 300 s: backend MAX_SKIP_SECONDS). Lifted once the episode is finished, so a
+  // rewatch is free, and for admins previewing the course.
+  const COURSE_MAX_SKIP_SECONDS = 5 * 60;
+  const skipLimit = (item: CourseItemView) => ($isAdmin || item.completed ? null : COURSE_MAX_SKIP_SECONDS);
+
   async function load(keepPosition = true) {
     try {
       const c = await api.course(id);
@@ -177,6 +184,7 @@
           {#if stream}
             <VideoPlayer bind:this={playerRef} episodeId={current.ref_id} streamUrl={stream.stream_url} embedUrl={stream.embed_url}
               startAt={current.completed ? 0 : current.watched_seconds ?? 0}
+              skipLimitSeconds={skipLimit(current)} furthestStart={current.watched_seconds ?? 0}
               onTime={t => (time = t)} onComplete={() => load()} onAutoAdvance={() => next && go(next)} />
           {:else}
             <div class="player-ph">{streamError || 'Loading video…'}</div>
@@ -265,6 +273,7 @@
               {#if stream}
                 <VideoPlayer bind:this={playerRef} episodeId={current.ref_id} streamUrl={stream.stream_url} embedUrl={stream.embed_url}
                   startAt={current.completed ? 0 : current.watched_seconds ?? 0}
+                  skipLimitSeconds={skipLimit(current)} furthestStart={current.watched_seconds ?? 0}
                   onTime={t => (time = t)} onComplete={() => load()} onAutoAdvance={() => next && next.kind === 'video' && go(next)} />
               {:else}
                 <div class="player-ph">{streamError || 'Loading video…'}</div>

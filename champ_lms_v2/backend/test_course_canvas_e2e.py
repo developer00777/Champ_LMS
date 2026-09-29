@@ -211,8 +211,44 @@ check(lt["state"] == "none" and not lt["unlocked"], "test open to ask, but locke
 check(c.post(f"/courses/{cid}/tests/{tid}/request", headers=ANN).status_code == 409, "request refused before watching everything")
 r = c.get(f"/test-series/{tid}/take", headers=ANN)
 check(r.status_code == 403 and "approval" in r.text, "cannot take before approval")
+print("\n== skipping ahead in course videos ==")
+# v2 is 500 s long. One report claiming the end is held to about five minutes
+# past the furthest point reached; a second skip of under five minutes is fine.
+def progress(ep, pos, total, who=ANN):
+    return ok(c.post("/progress", json={"episode_id": ep, "watched_seconds": pos, "total_seconds": total}, headers=who), f"progress {pos}")
+
+r = progress(v2["ref_id"], 0, 500)
+check(r["watched_seconds"] == 0 and not r["skip_limited"], "starting to watch is recorded as sent")
+r = progress(v2["ref_id"], 490, 500)
+check(r["skip_limited"] and 300 <= r["watched_seconds"] <= 320 and not r["completed"],
+      f"a jump to the end is held to about 5 minutes ({r['watched_seconds']} s)")
+r = progress(v2["ref_id"], 480, 500)
+check(not r["skip_limited"] and r["completed"], "a further skip of under 5 minutes is allowed and finishes the episode")
+progress(v2["ref_id"], 10, 500)  # rewind to rewatch
+r = progress(v2["ref_id"], 499, 500)
+check(not r["skip_limited"] and r["watched_seconds"] == 499, "a finished episode can be skipped through freely")
+r = progress(v1["ref_id"], 0, 0)
+check(not r["completed"], "a report with no length yet is not a finished video")
+r = progress(v1["ref_id"], 390, 400, who=A)
+check(not r["skip_limited"] and r["completed"], "admins previewing are not held back")
+classic_mod = ok(c.post("/admin/modules", json={"title": f"Classic skip {sfx}"}, headers=A), "classic module")
+classic_ep = ok(c.post(f"/admin/modules/{classic_mod['id']}/episodes", json={"title": "Classic episode"}, headers=A), "classic episode")
+r = progress(classic_ep["id"], 2900, 3000)
+check(not r["skip_limited"] and r["completed"], "classic modules keep free seeking")
+
+
+def mark_watched(user_id, ep_id):
+    """Everything below needs the episodes finished; write that directly."""
+    mongo.watch_progress.update_one(
+        {"user_id": user_id, "episode_id": ep_id},
+        {"$set": {"watched_seconds": 1000, "total_seconds": 1000, "completed": True},
+         "$setOnInsert": {"_id": str(uuid.uuid4())}},
+        upsert=True,
+    )
+
+
 for v in (v1, v2):
-    ok(c.post("/progress", json={"episode_id": v["ref_id"], "watched_seconds": 1000, "total_seconds": 1000}, headers=ANN), "watch")
+    mark_watched(ann_id, v["ref_id"])
 req = ok(c.post(f"/courses/{cid}/tests/{tid}/request", headers=ANN), "ann requests test")
 again = ok(c.post(f"/courses/{cid}/tests/{tid}/request", headers=ANN), "ann asks again")
 check(again["id"] == req["id"], "asking twice returns the same pending request")

@@ -68,6 +68,11 @@ function createPlayerStore() {
       update(s => ({ ...s, watchedSeconds, totalSeconds }));
     },
 
+    /** Report the position now instead of at the next 30-second sync. */
+    async sync() {
+      await flush().catch(() => {/* silent — offline resilience */});
+    },
+
     async complete() {
       await flush();
       if (syncInterval) {

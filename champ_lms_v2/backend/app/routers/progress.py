@@ -6,7 +6,7 @@ from app.core.auth import get_current_user
 from app.core.redis import get_redis
 from beanie.operators import In
 from app.models.user import User
-from app.models.module import Module
+from app.models.module import LAYOUT_CANVAS, Module
 from app.models.episode import Episode
 from app.models.progress import WatchProgress
 from app.models.enrollment import Enrollment
@@ -85,6 +85,41 @@ async def _has_passed_module_quiz(user_id: str, module_id: str) -> bool:
     return attempt is not None
 
 
+# Course videos: the furthest a learner may skip ahead of the furthest point
+# already recorded. The course player enforces the same limit on the scrub bar
+# (frontend: COURSE_MAX_SKIP_SECONDS); this makes it hold for the record too.
+MAX_SKIP_SECONDS = 300
+# Between two reports, real playback can move the playhead this many times the
+# elapsed time at most: the player's fastest speed (2x), with room to spare.
+MAX_PLAYBACK_RATE = 2.5
+
+
+async def _skip_limited(
+    watched: int, wp: WatchProgress | None, episode: Episode, user: User, now: datetime,
+) -> int:
+    """
+    The position to record, held to the course skip limit.
+
+    Applies only to videos in canvas courses, for learners, until the episode
+    is completed; classic modules, staff and rewatches are unchanged. The limit
+    grows with the real time since the last report, so ordinary playback (at
+    any speed) is never held back, and one skip of up to five minutes past the
+    furthest point reached is always allowed.
+    """
+    if user.is_staff or (wp and wp.completed):
+        return watched
+    module = await Module.get(episode.module_id)
+    if not module or module.layout != LAYOUT_CANVAS:
+        return watched
+    previous = wp.watched_seconds if wp else 0
+    last = wp.last_watched_at if wp else now
+    if last.tzinfo is None:  # Mongo returns naive UTC
+        last = last.replace(tzinfo=timezone.utc)
+    elapsed = max(0.0, (now - last).total_seconds())
+    ceiling = previous + MAX_SKIP_SECONDS + elapsed * MAX_PLAYBACK_RATE + 5
+    return int(min(watched, ceiling))
+
+
 @router.post("")
 async def upsert_progress(
     body: ProgressUpdate,
@@ -100,22 +135,28 @@ async def upsert_progress(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
 
-    # Cache progress in Redis (key expires in 2 min, flushed by the 30s player sync)
-    cache_key = f"progress:{user.id}:{body.episode_id}"
-    await redis.setex(cache_key, 120, f"{body.watched_seconds}:{body.total_seconds}")
-
-    # * completion rule: watched >= 90% of total
-    completed = body.watched_seconds >= body.total_seconds * 0.9
     now = datetime.now(timezone.utc)
-
     wp = await WatchProgress.find_one(
         WatchProgress.user_id == user.id,
         WatchProgress.episode_id == body.episode_id,
     )
 
+    # Course videos only let a learner skip ahead so far; hold the reported
+    # position to the same limit so a crafted request can't claim the end.
+    watched = await _skip_limited(body.watched_seconds, wp, episode, user, now)
+    skip_limited = watched < body.watched_seconds
+
+    # Cache progress in Redis (key expires in 2 min, flushed by the 30s player sync)
+    cache_key = f"progress:{user.id}:{body.episode_id}"
+    await redis.setex(cache_key, 120, f"{watched}:{body.total_seconds}")
+
+    # * completion rule: watched >= 90% of total. A zero total is a player
+    # * that hasn't read the video's length yet, not a finished video.
+    completed = body.total_seconds > 0 and watched >= body.total_seconds * 0.9
+
     newly_completed = False
     if wp:
-        wp.watched_seconds = max(wp.watched_seconds, body.watched_seconds)
+        wp.watched_seconds = max(wp.watched_seconds, watched)
         wp.total_seconds = body.total_seconds
         wp.last_watched_at = now
         if completed and not wp.completed:
@@ -127,7 +168,7 @@ async def upsert_progress(
         wp = WatchProgress(
             user_id=user.id,
             episode_id=body.episode_id,
-            watched_seconds=body.watched_seconds,
+            watched_seconds=watched,
             total_seconds=body.total_seconds,
             completed=completed,
             completed_at=now if completed else None,
@@ -204,7 +245,14 @@ async def upsert_progress(
             "module_badges_unlocked": module_badges,
         }
 
-    return {"completed": completed, "watched_seconds": body.watched_seconds, "rewards": rewards}
+    return {
+        "completed": completed,
+        "watched_seconds": watched,
+        # True when the reported position was further ahead than a course
+        # video allows, and the recorded one was held back.
+        "skip_limited": skip_limited,
+        "rewards": rewards,
+    }
 
 
 @router.get("/me")
