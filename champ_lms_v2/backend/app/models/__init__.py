@@ -24,6 +24,8 @@ from app.models.daily import DailyChallenge, DailyChallengeCompletion, Kudos
 # * per-attempt test approval requests.
 from app.models.note import CourseNote, NoteAttachment
 from app.models.test_request import TestRequest
+# * Learner questions on course videos, answered by admins.
+from app.models.qna import EpisodeQuestion
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -35,7 +37,7 @@ __all__ = [
     "TestSeries", "TestAttempt", "TestQuestion", "AttemptGrant",
     "ContentAccessRule",
     "DailyChallenge", "DailyChallengeCompletion", "Kudos",
-    "CourseNote", "NoteAttachment", "TestRequest",
+    "CourseNote", "NoteAttachment", "TestRequest", "EpisodeQuestion",
 ]
 
 DOCUMENT_MODELS = [
@@ -49,5 +51,5 @@ DOCUMENT_MODELS = [
     TestSeries, TestAttempt, AttemptGrant,
     ContentAccessRule,
     DailyChallenge, DailyChallengeCompletion, Kudos,
-    CourseNote, NoteAttachment, TestRequest,
+    CourseNote, NoteAttachment, TestRequest, EpisodeQuestion,
 ]

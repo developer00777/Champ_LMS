@@ -30,6 +30,7 @@ from app.models.episode import Episode
 from app.models.module import Module
 from app.models.note import CourseNote, NoteAttachment
 from app.models.progress import WatchProgress
+from app.models.qna import EpisodeQuestion
 from app.models.test_request import TestRequest
 from app.models.test_series import AttemptGrant, TestAttempt, TestSeries
 from app.models.zoom_session import ZoomSession
@@ -173,6 +174,7 @@ async def _purge_db_rows(episodes: list[Episode], redis=None) -> dict:
         attempts_deleted = getattr(res, "deleted_count", 0) or 0
         await Assessment.find(In(Assessment.episode_id, episode_ids)).delete()
 
+    await EpisodeQuestion.find(In(EpisodeQuestion.episode_id, episode_ids)).delete()
     wp_res = await WatchProgress.find(In(WatchProgress.episode_id, episode_ids)).delete()
     wp_deleted = getattr(wp_res, "deleted_count", 0) or 0
 

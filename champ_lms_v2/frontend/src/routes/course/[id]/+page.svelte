@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { api, type CourseItemView, type CourseView, type TranscriptSegment } from '$lib/api/client';
+  import { api, type CourseItemView, type CourseView, type EpisodeQuestion, type TranscriptSegment } from '$lib/api/client';
   import { isAdmin } from '$lib/stores/auth';
   import VideoPlayer from '$lib/components/VideoPlayer.svelte';
   import NotesView from '$lib/components/course/NotesView.svelte';
   import Transcript from '$lib/components/course/Transcript.svelte';
   import CourseQuiz from '$lib/components/course/CourseQuiz.svelte';
   import CourseTestStep from '$lib/components/course/CourseTestStep.svelte';
+  import QnaPanel from '$lib/components/course/QnaPanel.svelte';
   import { icons, kindLabel } from '$lib/components/course/icons';
   import { clock, runtime } from '$lib/utils/transcribe';
 
@@ -18,8 +19,8 @@
   let error = '';
   let currentId: string | null = null;
   let mode: 'browse' | 'watch' = 'browse'; // series only
-  let tab: 'overview' | 'notes' | 'transcript' = 'transcript';
-  let sideTab: 'episodes' | 'transcript' | 'notes' = 'episodes';
+  let tab: 'overview' | 'notes' | 'transcript' | 'qna' = 'transcript';
+  let sideTab: 'episodes' | 'transcript' | 'notes' | 'qna' = 'episodes';
   let mapOpen = true;
   let mapFull = false;
   let theater = false;
@@ -31,6 +32,8 @@
   let streamError = '';
   let segments: TranscriptSegment[] = [];
   let segmentsSource: string | null = null;
+  let questions: EpisodeQuestion[] = [];
+  let qnaRef: QnaPanel;
   let seenNotes = new Set<string>();
 
   const seenKey = () => `champ_seen_notes_${id}`;
@@ -75,7 +78,8 @@
   let loadedFor: string | null = null;
   $: if (current && current.kind === 'video' && current.ref_id !== loadedFor && (course?.format !== 'series' || mode === 'watch')) openVideo(current);
   async function openVideo(item: CourseItemView) {
-    loadedFor = item.ref_id; stream = null; streamError = ''; segments = []; segmentsSource = null; time = 0;
+    loadedFor = item.ref_id; stream = null; streamError = ''; segments = []; segmentsSource = null; time = 0; questions = [];
+    api.episodeQuestions(id, item.ref_id).then(q => { if (loadedFor === item.ref_id) questions = q; }).catch(() => { /* Q&A is optional */ });
     try { stream = await api.streamUrl(item.ref_id); }
     catch (e: any) { streamError = e.status === 425 ? 'This video is still processing. Try again in a few minutes.' : e.message; }
     if (item.has_transcript) {
@@ -95,6 +99,15 @@
     if (course?.format === 'series') mode = 'watch';
     const url = new URL($page.url); url.searchParams.set('item', item.id); url.searchParams.delete('ref');
     goto(url.pathname + url.search, { replaceState: true, noScroll: true, keepFocus: true });
+  }
+
+  // The player's Q&A button: leave full screen, open the Q&A tab, and pin the
+  // question box to the moment the video was paused at.
+  async function openQna(at: number) {
+    if (theater) await toggleTheater();
+    if (course?.format === 'series') sideTab = 'qna'; else tab = 'qna';
+    await tick();
+    qnaRef?.focusAsk(at);
   }
 
   async function openAttachment(item: CourseItemView) {
@@ -186,6 +199,7 @@
               startAt={current.completed ? 0 : current.watched_seconds ?? 0}
               skipLimitSeconds={skipLimit(current)} furthestStart={current.watched_seconds ?? 0}
               clipStart={current.clip_start ?? 0} clipEnd={current.clip_end ?? null}
+              captions={segments} onQna={openQna} qnaCount={questions.length}
               onTime={t => (time = t)} onComplete={() => load()} onAutoAdvance={() => next && go(next)} />
           {:else}
             <div class="player-ph">{streamError || 'Loading video…'}</div>
@@ -198,6 +212,7 @@
           <button class:on={sideTab === 'episodes'} on:click={() => (sideTab = 'episodes')}>Episodes</button>
           <button class:on={sideTab === 'transcript'} on:click={() => (sideTab = 'transcript')}>Transcript</button>
           <button class:on={sideTab === 'notes'} on:click={() => (sideTab = 'notes')}>Notes</button>
+          <button class:on={sideTab === 'qna'} on:click={() => (sideTab = 'qna')}>Q&amp;A{questions.length ? ` (${questions.length})` : ''}</button>
         </div>
         <div class="w-side-b">
           {#if sideTab === 'episodes'}
@@ -209,6 +224,9 @@
             {/each}
           {:else if sideTab === 'transcript'}
             <Transcript {segments} source={segmentsSource} {time} onSeek={t => playerRef?.seek(t)} />
+          {:else if sideTab === 'qna'}
+            <QnaPanel bind:this={qnaRef} courseId={course.id} episodeId={current.ref_id} {questions} {time} isAdmin={$isAdmin}
+              onSeek={t => playerRef?.seek(t)} onChange={q => (questions = q)} />
           {:else}
             <p class="src">{current.notes_source === 'ai' ? 'AI notes, reviewed by your admin' : current.notes ? 'Written by your admin' : ''}</p>
             <NotesView source={current.notes} />
@@ -276,6 +294,7 @@
                   startAt={current.completed ? 0 : current.watched_seconds ?? 0}
                   skipLimitSeconds={skipLimit(current)} furthestStart={current.watched_seconds ?? 0}
                   clipStart={current.clip_start ?? 0} clipEnd={current.clip_end ?? null}
+                  captions={segments} onQna={openQna} qnaCount={questions.length}
                   onTime={t => (time = t)} onComplete={() => load()} onAutoAdvance={() => next && next.kind === 'video' && go(next)} />
               {:else}
                 <div class="player-ph">{streamError || 'Loading video…'}</div>
@@ -290,9 +309,13 @@
             <button class:on={tab === 'overview'} on:click={() => (tab = 'overview')}>Overview</button>
             <button class:on={tab === 'notes'} on:click={() => (tab = 'notes')}>Notes</button>
             <button class:on={tab === 'transcript'} on:click={() => (tab = 'transcript')}>Transcript</button>
+            <button class:on={tab === 'qna'} on:click={() => (tab = 'qna')}>Q&amp;A{questions.length ? ` (${questions.length})` : ''}</button>
           </div>
           {#if tab === 'transcript'}
             <Transcript {segments} source={segmentsSource} {time} onSeek={t => playerRef?.seek(t)} />
+          {:else if tab === 'qna'}
+            <QnaPanel bind:this={qnaRef} courseId={course.id} episodeId={current.ref_id} {questions} {time} isAdmin={$isAdmin}
+              onSeek={t => playerRef?.seek(t)} onChange={q => (questions = q)} />
           {:else if tab === 'notes'}
             <p class="src">{current.notes_source === 'ai' ? 'AI notes, reviewed by your admin' : current.notes ? 'Written by your admin' : ''}</p>
             <NotesView source={current.notes} />

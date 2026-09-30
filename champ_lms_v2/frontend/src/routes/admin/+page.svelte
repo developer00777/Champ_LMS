@@ -4,8 +4,10 @@
 
   let analytics: AnalyticsData | null = null;
   let loading = true;
+  let openQuestions = 0;
 
   onMount(async () => {
+    api.openQuestionCount().then(r => (openQuestions = r.open)).catch(() => {});
     try { analytics = await api.analytics(); }
     finally { loading = false; }
   });
@@ -60,6 +62,11 @@
       <h3>Test requests</h3>
       <p>Approve who sits a course test, and how many attempts they get</p>
     </a>
+    <a href="/admin/questions" class="link-card">
+      <div class="icon">💬</div>
+      <h3>Questions{#if openQuestions}<span class="badge">{openQuestions}</span>{/if}</h3>
+      <p>Answer what learners ask from the Q&amp;A button on course videos</p>
+    </a>
     <a href="/admin/upload" class="link-card">
       <div class="icon">📤</div>
       <h3>Upload Video</h3>
@@ -94,6 +101,7 @@
 </div>
 
 <style>
+  .badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: 0.4rem; border-radius: 99px; background: var(--accent); color: #fff; font-size: 0.72rem; font-weight: 700; vertical-align: middle; }
   .page { max-width: 960px; margin: 0 auto; }
   h1 { font-size: 1.8rem; font-weight: 800; margin-bottom: 2rem; }
   .stats-grid {

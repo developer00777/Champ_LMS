@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { player } from '$lib/stores/player';
+  import type { TranscriptSegment } from '$lib/api/client';
+  import { icons } from '$lib/components/course/icons';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -55,6 +57,48 @@
   export let clipEnd: number | null = null;
   // false = don't report watch progress (an admin previewing in the editor).
   export let track = true;
+  // Transcript lines in clip time. When there are any, a CC button over the
+  // video turns them into captions. They go in as a real caption track, so they
+  // also show in the browser's own full screen.
+  export let captions: TranscriptSegment[] = [];
+  // Set to show a Q&A button over the video. Called with the playhead (clip
+  // time) after the video pauses, so a question can be pinned to that moment.
+  export let onQna: ((atSeconds: number) => void) | null = null;
+  export let qnaCount = 0;
+
+  // ---- captions ------------------------------------------------------------
+  const CC_KEY = 'champ_cc';
+  let ccOn = false;
+  try { ccOn = localStorage.getItem(CC_KEY) === '1'; } catch { /* storage blocked */ }
+  let trackEl: HTMLTrackElement;
+  let vttUrl = '';
+  const vttTime = (x: number) => {
+    const ms = Math.max(0, Math.round(x * 1000));
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), sec = Math.floor((ms % 60000) / 1000);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
+  };
+  const vttText = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/-->/g, '→');
+  // Cues sit in source time: the video element plays the whole Bunny video.
+  // A clipped part's own controls cover the bottom, so its captions sit higher.
+  $: {
+    if (vttUrl) URL.revokeObjectURL(vttUrl);
+    vttUrl = captions.length
+      ? URL.createObjectURL(new Blob([
+          'WEBVTT\n\n' + captions.map(c =>
+            `${vttTime(clipStart + c.start)} --> ${vttTime(clipStart + Math.max(c.end, c.start + 0.5))}${clipped ? ' line:80%' : ''}\n${vttText(c.text)}\n`
+          ).join('\n'),
+        ], { type: 'text/vtt' }))
+      : '';
+  }
+  $: if (trackEl?.track) trackEl.track.mode = ccOn && vttUrl ? 'showing' : 'hidden';
+  function toggleCc() {
+    ccOn = !ccOn;
+    try { localStorage.setItem(CC_KEY, ccOn ? '1' : '0'); } catch { /* storage blocked */ }
+  }
+  function openQna() {
+    videoEl?.pause();
+    onQna?.(videoEl ? Math.max(0, videoEl.currentTime - clipStart) : 0);
+  }
 
   $: clipped = clipStart > 0 || clipEnd !== null;
   let duration = 0; // the whole video's, once known
@@ -190,6 +234,7 @@
 
   onDestroy(() => {
     hls?.destroy();
+    if (vttUrl) URL.revokeObjectURL(vttUrl);
     if (track) player.stopTracking();
     if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
     if (noticeTimer) clearTimeout(noticeTimer);
@@ -305,7 +350,12 @@
       on:pause={() => (paused = true)}
       on:loadedmetadata={() => (duration = videoEl.duration || 0)}
       on:ended={onEnded}
-    ></video>
+    >
+      {#if vttUrl}
+        <track bind:this={trackEl} kind="captions" srclang="en" label="Transcript" src={vttUrl}
+          on:load={() => { if (trackEl?.track) trackEl.track.mode = ccOn ? 'showing' : 'hidden'; }} />
+      {/if}
+    </video>
     {#if clipped}
       <div class="cbar">
         <button on:click={togglePlay} aria-label={paused ? 'Play' : 'Pause'}>
@@ -336,6 +386,23 @@
     ></iframe>
   {:else}
     <div class="placeholder">Loading video...</div>
+  {/if}
+
+  {#if (useNative && captions.length) || onQna}
+    <!-- Over the video, top left: the page keeps its own tools top right. -->
+    <div class="overlay-tools">
+      {#if useNative && captions.length}
+        <button class="otool" class:on={ccOn} on:click={toggleCc} aria-pressed={ccOn}
+          aria-label={ccOn ? 'Turn captions off' : 'Turn captions on'} title={ccOn ? 'Captions on' : 'Captions off'}>
+          {@html icons.cc}<span>CC</span>
+        </button>
+      {/if}
+      {#if onQna}
+        <button class="otool" on:click={openQna} aria-label="Ask a question about this moment, or read the Q&A" title="Q&A">
+          {@html icons.qna}<span>Q&amp;A</span>{#if qnaCount}<b class="count">{qnaCount}</b>{/if}
+        </button>
+      {/if}
+    </div>
   {/if}
 
   {#if skipNotice}
@@ -391,6 +458,27 @@
   }
   .cscrub::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
   .cscrub::-moz-range-thumb { width: 13px; height: 13px; border: 0; border-radius: 50%; background: #fff; }
+  .overlay-tools {
+    position: absolute; top: 10px; left: 10px; z-index: 4;
+    display: flex; gap: 0.35rem;
+    opacity: 0.8; transition: opacity 0.2s;
+  }
+  .player-wrap:hover .overlay-tools, .overlay-tools:focus-within { opacity: 1; }
+  .otool {
+    display: inline-flex; align-items: center; gap: 0.35rem; height: 32px; padding: 0 0.65rem;
+    border-radius: 8px; color: #fff; background: rgba(0, 0, 0, 0.55); font-size: 0.76rem; font-weight: 700;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+  }
+  .otool :global(svg) { font-size: 1.05rem; }
+  .otool:hover { background: rgba(0, 0, 0, 0.75); }
+  .otool.on { background: #fff; color: #000; border-color: #fff; }
+  .otool .count {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; display: grid; place-items: center;
+    background: var(--accent); color: #fff; font-size: 0.68rem;
+  }
+  .video::cue {
+    background: rgba(0, 0, 0, 0.78); color: #fff; font-size: 1.05em; line-height: 1.35;
+  }
   .skip-notice {
     position: absolute; left: 50%; top: 1.25rem; transform: translateX(-50%);
     max-width: calc(100% - 2rem); text-align: center;

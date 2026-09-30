@@ -440,11 +440,33 @@ export const api = {
   denyTestRequest: (id: string, reason?: string) =>
     request<TestRequestRow>(`/admin/test-requests/${id}/deny`, { method: 'POST', body: JSON.stringify({ reason }) }),
 
+  // Q&A inbox — admin
+  adminQuestions: (status: 'open' | 'answered' | 'all' = 'open', courseId?: string) =>
+    request<{ questions: AdminQuestion[]; open: number; courses: { id: string; title: string }[] }>(
+      `/admin/questions?status=${status}${courseId ? `&course_id=${encodeURIComponent(courseId)}` : ''}`),
+  openQuestionCount: () => request<{ open: number }>('/admin/questions/count'),
+  answerQuestion: (id: string, answer: string) =>
+    request<EpisodeQuestion>(`/admin/questions/${id}/answer`, { method: 'PUT', body: JSON.stringify({ answer }) }),
+  clearAnswer: (id: string) =>
+    request<EpisodeQuestion>(`/admin/questions/${id}/answer`, { method: 'DELETE' }),
+  deleteQuestion: (id: string) =>
+    request<{ deleted: string }>(`/admin/questions/${id}`, { method: 'DELETE' }),
+
   // Course canvas — learner
   course: (id: string) => request<CourseView>(`/courses/${id}`),
   courseTranscript: (courseId: string, episodeId: string) =>
     request<{ episode_id: string; source: string | null; segments: TranscriptSegment[] }>(
       `/courses/${courseId}/episodes/${episodeId}/transcript`),
+  // Q&A on a course video: everyone's questions on the episode, with answers.
+  // at_seconds is in clip time (from the start of the episode).
+  episodeQuestions: (courseId: string, episodeId: string) =>
+    request<EpisodeQuestion[]>(`/courses/${courseId}/episodes/${episodeId}/questions`),
+  askQuestion: (courseId: string, episodeId: string, body: string, atSeconds: number | null) =>
+    request<EpisodeQuestion>(`/courses/${courseId}/episodes/${episodeId}/questions`, {
+      method: 'POST', body: JSON.stringify({ body, at_seconds: atSeconds }),
+    }),
+  deleteMyQuestion: (courseId: string, questionId: string) =>
+    request<{ deleted: string }>(`/courses/${courseId}/questions/${questionId}`, { method: 'DELETE' }),
   courseQuiz: (courseId: string, quizId: string) =>
     request<{ id: string; title: string; pass_threshold: number; questions: { question: string; options: string[] }[] }>(
       `/courses/${courseId}/quizzes/${quizId}`),
@@ -740,6 +762,16 @@ export type CourseItemKind = 'video' | 'quiz' | 'test' | 'notes';
 export type CourseFormat = 'series' | 'course' | 'empty';
 export interface CourseSection { id: string; title: string; }
 export interface TranscriptSegment { start: number; end: number; text: string; }
+export interface EpisodeQuestion {
+  id: string; episode_id: string; body: string;
+  at_seconds: number | null; // clip time; null = about the whole video
+  full_name: string; mine: boolean; asked_by_staff: boolean;
+  answer: string | null; answered_by_name: string | null; answered_at: string | null;
+  created_at: string;
+}
+export interface AdminQuestion extends EpisodeQuestion {
+  team: string | null; course_id: string; course_title: string; episode_title: string;
+}
 export interface QuizQuestion {
   question: string; options: string[]; correct_index: number;
   explanation?: string | null; source_episode_id?: string | null;

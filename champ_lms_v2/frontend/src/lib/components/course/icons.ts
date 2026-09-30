@@ -26,6 +26,8 @@ export const icons = {
   clock: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   shield: svg('<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/>'),
   file: svg('<path d="M6 3h9l4 4v14H6z"/><path d="M14.5 3v4.5H19"/>'),
+  qna: svg('<path d="M4 5.5h16v10.5H10l-4.5 3.5V16H4z"/><path d="M10 9a2 2 0 113 1.7c-.6.4-1 .8-1 1.5M12 14h.01"/>'),
+  cc: svg('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 10.2a2.2 2.2 0 100 3.6M17 10.2a2.2 2.2 0 100 3.6"/>'),
   bell: svg('<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>'),
 };
 

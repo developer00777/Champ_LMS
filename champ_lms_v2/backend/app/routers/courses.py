@@ -42,6 +42,7 @@ from app.models.module import (
 )
 from app.models.note import MAX_ATTACHMENT_BYTES, CourseNote, NoteAttachment
 from app.models.progress import WatchProgress
+from app.models.qna import EpisodeQuestion
 from app.models.test_request import TestRequest
 from app.models.test_series import AttemptGrant, TestAttempt, TestQuestion, TestSeries
 from app.models.user import User
@@ -880,6 +881,14 @@ async def set_clip(
         new_parts.append(part)
     await module.save()
 
+    # A question asked at a moment now in a later part moves with that moment.
+    for part in new_parts:
+        await EpisodeQuestion.find(
+            EpisodeQuestion.episode_id == ep.id,
+            EpisodeQuestion.at_seconds >= (part.clip_start or 0),
+            EpisodeQuestion.at_seconds < (part.clip_end if part.clip_end is not None else length + 1),
+        ).update({"$set": {"episode_id": part.id}})
+
     # A quiz written from the whole video now covers all of its parts.
     if new_parts:
         for q in await Assessment.find(
@@ -948,6 +957,11 @@ async def join_next(
                 ep.id if s == other.id else s for s in q.source_episode_ids
             ))
             await q.save()
+
+    # Questions on the later part are now about this one (times are source time).
+    await EpisodeQuestion.find(EpisodeQuestion.episode_id == other.id).update(
+        {"$set": {"episode_id": ep.id}}
+    )
 
     try:
         # Keeps the Bunny video: this part still plays it (see purge_service).
