@@ -17,7 +17,7 @@ from app.models.progress import WatchProgress
 from app.models.recommendation import Recommendation
 from app.services.bunny_stream import bunny_stream
 from app.services.bunny_storage import bunny_storage
-from app.services.clips import apply_source_length, clip_bounds, is_clipped
+from app.services.clips import apply_source_length, clip_bounds, is_clipped, segments_in_clip
 import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
@@ -292,6 +292,18 @@ async def get_module(
             for ep in episodes
         ],
     }
+
+
+@router.get("/episodes/{episode_id}/captions")
+async def get_episode_captions(
+    episode_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+):
+    """The episode's transcript lines, for the player's CC button. Clip time."""
+    ep = await Episode.get(episode_id)
+    if not ep or not await content_access.can_access_module_id(ep.module_id, user):
+        raise HTTPException(status_code=404, detail="Episode not found")
+    return {"episode_id": ep.id, "segments": segments_in_clip(ep)}
 
 
 @router.get("/episodes/{episode_id}/stream")

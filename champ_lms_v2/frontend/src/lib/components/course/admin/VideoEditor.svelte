@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { api, type AdminCourse, type AdminVideoItem } from '$lib/api/client';
   import { fileFor } from '$lib/stores/course-uploads';
-  import { clock } from '$lib/utils/transcribe';
+  import { clock, segmentsToVtt } from '$lib/utils/transcribe';
   import { icons } from '../icons';
 
   export let courseId: string;
@@ -53,7 +53,63 @@
       previewError = "The preview couldn't load. You can still type the times.";
     }
   });
-  onDestroy(() => { hls?.destroy(); if (objectUrl) URL.revokeObjectURL(objectUrl); });
+  onDestroy(() => { hls?.destroy(); if (objectUrl) URL.revokeObjectURL(objectUrl); if (vttUrl) URL.revokeObjectURL(vttUrl); });
+
+  // ---- captions in the preview ----------------------------------------------
+  // The item's transcript is in clip time of its current trim; the preview
+  // plays the whole video, so the lines move by that trim's start.
+  let ccOn = false;
+  let trackEl: HTMLTrackElement;
+  const vttUrl = item.transcript_segments?.length
+    ? URL.createObjectURL(new Blob([segmentsToVtt(item.transcript_segments, item.clip_start ?? 0)], { type: 'text/vtt' }))
+    : '';
+  $: if (trackEl?.track) trackEl.track.mode = ccOn ? 'showing' : 'hidden';
+
+  // ---- preview: play it the way learners will get it -------------------------
+  // A preview plays [from, to] and stops at `to`. "Preview result" plays part 1,
+  // stops at its end (where a quiz or test can go), then continues with part 2
+  // when asked, so every cut can be checked before saving.
+  let playing: { from: number; to: number; label: string; seq: number | null } | null = null;
+  let endCard: { text: string; next: number | null; replay: number | null } | null = null;
+
+  function playRange(from: number, to: number, label: string, seq: number | null = null) {
+    if (!videoEl) return;
+    endCard = null;
+    playing = { from, to, label, seq };
+    videoEl.currentTime = from;
+    videoEl.play().catch(() => {});
+  }
+  function previewAll() { playPart(0, true); }
+  function playPart(i: number, seq = false) {
+    const p = parts[i];
+    if (p) playRange(p.from, p.to, parts.length > 1 ? `part ${i + 1}` : 'the kept video', seq ? i : null);
+  }
+  function playEnding(i: number) {
+    const p = parts[i];
+    if (p) playRange(Math.max(p.from, p.to - 5), p.to, `the end of ${parts.length > 1 ? `part ${i + 1}` : 'the video'}`);
+  }
+  function playCut(at: number) { playRange(Math.max(start, at - 4), Math.min(end, at + 4), `the split at ${clock(at)}`); }
+  function stopPreview() { playing = null; endCard = null; }
+
+  function onTime() {
+    t = videoEl.currentTime;
+    if (!playing || videoEl.seeking) return;
+    if (t >= playing.to - 0.05) {
+      videoEl.pause();
+      const p = playing;
+      playing = null;
+      if (p.seq !== null) {
+        const last = p.seq >= parts.length - 1;
+        endCard = {
+          text: last
+            ? (parts.length > 1 ? `End of part ${p.seq + 1}, the last part.` : 'End of the video. This is where it stops for learners.')
+            : `End of part ${p.seq + 1}. On the canvas, a quiz or test can go here before part ${p.seq + 2}.`,
+          next: last ? null : p.seq + 1,
+          replay: p.seq,
+        };
+      }
+    }
+  }
 
   function onMeta() {
     if (!length && videoEl.duration) { length = videoEl.duration; if (!end) end = length; endText = clock(end); }
@@ -93,6 +149,7 @@
   };
   function grab(e: PointerEvent, kind: 'start' | 'end' | 'split', value?: number) {
     e.stopPropagation();
+    stopPreview(); // the parts are changing under it
     dragging = { kind, value };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
@@ -109,12 +166,12 @@
     }
   }
   function drop() { dragging = null; }
-  function seekTo(e: MouseEvent) { if (videoEl && length) videoEl.currentTime = timeAt(e.clientX); }
-  function nudge(by: number) { if (videoEl) videoEl.currentTime = Math.min(length, Math.max(0, videoEl.currentTime + by)); }
-  function playPart() { if (videoEl) { videoEl.currentTime = start; videoEl.play().catch(() => {}); } }
+  function seekTo(e: MouseEvent) { stopPreview(); if (videoEl && length) videoEl.currentTime = timeAt(e.clientX); }
+  function nudge(by: number) { stopPreview(); if (videoEl) videoEl.currentTime = Math.min(length, Math.max(0, videoEl.currentTime + by)); }
 
   async function save() {
     busy = true; error = '';
+    stopPreview(); videoEl?.pause();
     try { onSaved(await api.setClip(courseId, item.id, { start, end, split_at: sorted })); }
     catch (e: any) { error = e.message; }
     finally { busy = false; }
@@ -135,6 +192,7 @@
         <h2 id="ve-title">{item.title}</h2>
         <p class="hint">
           The video on Bunny isn't changed: this sets which part plays. Split it to put a quiz or test between the parts.
+          Use <b>Preview result</b> to watch it the way learners will before you save.
           {#if item.part}This is part {item.part[0]} of {item.part[1]}; the timeline shows the whole video.{/if}
         </p>
       </div>
@@ -143,7 +201,25 @@
 
     <div class="preview">
       <!-- svelte-ignore a11y-media-has-caption -->
-      <video bind:this={videoEl} controls preload="metadata" on:loadedmetadata={onMeta} on:timeupdate={() => (t = videoEl.currentTime)}></video>
+      <video bind:this={videoEl} controls preload="metadata" on:loadedmetadata={onMeta} on:timeupdate={onTime}>
+        {#if vttUrl}<track bind:this={trackEl} kind="captions" srclang="en" label="Transcript" src={vttUrl}
+          on:load={() => { if (trackEl?.track) trackEl.track.mode = ccOn ? 'showing' : 'hidden'; }} />{/if}
+      </video>
+      <div class="ptools">
+        {#if playing}<span class="now">{@html icons.play} Previewing {playing.label} · <span class="mono">{clock(Math.max(0, t - playing.from))} / {clock(playing.to - playing.from)}</span></span>{/if}
+        <button class="ptool" class:on={ccOn} on:click={() => (ccOn = !ccOn)} disabled={!vttUrl}
+          title={vttUrl ? (ccOn ? 'Captions on' : 'Captions off') : 'No transcript for this video yet'} aria-pressed={ccOn}>{@html icons.cc} CC</button>
+      </div>
+      {#if endCard}
+        <div class="endcard" role="status">
+          <p>{endCard.text}</p>
+          <div class="row">
+            {#if endCard.next !== null}<button class="btn sm primary" on:click={() => endCard && endCard.next !== null && playPart(endCard.next, true)}>{@html icons.play} Continue to part {endCard.next + 1}</button>{/if}
+            {#if endCard.replay !== null}<button class="btn sm" on:click={() => endCard && endCard.replay !== null && playPart(endCard.replay, true)}>Replay{parts.length > 1 ? ` part ${endCard.replay + 1}` : ''}</button>{/if}
+            <button class="btn sm ghost light" on:click={stopPreview}>Close</button>
+          </div>
+        </div>
+      {/if}
       {#if previewError}<p class="perr">{previewError}</p>{/if}
     </div>
 
@@ -159,6 +235,7 @@
         {/each}
         <button class="handle hstart" style="left:{pct(start)}%" on:pointerdown={e => grab(e, 'start')} on:click|stopPropagation aria-label="Start, {clock(start)}; drag to move"></button>
         <button class="handle hend" style="left:{pct(end)}%" on:pointerdown={e => grab(e, 'end')} on:click|stopPropagation aria-label="End, {clock(end)}; drag to move"></button>
+        {#if playing}<div class="prange" style="left:{pct(playing.from)}%; width:{pct(playing.to) - pct(playing.from)}%"></div>{/if}
         <div class="playhead" style="left:{pct(t)}%"></div>
       </div>
       <div class="scale mono"><span>0:00</span><span>Playhead {clock(t)}</span><span>{clock(length)}</span></div>
@@ -177,7 +254,9 @@
         <button class="btn sm primary" on:click={() => addSplit(t)}>{@html icons.plus} Split here</button>
       </div>
       <div class="group">
-        <button class="btn sm ghost" on:click={playPart}>{@html icons.play} Play from start</button>
+        <button class="btn sm primary" on:click={previewAll} disabled={!length || tooShort}
+          title="Play it the way learners will get it: trimmed, and stopping at each split">{@html icons.play} Preview result</button>
+        {#if playing || endCard}<button class="btn sm ghost" on:click={() => { stopPreview(); videoEl?.pause(); }}>Stop preview</button>{/if}
         <button class="btn sm ghost" on:click={() => { setStart(0); setEnd(length); splits = []; }}>Use whole video</button>
       </div>
     </div>
@@ -198,6 +277,9 @@
           <b>{parts.length > 1 ? `Part ${i + 1}` : 'Plays'}</b>
           <span class="mono">{clock(p.from)} – {clock(p.to)}</span>
           <span class="muted">{clock(p.len)}{i === 0 ? ' · stays this episode' : ' · new episode after it'}</span>
+          <button class="btn sm ghost" on:click={() => playPart(i)} disabled={!length}>{@html icons.play} Play</button>
+          <button class="btn sm ghost" on:click={() => playEnding(i)} disabled={!length} title="Play the last 5 seconds, to check where it stops">Play ending</button>
+          {#if i > 0}<button class="btn sm ghost" on:click={() => playCut(p.from)} disabled={!length} title="Play 4 seconds either side of this split">Hear the cut</button>{/if}
           {#if i > 0}<button class="icon-btn" on:click={() => removeSplit(p.from)} aria-label="Remove the split at {clock(p.from)}">{@html icons.x}</button>{/if}
         </li>
       {/each}
@@ -226,6 +308,18 @@
   h2 { font-size: 1.15rem; font-weight: 700; margin: 0.15rem 0 0.3rem; }
   .preview { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9; max-height: 46vh; }
   .preview video { width: 100%; height: 100%; }
+  .ptools { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; pointer-events: none; }
+  .ptools > * { pointer-events: auto; }
+  .now { margin-right: auto; display: inline-flex; gap: 0.35rem; align-items: center; height: 28px; padding: 0 0.6rem; border-radius: 7px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 0.76rem; font-weight: 600; }
+  .ptool { display: inline-flex; gap: 0.3rem; align-items: center; height: 28px; padding: 0 0.55rem; border-radius: 7px; color: #fff; background: rgba(0, 0, 0, 0.6); font-size: 0.74rem; font-weight: 700; border: 1px solid rgba(255, 255, 255, 0.15); }
+  .ptool.on { background: #fff; color: #000; }
+  .ptool:disabled { opacity: 0.5; cursor: not-allowed; }
+  .endcard { position: absolute; inset: auto 0 0 0; padding: 0.9rem 1rem 3.4rem; background: linear-gradient(transparent, rgba(0, 0, 0, 0.88) 35%); color: #fff; display: grid; gap: 0.5rem; }
+  .endcard p { font-size: 0.9rem; font-weight: 600; }
+  .endcard .row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .btn.light { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+  .preview video::cue { background: rgba(0, 0, 0, 0.78); color: #fff; }
+  .prange { position: absolute; top: 0; bottom: 0; background: rgba(245, 197, 24, 0.22); pointer-events: none; }
   .perr { position: absolute; inset: auto 0 0 0; padding: 0.5rem 0.8rem; font-size: 0.82rem; color: #fff; background: rgba(0, 0, 0, 0.7); }
   .timeline { display: grid; gap: 0.3rem; }
   .track { position: relative; height: 54px; border-radius: 8px; background: repeating-linear-gradient(135deg, var(--surface2) 0 8px, var(--surface3) 8px 16px); cursor: pointer; touch-action: none; }
@@ -245,7 +339,7 @@
   .fields label { display: grid; gap: 0.25rem; font-size: 0.76rem; font-weight: 600; color: var(--text-secondary); }
   .fields input { width: 110px; font: inherit; font-size: 0.88rem; color: var(--text); background: var(--bg); border: 1px solid var(--border-hover); border-radius: 8px; padding: 0.4rem 0.6rem; font-variant-numeric: tabular-nums; }
   .parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
-  .parts li { display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; font-size: 0.85rem; }
+  .parts li { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: center; padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; font-size: 0.85rem; }
   .parts li.bad { border-color: #ff6b70; }
   .parts .muted { color: var(--muted); flex: 1; }
   .hint { font-size: 0.8rem; color: var(--muted); line-height: 1.45; }

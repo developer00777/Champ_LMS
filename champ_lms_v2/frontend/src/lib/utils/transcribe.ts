@@ -155,3 +155,22 @@ export function runtime(seconds: number): string {
   const m = Math.round(seconds / 60);
   return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
 }
+
+/**
+ * Transcript lines as a WebVTT caption file, for a <track> on a video.
+ * `offset` is added to every time: lines in clip time on a video element that
+ * plays the whole source need the clip's start added. `cueSettings` (e.g.
+ * "line:80%") lifts captions clear of custom controls.
+ */
+export function segmentsToVtt(segments: TranscriptSegment[], offset = 0, cueSettings = ''): string {
+  const t = (x: number) => {
+    const ms = Math.max(0, Math.round(x * 1000));
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
+  };
+  const text = (x: string) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/-->/g, '→');
+  const settings = cueSettings ? ` ${cueSettings}` : '';
+  return 'WEBVTT\n\n' + segments.map(c =>
+    `${t(offset + c.start)} --> ${t(offset + Math.max(c.end, c.start + 0.5))}${settings}\n${text(c.text)}\n`
+  ).join('\n');
+}

@@ -2,7 +2,7 @@
   import { page } from '$app/stores';
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { api, ApiError, type StreamUrlResponse, type AssessmentData, type Episode } from '$lib/api/client';
+  import { api, ApiError, type StreamUrlResponse, type AssessmentData, type Episode, type TranscriptSegment } from '$lib/api/client';
   import VideoPlayer from '$lib/components/VideoPlayer.svelte';
   import QuizModal from '$lib/components/QuizModal.svelte';
 
@@ -19,6 +19,7 @@
   let retryDelayMs = 3000;
   const MAX_RETRY_DELAY_MS = 15000;
   let loadedEpisodeId = '';
+  let captions: TranscriptSegment[] = [];
 
   $: if ($page.params.id !== loadedEpisodeId) loadEpisode($page.params.id);
 
@@ -28,6 +29,9 @@
     loadedEpisodeId = episodeId;
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     loading = true; processing = false; error = ''; streamData = null; showQuiz = false;
+    captions = [];
+    // For the player's CC button; a video without a transcript just has none.
+    api.episodeCaptions(episodeId).then(c => { if (loadedEpisodeId === episodeId) captions = c.segments; }).catch(() => {});
     retryDelayMs = 3000;
     await fetchStream(episodeId);
   }
@@ -88,6 +92,7 @@
       episodeId={loadedEpisodeId}
       streamUrl={streamData.stream_url}
       embedUrl={streamData.embed_url}
+      {captions}
       onComplete={onEpisodeComplete}
       onAutoAdvance={onAutoAdvance}
     />

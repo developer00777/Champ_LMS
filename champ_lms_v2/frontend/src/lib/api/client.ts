@@ -459,6 +459,9 @@ export const api = {
       `/courses/${courseId}/episodes/${episodeId}/transcript`),
   // Q&A on a course video: everyone's questions on the episode, with answers.
   // at_seconds is in clip time (from the start of the episode).
+  // Transcript lines for the player's CC button, any episode you can watch.
+  episodeCaptions: (episodeId: string) =>
+    request<{ episode_id: string; segments: TranscriptSegment[] }>(`/episodes/${episodeId}/captions`),
   episodeQuestions: (courseId: string, episodeId: string) =>
     request<EpisodeQuestion[]>(`/courses/${courseId}/episodes/${episodeId}/questions`),
   askQuestion: (courseId: string, episodeId: string, body: string, atSeconds: number | null) =>

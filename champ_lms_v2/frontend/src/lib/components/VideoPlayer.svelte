@@ -3,6 +3,7 @@
   import { player } from '$lib/stores/player';
   import type { TranscriptSegment } from '$lib/api/client';
   import { icons } from '$lib/components/course/icons';
+  import { segmentsToVtt } from '$lib/utils/transcribe';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -72,22 +73,12 @@
   try { ccOn = localStorage.getItem(CC_KEY) === '1'; } catch { /* storage blocked */ }
   let trackEl: HTMLTrackElement;
   let vttUrl = '';
-  const vttTime = (x: number) => {
-    const ms = Math.max(0, Math.round(x * 1000));
-    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), sec = Math.floor((ms % 60000) / 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
-  };
-  const vttText = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/-->/g, '→');
   // Cues sit in source time: the video element plays the whole Bunny video.
   // A clipped part's own controls cover the bottom, so its captions sit higher.
   $: {
     if (vttUrl) URL.revokeObjectURL(vttUrl);
     vttUrl = captions.length
-      ? URL.createObjectURL(new Blob([
-          'WEBVTT\n\n' + captions.map(c =>
-            `${vttTime(clipStart + c.start)} --> ${vttTime(clipStart + Math.max(c.end, c.start + 0.5))}${clipped ? ' line:80%' : ''}\n${vttText(c.text)}\n`
-          ).join('\n'),
-        ], { type: 'text/vtt' }))
+      ? URL.createObjectURL(new Blob([segmentsToVtt(captions, clipStart, clipped ? 'line:80%' : '')], { type: 'text/vtt' }))
       : '';
   }
   $: if (trackEl?.track) trackEl.track.mode = ccOn && vttUrl ? 'showing' : 'hidden';
@@ -388,12 +379,14 @@
     <div class="placeholder">Loading video...</div>
   {/if}
 
-  {#if (useNative && captions.length) || onQna}
+  {#if useNative || onQna}
     <!-- Over the video, top left: the page keeps its own tools top right. -->
     <div class="overlay-tools">
-      {#if useNative && captions.length}
-        <button class="otool" class:on={ccOn} on:click={toggleCc} aria-pressed={ccOn}
-          aria-label={ccOn ? 'Turn captions off' : 'Turn captions on'} title={ccOn ? 'Captions on' : 'Captions off'}>
+      {#if useNative}
+        <button class="otool" class:on={ccOn && !!captions.length} on:click={toggleCc} aria-pressed={ccOn}
+          disabled={!captions.length}
+          aria-label={!captions.length ? 'No captions for this video yet' : ccOn ? 'Turn captions off' : 'Turn captions on'}
+          title={!captions.length ? 'No captions for this video yet' : ccOn ? 'Captions on' : 'Captions off'}>
           {@html icons.cc}<span>CC</span>
         </button>
       {/if}
@@ -472,6 +465,7 @@
   .otool :global(svg) { font-size: 1.05rem; }
   .otool:hover { background: rgba(0, 0, 0, 0.75); }
   .otool.on { background: #fff; color: #000; border-color: #fff; }
+  .otool:disabled { opacity: 0.5; cursor: not-allowed; }
   .otool .count {
     min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; display: grid; place-items: center;
     background: var(--accent); color: #fff; font-size: 0.68rem;
