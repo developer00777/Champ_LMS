@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -47,6 +48,10 @@ from app.models.user import User
 from app.services import content_access
 from app.services.ai_service import AIServiceError, ai_service
 from app.services.bunny_storage import bunny_storage
+from app.services.clips import (
+    MIN_CLIP_SECONDS, clip_bounds, is_clipped, merge_clip_segments,
+    refresh_transcript_text, segments_in_clip, source_length,
+)
 from app.services.purge_service import (
     PurgeError, purge_course_test, purge_episode, purge_note,
 )
@@ -116,6 +121,17 @@ class SegmentIn(BaseModel):
 class TranscriptIn(BaseModel):
     segments: list[SegmentIn]
     source: str = "manual"  # auto | manual
+    # "source": times count from the start of the whole video (an automatic
+    # run over the uploaded file). "clip": from the start of this episode's
+    # part (an admin's edit). Defaults to source for auto, clip for manual.
+    timebase: str | None = None
+
+
+class ClipIn(BaseModel):
+    """Where a video's kept part starts and ends, and where to split it, in source seconds."""
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    split_at: list[float] = Field(default_factory=list, max_length=20)
 
 
 class TranscriptStatusIn(BaseModel):
@@ -354,7 +370,31 @@ def _clean_questions(raw: list, source_ids: list[str]) -> list[dict]:
 # --------------------------------------------------------------------------
 # Admin views
 # --------------------------------------------------------------------------
-async def _admin_item(it: CourseItem, refs: _Refs, numbers: dict[str, int]) -> dict:
+def _part_numbers(items: list[CourseItem], refs: _Refs) -> dict[str, tuple[int, int]]:
+    """
+    Episode id -> (part, of) for videos split into several episodes.
+
+    Parts are the episodes on the course playing the same Bunny video, counted
+    in canvas order. A video that was never split has no entry.
+    """
+    by_video: dict[str, list[str]] = {}
+    for it in items:
+        if it.kind != ITEM_VIDEO:
+            continue
+        ep = refs.episodes.get(it.ref_id)
+        if ep and ep.bunny_video_guid:
+            by_video.setdefault(ep.bunny_video_guid, []).append(ep.id)
+    return {
+        ep_id: (n, len(ids))
+        for ids in by_video.values() if len(ids) > 1
+        for n, ep_id in enumerate(ids, start=1)
+    }
+
+
+async def _admin_item(
+    it: CourseItem, refs: _Refs, numbers: dict[str, int],
+    parts: dict[str, tuple[int, int]] | None = None,
+) -> dict:
     doc = refs.doc(it)
     base = {"id": it.id, "kind": it.kind, "ref_id": it.ref_id, "section_id": it.section_id}
     if it.kind == ITEM_VIDEO:
@@ -369,9 +409,15 @@ async def _admin_item(it: CourseItem, refs: _Refs, numbers: dict[str, int]) -> d
             "thumbnail_url": _thumb(ep),
             "has_remote_video": bool(ep.bunny_video_guid or ep.bunny_video_id),
             "source_filename": ep.source_filename,
+            # Trim and split, in seconds of the whole Bunny video.
+            "clip_start": ep.clip_start,
+            "clip_end": ep.clip_end,
+            "source_duration_seconds": source_length(ep),
+            "part": list((parts or {}).get(ep.id, ())) or None,
             "transcript_status": ep.transcript_status or ("ready" if ep.transcript_segments else None),
             "transcript_source": ep.transcript_source,
-            "transcript_segments": ep.transcript_segments or [],
+            # Clip time: what the admin edits is this part only, from 0.
+            "transcript_segments": segments_in_clip(ep),
             "notes": ep.notes,
             "notes_source": ep.notes_source,
         }
@@ -425,6 +471,7 @@ async def _admin_course(module: Module) -> dict:
     refs = await _load_refs(module)
     items = _live_items(module, refs)
     numbers = _episode_numbers(items)
+    parts = _part_numbers(items, refs)
     return {
         "id": module.id,
         "title": module.title,
@@ -434,7 +481,7 @@ async def _admin_course(module: Module) -> dict:
         "access_mode": module.access_mode,
         "format": _course_format([i.kind for i in items]),
         "sections": [s.model_dump() for s in module.sections],
-        "items": [await _admin_item(i, refs, numbers) for i in items],
+        "items": [await _admin_item(i, refs, numbers, parts) for i in items],
         "can_watch_count": await _people_count(module),
         "created_at": _utc(module.created_at),
     }
@@ -712,7 +759,209 @@ async def delete_item(
     module.items = [it for it in module.items if it.id != item_id]
     await module.save()
     await _renumber_episodes(module)
-    return await _admin_course(module)
+    if item.kind == ITEM_VIDEO:
+        await _retitle_parts(module)  # the parts left of a split video renumber
+    return await _admin_course(await _get_course_or_404(course_id))
+
+
+# ==========================================================================
+# ADMIN — trim and split
+# ==========================================================================
+_PART_TITLE = re.compile(r"^(.*?)\s*\(part \d+\)$")
+
+
+def _set_range(ep: Episode, start: float, end: float, length: float) -> None:
+    """Point an episode at [start, end] of its video and keep what follows from it in step."""
+    ep.clip_start = start if start > 0 else None
+    ep.clip_end = end if end < length else None
+    ep.duration_seconds = int(round(end - start))
+    refresh_transcript_text(ep)
+
+
+async def _retitle_parts(module: Module) -> None:
+    """
+    Keep "(part n)" titles in canvas order.
+
+    Only titles that still read "<name> (part n)" are renumbered, so a part an
+    admin renamed keeps its name. A video that is whole again loses the suffix.
+    """
+    refs = await _load_refs(module)
+    groups: dict[str, list[Episode]] = {}
+    for it in module.items:
+        ep = refs.episodes.get(it.ref_id) if it.kind == ITEM_VIDEO else None
+        if ep and ep.bunny_video_guid:
+            groups.setdefault(ep.bunny_video_guid, []).append(ep)
+    for eps in groups.values():
+        for n, ep in enumerate(eps, start=1):
+            m = _PART_TITLE.match(ep.title)
+            if not m:
+                continue
+            title = m.group(1) if len(eps) == 1 else f"{m.group(1)} (part {n})"
+            if title != ep.title:
+                ep.title = title
+                await ep.save()
+
+
+async def _get_course_video(module: Module, item_id: str) -> tuple[CourseItem, Episode]:
+    item = _find_item(module, item_id)
+    if item.kind != ITEM_VIDEO:
+        raise HTTPException(status_code=422, detail="Only videos can be trimmed or split")
+    return item, await _get_episode_or_404(item.ref_id)
+
+
+@router.put("/admin/courses/{course_id}/items/{item_id}/clip")
+async def set_clip(
+    course_id: str,
+    item_id: str,
+    body: ClipIn,
+    background: BackgroundTasks,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    """
+    Trim a video, and optionally split it into several episodes.
+
+    `start` and `end` are where the part to keep begins and ends, in seconds of
+    the whole Bunny video; `split_at` are points inside that range where it is
+    cut into more episodes, so a quiz or test can sit between them. The first
+    part stays this episode, so its progress and place on the canvas carry
+    over; each further part becomes a new episode right after it, playing the
+    same Bunny video. Nothing on Bunny changes, so all of it can be moved or
+    undone later (see join-next).
+    """
+    module = await _get_course_or_404(course_id)
+    item, ep = await _get_course_video(module, item_id)
+    length = source_length(ep)
+    if ep.status != "ready" or not length or not ep.bunny_video_guid:
+        raise HTTPException(
+            status_code=409,
+            detail="The video can be trimmed or split once it has finished processing.",
+        )
+    start, end = round(body.start, 2), round(min(body.end, length), 2)
+    cuts = sorted({round(t, 2) for t in body.split_at})
+    if any(not (start < t < end) for t in cuts):
+        raise HTTPException(status_code=422, detail="Split points must fall inside the part you keep.")
+    points = [start, *cuts, end]
+    if any(b - a < MIN_CLIP_SECONDS for a, b in zip(points, points[1:])):
+        raise HTTPException(
+            status_code=422, detail=f"Each part needs to be at least {MIN_CLIP_SECONDS} seconds long.",
+        )
+    ranges = list(zip(points, points[1:]))
+
+    ep.source_duration_seconds = int(length)
+    _set_range(ep, *ranges[0], length)
+    base = (_PART_TITLE.match(ep.title) or re.match(r"^(.*)$", ep.title)).group(1)
+    if len(ranges) > 1 and not _PART_TITLE.match(ep.title):
+        ep.title = f"{base} (part 1)"
+    await ep.save()
+
+    at = module.items.index(item) + 1
+    new_parts: list[Episode] = []
+    for n, (a, b) in enumerate(ranges[1:], start=2):
+        part = Episode(
+            module_id=module.id,
+            title=f"{base} (part {n})",
+            description=ep.description,
+            sequence_order=0,
+            status=ep.status,
+            bunny_video_guid=ep.bunny_video_guid,
+            bunny_video_id=ep.bunny_video_id,
+            thumbnail_url=ep.thumbnail_url,
+            source_filename=ep.source_filename,
+            source_duration_seconds=ep.source_duration_seconds,
+            # The whole video's transcript; each part shows only its own lines.
+            transcript_segments=list(ep.transcript_segments or []) or None,
+            transcript_source=ep.transcript_source,
+            transcript_status=ep.transcript_status,
+        )
+        _set_range(part, a, b, length)
+        await part.insert()
+        module.items.insert(at, CourseItem(kind=ITEM_VIDEO, ref_id=part.id, section_id=item.section_id))
+        at += 1
+        new_parts.append(part)
+    await module.save()
+
+    # A quiz written from the whole video now covers all of its parts.
+    if new_parts:
+        for q in await Assessment.find(
+            Assessment.module_id == module.id, Assessment.kind == "checkpoint"
+        ).to_list():
+            if ep.id in q.source_episode_ids:
+                i = q.source_episode_ids.index(ep.id) + 1
+                q.source_episode_ids[i:i] = [p.id for p in new_parts]
+                await q.save()
+
+    await _renumber_episodes(module)
+    await _retitle_parts(module)
+    # Each part's notes follow its own stretch of the transcript.
+    for target in [ep, *new_parts]:
+        if target.transcript and target.notes_source != "manual":
+            background.add_task(_draft_episode_notes, target.id)
+    return await _admin_course(await _get_course_or_404(course_id))
+
+
+@router.post("/admin/courses/{course_id}/items/{item_id}/join-next")
+async def join_next(
+    course_id: str,
+    item_id: str,
+    background: BackgroundTasks,
+    admin: Annotated[User, Depends(require_admin)],
+    redis: Annotated[aioredis.Redis, Depends(get_redis)],
+):
+    """
+    Undo a split: join this part with the part right after it.
+
+    Only neighbouring parts of the same video join. The later part's episode is
+    removed (with its progress); the Bunny video stays, since this part still
+    plays it. Lines an admin edited in the later part's transcript are kept.
+    """
+    module = await _get_course_or_404(course_id)
+    item, ep = await _get_course_video(module, item_id)
+    idx = module.items.index(item)
+    nxt = module.items[idx + 1] if idx + 1 < len(module.items) else None
+    other = await Episode.get(nxt.ref_id) if nxt and nxt.kind == ITEM_VIDEO else None
+    length = source_length(ep)
+    if (
+        not other or not ep.bunny_video_guid or other.bunny_video_guid != ep.bunny_video_guid
+        or not length or abs((clip_bounds(ep)[1] or length) - clip_bounds(other)[0]) > 0.5
+    ):
+        raise HTTPException(
+            status_code=409, detail="Only a part and the part right after it, from the same video, can be joined.",
+        )
+
+    b_start, b_end = clip_bounds(other)
+    b_end = b_end if b_end is not None else length
+    ep.transcript_segments = sorted(
+        [s for s in (ep.transcript_segments or []) if s["start"] < b_start or s["start"] >= b_end]
+        + [s for s in (other.transcript_segments or []) if b_start <= s["start"] < b_end],
+        key=lambda s: s["start"],
+    ) or None
+    if other.transcript_source == "manual":
+        ep.transcript_source = "manual"
+    _set_range(ep, clip_bounds(ep)[0], b_end, length)
+    await ep.save()
+
+    for q in await Assessment.find(
+        Assessment.module_id == module.id, Assessment.kind == "checkpoint"
+    ).to_list():
+        if other.id in q.source_episode_ids:
+            q.source_episode_ids = list(dict.fromkeys(
+                ep.id if s == other.id else s for s in q.source_episode_ids
+            ))
+            await q.save()
+
+    try:
+        # Keeps the Bunny video: this part still plays it (see purge_service).
+        await purge_episode(other, redis=redis)
+    except PurgeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    module = await _get_course_or_404(course_id)
+    module.items = [it for it in module.items if it.id != nxt.id]
+    await module.save()
+    await _renumber_episodes(module)
+    await _retitle_parts(module)
+    if ep.transcript and ep.notes_source != "manual":
+        background.add_task(_draft_episode_notes, ep.id)
+    return await _admin_course(await _get_course_or_404(course_id))
 
 
 # ==========================================================================
@@ -807,6 +1056,9 @@ async def save_transcript(
     """
     if body.source not in ("auto", "manual"):
         raise HTTPException(status_code=422, detail="source must be auto or manual")
+    timebase = body.timebase or ("source" if body.source == "auto" else "clip")
+    if timebase not in ("source", "clip"):
+        raise HTTPException(status_code=422, detail="timebase must be source or clip")
     ep = await _get_episode_or_404(episode_id)
     if body.source == "auto" and ep.transcript_source == "manual":
         raise HTTPException(
@@ -820,18 +1072,33 @@ async def save_transcript(
         ),
         key=lambda s: s["start"],
     )
-    ep.transcript_segments = segments
-    ep.transcript = _join_segments(segments) or None
-    ep.transcript_source = body.source
-    ep.transcript_status = "ready"
-    await ep.save()
-    if ep.transcript and ep.notes_source != "manual":
-        background.add_task(_draft_episode_notes, ep.id)
+
+    # A transcript of the whole video also belongs to every other part split
+    # from it, unless an admin has edited that part's transcript by hand.
+    targets = [ep]
+    if timebase == "source" and ep.bunny_video_guid:
+        targets += [
+            other for other in await Episode.find(
+                Episode.bunny_video_guid == ep.bunny_video_guid, Episode.id != ep.id
+            ).to_list()
+            if other.transcript_source != "manual"
+        ]
+    for target in targets:
+        target.transcript_segments = (
+            segments if timebase == "source" else merge_clip_segments(target, segments)
+        )
+        refresh_transcript_text(target)
+        target.transcript_source = body.source
+        target.transcript_status = "ready"
+        await target.save()
+        if target.transcript and target.notes_source != "manual":
+            background.add_task(_draft_episode_notes, target.id)
     return {
         "id": ep.id,
         "transcript_status": ep.transcript_status,
         "transcript_source": ep.transcript_source,
-        "transcript_segments": segments,
+        "transcript_segments": segments_in_clip(ep),
+        "parts_updated": len(targets),
         "notes_will_update": bool(ep.transcript and ep.notes_source != "manual" and ai_service.enabled),
     }
 
@@ -1357,7 +1624,11 @@ async def get_course(course_id: str, user: Annotated[User, Depends(get_current_u
                 "episode_number": numbers[doc.id],
                 "duration_seconds": doc.duration_seconds,
                 "thumbnail_url": _thumb(doc),
-                "has_transcript": bool(doc.transcript_segments),
+                "has_transcript": bool(segments_in_clip(doc)),
+                # The part of the Bunny video to play, in its seconds. The
+                # player keeps to it and counts time from clip_start.
+                "clip_start": clip_bounds(doc)[0] if is_clipped(doc) else None,
+                "clip_end": clip_bounds(doc)[1] if is_clipped(doc) else None,
                 "notes": doc.notes,
                 "notes_source": doc.notes_source,
                 "watched_seconds": p.watched_seconds if p else 0,
@@ -1425,7 +1696,8 @@ async def get_episode_transcript(
     return {
         "episode_id": ep.id,
         "source": ep.transcript_source,
-        "segments": ep.transcript_segments or [],
+        # This part only, timed from its own start.
+        "segments": segments_in_clip(ep),
     }
 
 

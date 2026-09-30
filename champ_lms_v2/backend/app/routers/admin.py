@@ -19,6 +19,7 @@ from app.models.enrollment import Enrollment
 from app.services.bunny_stream import bunny_stream
 from app.services.bunny_storage import THUMBNAIL_BOX, bunny_storage
 from app.services.ai_service import ai_service
+from app.services.clips import apply_source_length
 from app.services.purge_service import (
     PurgeError,
     plan_episode_purge,
@@ -628,7 +629,7 @@ async def get_episode_status(
             if bunny_status == 4:  # Finished
                 ep.status = "ready"
                 if video.get("length"):
-                    ep.duration_seconds = int(video["length"])
+                    apply_source_length(ep, video["length"])
                 # Fetch auto-generated thumbnail from Bunny Stream
                 thumbnail_file = video.get("thumbnailFileName")
                 if thumbnail_file and not ep.thumbnail_url:

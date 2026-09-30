@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { player } from '$lib/stores/player';
-  import { api } from '$lib/api/client';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -47,8 +46,44 @@
   // The furthest point already recorded for this learner, so the limit
   // carries over from an earlier session.
   export let furthestStart = 0;
+  // A trimmed or split course episode plays only [clipStart, clipEnd] of its
+  // video (seconds of the whole video; clipEnd null = to the end). Everything
+  // else here (startAt, furthestStart, onTime, seek, reported progress) is in
+  // clip time, counted from clipStart. A clipped part gets its own controls, so
+  // the scrub bar and the time shown are the part's, not the whole video's.
+  export let clipStart = 0;
+  export let clipEnd: number | null = null;
+  // false = don't report watch progress (an admin previewing in the editor).
+  export let track = true;
 
-  let furthest = 0;
+  $: clipped = clipStart > 0 || clipEnd !== null;
+  let duration = 0; // the whole video's, once known
+  $: endAbs = clipEnd ?? duration;
+  $: clipLength = Math.max(0, endAbs - clipStart);
+
+  // Custom-controls state (clipped parts only).
+  let paused = true;
+  let muted = false;
+  let rate = 1;
+  let rel = 0; // current position in clip time
+  let clipEnded = false;
+
+  /** Jump to a point in clip time (a transcript line was clicked). */
+  export function seek(seconds: number) {
+    if (!videoEl) return;
+    videoEl.currentTime = clipStart + seconds;
+    videoEl.play().catch(() => {});
+  }
+
+  function applyStart() {
+    if (!videoEl) return;
+    duration = videoEl.duration || 0;
+    const len = (clipEnd ?? duration) - clipStart;
+    const from = startAt > 0 && startAt < len - 5 ? startAt : 0;
+    if (clipStart + from > 0) videoEl.currentTime = clipStart + from;
+  }
+
+  let furthest = 0; // clip time
   let skipNotice = '';
   let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   let reportedStart = false;
@@ -64,18 +99,30 @@
     noticeTimer = setTimeout(() => (skipNotice = ''), 3500);
   }
 
+  function report() {
+    if (!videoEl || !track) return;
+    const len = clipped ? clipLength : Math.floor(videoEl.duration || 0);
+    player.updateTime(Math.floor(Math.max(0, videoEl.currentTime - clipStart)), Math.floor(len));
+  }
+
   // Every seek comes through here: the scrub bar, the keyboard, a transcript
-  // line. A jump further than the limit past the furthest point reached is
-  // held at the limit. Going back, and returning to where you were, is free.
+  // line. A clipped part never plays outside its range, and a jump further
+  // than the skip limit past the furthest point reached is held at the limit.
+  // Going back, and returning to where you were, is free.
   function onSeeking() {
     if (!videoEl) return;
     if (furthestAtSeek === null) furthestAtSeek = furthest;
-    if (skipLimitSeconds == null) return;
-    const limit = furthestAtSeek + skipLimitSeconds;
-    if (videoEl.currentTime > limit + 0.5) {
-      videoEl.currentTime = limit;
-      showSkipNotice();
+    let target = videoEl.currentTime;
+    if (clipped) {
+      const end = endAbs || videoEl.duration || Infinity;
+      target = Math.min(Math.max(target, clipStart), end);
+      if (target < end - 0.5) clipEnded = false;
     }
+    if (skipLimitSeconds != null) {
+      const limit = clipStart + furthestAtSeek + skipLimitSeconds;
+      if (target > limit + 0.5) { target = limit; showSkipNotice(); }
+    }
+    if (Math.abs(target - videoEl.currentTime) > 0.05) videoEl.currentTime = target;
   }
 
   // After a skip past the furthest point, report it straight away so each skip
@@ -84,10 +131,11 @@
     if (!videoEl) return;
     const before = furthestAtSeek ?? furthest;
     furthestAtSeek = null;
-    if (videoEl.currentTime > before + 1) {
-      furthest = Math.max(furthest, videoEl.currentTime);
-      if (skipLimitSeconds != null) {
-        player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
+    const now = videoEl.currentTime - clipStart;
+    if (now > before + 1) {
+      furthest = Math.max(furthest, now);
+      if (skipLimitSeconds != null && track) {
+        report();
         player.sync();
       }
     }
@@ -96,27 +144,15 @@
   // The first report marks when watching began, which the server's limit
   // counts real playback time from.
   function onPlaying() {
-    if (reportedStart || skipLimitSeconds == null || !videoEl) return;
+    paused = false;
+    if (reportedStart || skipLimitSeconds == null || !videoEl || !track) return;
     reportedStart = true;
-    player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
+    report();
     player.sync();
   }
 
-  /** Jump to a point in the video (a transcript line was clicked). */
-  export function seek(seconds: number) {
-    if (!videoEl) return;
-    videoEl.currentTime = seconds;
-    videoEl.play().catch(() => {});
-  }
-
-  function applyStart() {
-    if (startAt > 0 && videoEl && videoEl.duration && startAt < videoEl.duration - 5) {
-      videoEl.currentTime = startAt;
-    }
-  }
-
   onMount(async () => {
-    player.startTracking(episodeId);
+    if (track) player.startTracking(episodeId);
     furthest = Math.max(furthestStart, startAt);
 
     if (!streamUrl) return;
@@ -129,6 +165,8 @@
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 90,
+        // A part that starts late in the video shouldn't fetch its opening.
+        startPosition: clipStart + (startAt > 0 ? startAt : 0),
       });
       // Surface fatal errors instead of leaving a silent black player — a
       // rejected token is the likely cause and the iframe still works.
@@ -152,20 +190,37 @@
 
   onDestroy(() => {
     hls?.destroy();
-    player.stopTracking();
+    if (track) player.stopTracking();
     if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
     if (noticeTimer) clearTimeout(noticeTimer);
   });
 
   function onTimeUpdate() {
     if (!videoEl) return;
-    player.updateTime(Math.floor(videoEl.currentTime), Math.floor(videoEl.duration || 0));
-    if (!videoEl.seeking) furthest = Math.max(furthest, videoEl.currentTime);
-    onTime?.(videoEl.currentTime);
+    const t = videoEl.currentTime;
+    if (clipped && !videoEl.seeking) {
+      if (t < clipStart - 0.5) { videoEl.currentTime = clipStart; return; }
+      // The part ends before the video does: stop there, as if it had ended.
+      if (clipEnd !== null && t >= clipEnd - 0.05 && !clipEnded) {
+        clipEnded = true;
+        videoEl.pause();
+        videoEl.currentTime = clipEnd;
+        rel = clipLength;
+        report();
+        onEnded();
+        return;
+      }
+    }
+    rel = Math.max(0, t - clipStart);
+    report();
+    if (!videoEl.seeking) furthest = Math.max(furthest, rel);
+    onTime?.(rel);
   }
 
   async function onEnded() {
-    await player.complete();
+    if (clipped && clipEnd !== null && !clipEnded) return; // a part stops at clipEnd, not here
+    clipEnded = true;
+    if (track) await player.complete();
     onComplete?.();
     // Auto-advance
     showAutoAdvance = true;
@@ -188,24 +243,87 @@
     showAutoAdvance = false;
     if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
   }
+
+  // ---- custom controls for a clipped part ----------------------------------
+  function togglePlay() {
+    if (!videoEl) return;
+    if (videoEl.paused) {
+      if (clipEnded) { clipEnded = false; videoEl.currentTime = clipStart; }
+      videoEl.play().catch(() => {});
+    } else videoEl.pause();
+  }
+  function onScrub(e: Event) {
+    if (videoEl) videoEl.currentTime = clipStart + +(e.target as HTMLInputElement).value;
+  }
+  function nudge(by: number) {
+    if (videoEl) videoEl.currentTime = Math.max(clipStart, videoEl.currentTime + by);
+  }
+  function cycleRate() {
+    const rates = [1, 1.25, 1.5, 2];
+    rate = rates[(rates.indexOf(rate) + 1) % rates.length];
+    if (videoEl) videoEl.playbackRate = rate;
+  }
+  function toggleMute() { muted = !muted; if (videoEl) videoEl.muted = muted; }
+  function fullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else container.requestFullscreen?.().catch(() => {});
+  }
+  function onKey(e: KeyboardEvent) {
+    if (!clipped || (e.target as HTMLElement).closest('input, button, select')) return;
+    if (e.key === ' ' || e.key === 'k') { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); nudge(5); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); nudge(-5); }
+    else if (e.key === 'm') toggleMute();
+    else if (e.key === 'f') fullscreen();
+  }
+  const clock = (s: number) => {
+    s = Math.max(0, Math.floor(s));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`;
+  };
 </script>
 
-<div bind:this={container} class="player-wrap">
+<!-- Keyboard control for a clipped part's own controls; the native player
+     handles its own keys. -->
+<!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
+<div bind:this={container} class="player-wrap" class:clipped tabindex={clipped ? 0 : -1} on:keydown={onKey}>
   {#if useNative}
     <!-- Preferred: token-authenticated HLS in a native player. This is the ONLY
          path that fires timeupdate/ended, so it is the only one that records
          watch progress. -->
+    <!-- svelte-ignore a11y-media-has-caption a11y-click-events-have-key-events a11y-no-noninteractive-element-interactions -->
     <video
       bind:this={videoEl}
       class="video"
-      controls
+      controls={!clipped}
       preload="metadata"
+      on:click={() => clipped && togglePlay()}
       on:timeupdate={onTimeUpdate}
       on:seeking={onSeeking}
       on:seeked={onSeeked}
       on:playing={onPlaying}
+      on:pause={() => (paused = true)}
+      on:loadedmetadata={() => (duration = videoEl.duration || 0)}
       on:ended={onEnded}
     ></video>
+    {#if clipped}
+      <div class="cbar">
+        <button on:click={togglePlay} aria-label={paused ? 'Play' : 'Pause'}>
+          {#if paused}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+          {:else}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>{/if}
+        </button>
+        <span class="ctime">{clock(rel)} / {clock(clipLength)}</span>
+        <input class="cscrub" type="range" min="0" max={clipLength || 0} step="0.1" value={rel} on:input={onScrub}
+          aria-label="Seek" style="--pct:{clipLength ? (rel / clipLength) * 100 : 0}%" />
+        <button class="txt" on:click={cycleRate} aria-label="Playback speed">{rate}×</button>
+        <button on:click={toggleMute} aria-label={muted ? 'Unmute' : 'Mute'}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/>{#if muted}<path d="M16 9.5l5 5M21 9.5l-5 5"/>{:else}<path d="M15.5 9a4 4 0 010 6M18 6.5a7.5 7.5 0 010 11"/>{/if}</svg>
+        </button>
+        <button on:click={fullscreen} aria-label="Full screen">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </div>
+    {/if}
   {:else if embedUrl}
     <!-- Fallback: Bunny's iframe embed. Plays reliably but reports NO progress,
          so a learner watching here will not have completion recorded. -->
@@ -241,13 +359,38 @@
     border-radius: 8px;
     overflow: hidden;
   }
+  .player-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .video, .bunny-embed {
     width: 100%; height: 100%; border: none;
   }
+  .clipped .video { cursor: pointer; }
   .placeholder {
     display: flex; align-items: center; justify-content: center;
     height: 100%; color: var(--muted);
   }
+  .cbar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 1.4rem 0.75rem 0.55rem;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.78));
+    color: #fff;
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .player-wrap:hover .cbar, .player-wrap:focus-within .cbar { opacity: 1; }
+  @media (hover: none) { .cbar { opacity: 1; } }
+  .cbar button {
+    display: grid; place-items: center; min-width: 32px; height: 32px;
+    border-radius: 6px; color: #fff;
+  }
+  .cbar button:hover { background: rgba(255, 255, 255, 0.15); }
+  .cbar .txt { font-size: 0.78rem; font-weight: 700; padding: 0 0.4rem; font-variant-numeric: tabular-nums; }
+  .ctime { font-size: 0.78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cscrub {
+    flex: 1; min-width: 60px; height: 4px; appearance: none; border-radius: 4px; cursor: pointer;
+    background: linear-gradient(to right, var(--accent) var(--pct), rgba(255, 255, 255, 0.3) var(--pct));
+  }
+  .cscrub::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
+  .cscrub::-moz-range-thumb { width: 13px; height: 13px; border: 0; border-radius: 50%; background: #fff; }
   .skip-notice {
     position: absolute; left: 50%; top: 1.25rem; transform: translateX(-50%);
     max-width: calc(100% - 2rem); text-align: center;

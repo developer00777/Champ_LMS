@@ -366,6 +366,12 @@ export const api = {
     request<AdminCourseItem>(`/admin/courses/${id}/items`, { method: 'POST', body: JSON.stringify(body) }),
   deleteCourseItem: (id: string, itemId: string) =>
     request<AdminCourse>(`/admin/courses/${id}/items/${itemId}`, { method: 'DELETE' }),
+  // Trim a video and optionally split it, in seconds of the whole Bunny video.
+  // Nothing on Bunny changes; parts are episodes sharing the video.
+  setClip: (id: string, itemId: string, body: { start: number; end: number; split_at?: number[] }) =>
+    request<AdminCourse>(`/admin/courses/${id}/items/${itemId}/clip`, { method: 'PUT', body: JSON.stringify(body) }),
+  joinNextPart: (id: string, itemId: string) =>
+    request<AdminCourse>(`/admin/courses/${id}/items/${itemId}/join-next`, { method: 'POST' }),
   transcribeChunk: async (episodeId: string, wav: Blob, offsetSeconds: number, clipSeconds?: number): Promise<{ segments: TranscriptSegment[] }> => {
     const form = new FormData();
     form.append('audio', wav, 'clip.wav');
@@ -390,9 +396,11 @@ export const api = {
     request<{ id: string; transcript_status: string }>(`/admin/episodes/${episodeId}/transcript-status`, {
       method: 'PATCH', body: JSON.stringify({ status }),
     }),
-  saveTranscript: (episodeId: string, segments: TranscriptSegment[], source: 'auto' | 'manual') =>
+  // timebase "source": times from the start of the whole video (an automatic run
+  // over the file); "clip": from the start of this episode's part (an edit).
+  saveTranscript: (episodeId: string, segments: TranscriptSegment[], source: 'auto' | 'manual', timebase?: 'source' | 'clip') =>
     request<{ id: string; transcript_status: string; transcript_source: string; transcript_segments: TranscriptSegment[]; notes_will_update: boolean }>(
-      `/admin/episodes/${episodeId}/transcript`, { method: 'PUT', body: JSON.stringify({ segments, source }) }),
+      `/admin/episodes/${episodeId}/transcript`, { method: 'PUT', body: JSON.stringify({ segments, source, timebase }) }),
   generateEpisodeNotes: (episodeId: string) =>
     request<{ id: string; notes: string; notes_source: string }>(`/admin/episodes/${episodeId}/notes/generate`, { method: 'POST' }),
   saveEpisodeNotes: (episodeId: string, notes: string) =>
@@ -742,6 +750,11 @@ export interface AdminVideoItem extends AdminItemBase {
   status: string; duration_seconds: number | null; thumbnail_url: string | null;
   has_remote_video: boolean;
   source_filename: string | null;
+  // Trim and split, in seconds of the whole Bunny video (null = start / end).
+  clip_start: number | null; clip_end: number | null;
+  source_duration_seconds: number | null;
+  // [n, of] when the video is split into several episodes.
+  part: [number, number] | null;
   transcript_status: 'processing' | 'ready' | 'failed' | null;
   transcript_source: 'auto' | 'manual' | null;
   transcript_segments: TranscriptSegment[];
@@ -796,6 +809,8 @@ export interface CourseItemView {
   // video
   description?: string | null; episode_number?: number; duration_seconds?: number | null;
   thumbnail_url?: string | null; has_transcript?: boolean;
+  // Part of the Bunny video this episode plays, in its seconds.
+  clip_start?: number | null; clip_end?: number | null;
   notes?: string | null; notes_source?: 'ai' | 'manual' | null;
   watched_seconds?: number; completed?: boolean;
   // quiz
@@ -814,7 +829,11 @@ export interface CourseView {
   format: CourseFormat; sections: CourseSection[]; items: CourseItemView[]; runtime_seconds: number;
 }
 export interface FeedRow { row_title: string; modules: Module[]; }
-export interface StreamUrlResponse { stream_url: string; embed_url: string; expires_in: number; }
+export interface StreamUrlResponse {
+  stream_url: string; embed_url: string; expires_in: number;
+  // Set for canvas course episodes: the course player plays them, trimmed to clip_start..clip_end.
+  course_id?: string | null; clip_start?: number | null; clip_end?: number | null;
+}
 export interface SearchResult { modules: Module[]; episodes: { id: string; title: string; module_id: string }[]; }
 export interface ProgressEntry {
   episode_id: string; watched_seconds: number; total_seconds: number;

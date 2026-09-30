@@ -36,6 +36,12 @@
     try {
       streamData = await api.streamUrl(episodeId);
       processing = false;
+      // Course episodes can be a trimmed or split part of their video, which
+      // only the course player keeps to.
+      if (streamData.course_id) {
+        goto(`/course/${streamData.course_id}?ref=${episodeId}`, { replaceState: true });
+        return;
+      }
     } catch (e: any) {
       if (e instanceof ApiError && e.status === 425) {
         processing = true;

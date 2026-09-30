@@ -185,6 +185,7 @@
             <VideoPlayer bind:this={playerRef} episodeId={current.ref_id} streamUrl={stream.stream_url} embedUrl={stream.embed_url}
               startAt={current.completed ? 0 : current.watched_seconds ?? 0}
               skipLimitSeconds={skipLimit(current)} furthestStart={current.watched_seconds ?? 0}
+              clipStart={current.clip_start ?? 0} clipEnd={current.clip_end ?? null}
               onTime={t => (time = t)} onComplete={() => load()} onAutoAdvance={() => next && go(next)} />
           {:else}
             <div class="player-ph">{streamError || 'Loading video…'}</div>
@@ -274,6 +275,7 @@
                 <VideoPlayer bind:this={playerRef} episodeId={current.ref_id} streamUrl={stream.stream_url} embedUrl={stream.embed_url}
                   startAt={current.completed ? 0 : current.watched_seconds ?? 0}
                   skipLimitSeconds={skipLimit(current)} furthestStart={current.watched_seconds ?? 0}
+                  clipStart={current.clip_start ?? 0} clipEnd={current.clip_end ?? null}
                   onTime={t => (time = t)} onComplete={() => load()} onAutoAdvance={() => next && next.kind === 'video' && go(next)} />
               {:else}
                 <div class="player-ph">{streamError || 'Loading video…'}</div>

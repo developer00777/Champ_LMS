@@ -56,10 +56,23 @@ async def _delete_remote_assets(episodes: list[Episode]) -> list[dict]:
     touching the database. Returns a per-asset log for the response.
     """
     results: list[dict] = []
+    deleting = {ep.id for ep in episodes}
 
     for ep in episodes:
         guid = ep.bunny_video_guid or ep.bunny_video_id
-        if guid:
+        # A split video is several episodes playing parts of one Bunny video.
+        # The video goes only with the last episode that plays it; deleting one
+        # part must never take the others' video with it.
+        other_part = await Episode.find_one(
+            Episode.bunny_video_guid == guid, {"_id": {"$nin": list(deleting)}}
+        ) if guid else None
+        if other_part:
+            results.append({
+                "episode_id": ep.id, "asset": "stream", "guid": guid,
+                "status": "kept",
+                "detail": f"Still played by episode {other_part.id}",
+            })
+        elif guid:
             # A Zoom "Full Recording" video is a separate Bunny asset tracked on
             # ZoomSession, not on any Episode. Guard anyway: if some episode ever
             # shares that GUID, deleting it here would break the ZoomSession.

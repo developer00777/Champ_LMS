@@ -42,6 +42,17 @@ class Episode(Document):
     # to its episode.
     source_filename: str | None = None
 
+    # --- Trim and split (see services/clips.py) ----------------------------
+    # The part of the Bunny video this episode plays, in seconds of the source
+    # video. None = from the start / to the end. The video on Bunny is never
+    # cut: trimming moves these points, and splitting makes more episodes that
+    # share the same bunny_video_guid with neighbouring ranges.
+    clip_start: float | None = None
+    clip_end: float | None = None
+    # Length of the whole Bunny video. duration_seconds is what the learner
+    # sees (the clip's length), so the source length needs its own field.
+    source_duration_seconds: int | None = None
+
     # Bunny Storage path for episode thumbnail (manually uploaded)
     thumbnail_bunny_path: str | None = None
     # Bunny Stream auto-generated thumbnail URL (set when transcoding finishes)

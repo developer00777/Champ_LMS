@@ -17,6 +17,7 @@ from app.models.progress import WatchProgress
 from app.models.recommendation import Recommendation
 from app.services.bunny_stream import bunny_stream
 from app.services.bunny_storage import bunny_storage
+from app.services.clips import apply_source_length, clip_bounds, is_clipped
 import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
@@ -322,7 +323,7 @@ async def get_stream_url(
         if bunny_status == 4:  # Finished
             ep.status = "ready"
             if video.get("length"):
-                ep.duration_seconds = int(video["length"])
+                apply_source_length(ep, video["length"])
             await ep.save()
         elif bunny_status in (5, 6):  # Error / UploadFailed
             ep.status = "failed"
@@ -351,7 +352,15 @@ async def get_stream_url(
         except RuntimeError:
             stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
 
+    # A canvas course episode may be a trimmed or split part of its video; only
+    # the course player knows to keep to that part, so /watch hands over to it.
+    module = await Module.get(ep.module_id)
+    course_id = module.id if module and module.layout == "canvas" else None
+
     return {
+        "course_id": course_id,
+        "clip_start": clip_bounds(ep)[0] if is_clipped(ep) else None,
+        "clip_end": clip_bounds(ep)[1] if is_clipped(ep) else None,
         "embed_url": embed_url,          # Bunny iframe player — works with Token Auth enabled
         "stream_url": stream_url,        # Direct HLS manifest — may 403 if Token Auth enabled
         "expires_in": 14400,

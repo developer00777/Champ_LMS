@@ -146,6 +146,11 @@ export function retryTranscript(itemId: string, onChange?: () => void): boolean 
   return true;
 }
 
+/** The file this session uploaded for an item, if it still has it (for a quick preview). */
+export function fileFor(itemId: string): File | null {
+  return files.get(itemId) ?? null;
+}
+
 /** Anything still sending or transcribing? Used to warn before closing the tab. */
 export function hasActiveUploads(): boolean {
   return Object.values(get(uploads)).some(

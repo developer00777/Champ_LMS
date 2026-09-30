@@ -106,9 +106,10 @@
       if (it.status !== 'ready') return it.status === 'failed' ? 'Encoding failed' : 'Encoding on Bunny…';
       if (up?.transcript === 'working' || it.transcript_status === 'processing') return 'Writing transcript and notes…';
       if (up?.transcript === 'waiting' && up.retryAt) return 'Transcript failed, trying again shortly';
+      const part = it.part ? `Part ${it.part[0]} of ${it.part[1]} · ` : '';
       const t = it.transcript_source === 'auto' ? 'auto' : it.transcript_source === 'manual' ? 'edited' : it.transcript_status === 'failed' ? 'failed' : 'none';
       const n = it.notes_source === 'ai' ? 'AI draft' : it.notes_source === 'manual' ? 'written by you' : 'none';
-      return `Transcript ${t} · Notes ${n}`;
+      return `${part}Transcript ${t} · Notes ${n}`;
     }
     if (it.kind === 'quiz') {
       const eps = course!.items.filter(i => i.kind === 'video' && it.source_episode_ids.includes(i.ref_id))
@@ -252,6 +253,8 @@
   // under, or by the title the canvas gave it from that name.
   $: untranscribed = (course?.items ?? []).filter(i => {
     if (i.kind !== 'video' || i.transcript_source === 'manual' || i.transcript_segments.length) return false;
+    // One file transcribes every part of a split video, so list the first part only.
+    if (i.part && i.part[0] > 1) return false;
     const up = $uploads[i.id];
     return !up || up.transcript === 'failed' || (up.transcript === 'done' && !i.transcript_segments.length);
   });
@@ -508,7 +511,7 @@
                   </div>
                   {#if confirmDelete === it.id}
                     <div class="confirm" on:click|stopPropagation role="presentation">
-                      <span>{it.kind === 'video' ? 'Deletes the video from Bunny too.' : it.kind === 'test' ? 'Deletes its attempts and requests too.' : 'Delete permanently?'}</span>
+                      <span>{it.kind === 'video' ? (it.part ? 'The video stays on Bunny for the other parts.' : 'Deletes the video from Bunny too.') : it.kind === 'test' ? 'Deletes its attempts and requests too.' : 'Delete permanently?'}</span>
                       <button class="btn sm danger" on:click={() => remove(it)}>Delete</button>
                       <button class="btn sm ghost" on:click={() => (confirmDelete = null)}>Keep</button>
                     </div>
@@ -547,7 +550,7 @@
               <button class="icon-btn" on:click={() => (selectedId = null)} aria-label="Close details">{@html icons.x}</button>
             </div>
             {#key selected.id}
-              {#if selected.kind === 'video'}<VideoInspector item={selected} onReload={load} />
+              {#if selected.kind === 'video'}<VideoInspector item={selected} courseId={course.id} onReload={load} />
               {:else if selected.kind === 'quiz'}<QuizInspector {course} item={selected} onReload={load} />
               {:else if selected.kind === 'test'}<TestInspector {course} item={selected} onReload={load} onOpenAccess={() => selected && openTestAccess(selected.ref_id)} />
               {:else}<NotesInspector item={selected} onReload={load} />{/if}

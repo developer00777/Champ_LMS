@@ -4,9 +4,25 @@
   import { uploads, startVideoUpload, transcribeFiles, retryTranscript } from '$lib/stores/course-uploads';
   import { clock, parseCaptions, segmentsToText, textToSegments } from '$lib/utils/transcribe';
   import { icons } from '../icons';
+  import VideoEditor from './VideoEditor.svelte';
 
   export let item: AdminVideoItem;
+  export let courseId: string;
   export let onReload: () => void;
+
+  let editing = false;
+  $: srcLen = item.source_duration_seconds;
+  $: clipped = item.clip_start != null || item.clip_end != null;
+  $: rangeText = clipped && srcLen
+    ? `Plays ${clock(item.clip_start ?? 0)} – ${clock(item.clip_end ?? srcLen)} of the ${clock(srcLen)} video.`
+    : srcLen ? `Plays the whole video (${clock(srcLen)}).` : 'Plays the whole video.';
+
+  async function joinNext() {
+    busy = 'join'; error = ''; message = '';
+    try { await api.joinNextPart(courseId, item.id); onReload(); }
+    catch (e: any) { error = e.message; }
+    finally { busy = ''; }
+  }
 
   let tab: 'transcript' | 'notes' = 'transcript';
   let title = item.title;
@@ -65,7 +81,9 @@
     run('captions', async () => {
       const segs = parseCaptions(await f.text());
       if (!segs.length) throw new Error('No captions found in that file. Use a .vtt or .srt file.');
-      await api.saveTranscript(item.ref_id, segs, 'manual');
+      // A caption file covers the whole video, so it is timed from the video's
+      // start and reaches every part split from it.
+      await api.saveTranscript(item.ref_id, segs, 'manual', 'source');
       transcriptDirty = false;
     }, 'Caption file saved as the transcript.');
   }
@@ -129,6 +147,26 @@
   {#if (up?.stage === 'failed' || (!up && !item.has_remote_video))}
     <label class="btn sm">{@html icons.upload} {up?.stage === 'failed' ? 'Try the upload again' : 'Upload the video file'}
       <input type="file" accept="video/*" hidden on:change={onRetryFile} /></label>
+  {/if}
+
+  <div class="setting clip">
+    <div>
+      <b>Trim and split{#if item.part} · part {item.part[0]} of {item.part[1]}{/if}</b>
+      <span>{rangeText}</span>
+      {#if item.status !== 'ready'}<span>Opens once the video has finished processing.</span>{/if}
+    </div>
+    <div class="row end">
+      <button class="btn sm" on:click={() => (editing = true)} disabled={item.status !== 'ready'}>Trim or split</button>
+      {#if item.part && item.part[0] < item.part[1]}
+        <button class="btn sm ghost" on:click={joinNext} disabled={!!busy} title="Undo the split between this part and the next">
+          {busy === 'join' ? 'Joining…' : 'Join with next part'}
+        </button>
+      {/if}
+    </div>
+  </div>
+  {#if editing}
+    <VideoEditor {courseId} {item} onClose={() => (editing = false)}
+      onSaved={() => { editing = false; message = 'Saved. The canvas shows the new parts; add a quiz or test between them with +.'; onReload(); }} />
   {/if}
 
   <label class="field">

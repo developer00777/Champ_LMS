@@ -99,7 +99,8 @@ export async function autoTranscribe(
     }
     await Promise.all([worker(), worker()]);
     segments.sort((a, b) => a.start - b.start);
-    await api.saveTranscript(episodeId, segments, 'auto');
+    // Times from the start of the file: shared by every part split from it.
+    await api.saveTranscript(episodeId, segments, 'auto', 'source');
     return segments;
   } catch (e) {
     await api.setTranscriptStatus(episodeId, 'failed').catch(() => {});
