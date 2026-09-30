@@ -3,7 +3,7 @@
   import { player } from '$lib/stores/player';
   import type { TranscriptSegment } from '$lib/api/client';
   import { icons } from '$lib/components/course/icons';
-  import { segmentsToVtt } from '$lib/utils/transcribe';
+  import { lineAt, segmentsToVtt } from '$lib/utils/transcribe';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -81,7 +81,16 @@
       ? URL.createObjectURL(new Blob([segmentsToVtt(captions, clipStart, clipped ? 'line:80%' : '')], { type: 'text/vtt' }))
       : '';
   }
-  $: if (trackEl?.track) trackEl.track.mode = ccOn && vttUrl ? 'showing' : 'hidden';
+  // Captions are drawn over the video (.caption), sized to the player, since
+  // the browser's own caption text is large and can't be styled reliably. The
+  // track is shown only when the video element itself is full screen, where
+  // nothing drawn over it can appear.
+  let videoFs = false;
+  const onFsChange = () => { videoFs = !!videoEl && document.fullscreenElement === videoEl; };
+  let trackMode: TextTrackMode = 'hidden';
+  $: trackMode = ccOn && vttUrl && videoFs ? 'showing' : 'hidden';
+  $: if (trackEl?.track) trackEl.track.mode = trackMode;
+  $: caption = ccOn && captions.length && !videoFs ? lineAt(captions, rel) : '';
   function toggleCc() {
     ccOn = !ccOn;
     try { localStorage.setItem(CC_KEY, ccOn ? '1' : '0'); } catch { /* storage blocked */ }
@@ -187,6 +196,7 @@
   }
 
   onMount(async () => {
+    document.addEventListener('fullscreenchange', onFsChange);
     if (track) player.startTracking(episodeId);
     furthest = Math.max(furthestStart, startAt);
 
@@ -226,6 +236,7 @@
   onDestroy(() => {
     hls?.destroy();
     if (vttUrl) URL.revokeObjectURL(vttUrl);
+    if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange);
     if (track) player.stopTracking();
     if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
     if (noticeTimer) clearTimeout(noticeTimer);
@@ -344,7 +355,7 @@
     >
       {#if vttUrl}
         <track bind:this={trackEl} kind="captions" srclang="en" label="Transcript" src={vttUrl}
-          on:load={() => { if (trackEl?.track) trackEl.track.mode = ccOn ? 'showing' : 'hidden'; }} />
+          on:load={() => { if (trackEl?.track) trackEl.track.mode = trackMode; }} />
       {/if}
     </video>
     {#if clipped}
@@ -377,6 +388,10 @@
     ></iframe>
   {:else}
     <div class="placeholder">Loading video...</div>
+  {/if}
+
+  {#if caption}
+    <div class="caption" class:raised={clipped} aria-hidden="true"><span>{caption}</span></div>
   {/if}
 
   {#if useNative || onQna}
@@ -470,9 +485,21 @@
     min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; display: grid; place-items: center;
     background: var(--accent); color: #fff; font-size: 0.68rem;
   }
-  .video::cue {
-    background: rgba(0, 0, 0, 0.78); color: #fff; font-size: 1.05em; line-height: 1.35;
+  /* Captions: sized to the player's width, clear of the controls. */
+  .player-wrap { container-type: inline-size; }
+  .caption {
+    position: absolute; left: 50%; bottom: 13%; transform: translateX(-50%);
+    width: max-content; max-width: min(78%, 46em); text-align: center; pointer-events: none; z-index: 3;
+    font-size: clamp(0.72rem, 2.1cqw, 1.2rem); line-height: 1.45; font-weight: 500; letter-spacing: 0.01em;
   }
+  .caption.raised { bottom: 70px; }
+  .caption span {
+    color: #fff; background: rgba(8, 8, 12, 0.72); padding: 0.18em 0.6em; border-radius: 6px;
+    box-decoration-break: clone; -webkit-box-decoration-break: clone;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+  /* The browser's own captions, in its full screen only: smaller than its default. */
+  .video::cue { background: rgba(8, 8, 12, 0.72); color: #fff; font-size: 70%; line-height: 1.4; }
   .skip-notice {
     position: absolute; left: 50%; top: 1.25rem; transform: translateX(-50%);
     max-width: calc(100% - 2rem); text-align: center;

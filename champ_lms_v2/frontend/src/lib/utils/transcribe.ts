@@ -174,3 +174,12 @@ export function segmentsToVtt(segments: TranscriptSegment[], offset = 0, cueSett
     `${t(offset + c.start)} --> ${t(offset + Math.max(c.end, c.start + 0.5))}${settings}\n${text(c.text)}\n`
   ).join('\n');
 }
+
+/** The line on screen at `t` (same time base as the segments), or ''. */
+export function lineAt(segments: TranscriptSegment[], t: number): string {
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const s = segments[i];
+    if (s.start <= t + 0.1) return t < Math.max(s.end, s.start + 0.5) + 0.3 ? s.text : '';
+  }
+  return '';
+}

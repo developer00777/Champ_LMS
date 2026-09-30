@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { api, type AdminCourse, type AdminVideoItem } from '$lib/api/client';
   import { fileFor } from '$lib/stores/course-uploads';
-  import { clock, segmentsToVtt } from '$lib/utils/transcribe';
+  import { clock, lineAt, segmentsToVtt } from '$lib/utils/transcribe';
   import { icons } from '../icons';
 
   export let courseId: string;
@@ -63,7 +63,16 @@
   const vttUrl = item.transcript_segments?.length
     ? URL.createObjectURL(new Blob([segmentsToVtt(item.transcript_segments, item.clip_start ?? 0)], { type: 'text/vtt' }))
     : '';
-  $: if (trackEl?.track) trackEl.track.mode = ccOn ? 'showing' : 'hidden';
+  // Drawn over the preview like the course player does; the browser's own
+  // captions only in its full screen.
+  let videoFs = false;
+  const onFsChange = () => { videoFs = !!videoEl && document.fullscreenElement === videoEl; };
+  onMount(() => document.addEventListener('fullscreenchange', onFsChange));
+  onDestroy(() => { if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange); });
+  let trackMode: TextTrackMode = 'hidden';
+  $: trackMode = ccOn && videoFs ? 'showing' : 'hidden';
+  $: if (trackEl?.track) trackEl.track.mode = trackMode;
+  $: caption = ccOn && !videoFs && item.transcript_segments?.length ? lineAt(item.transcript_segments, t - (item.clip_start ?? 0)) : '';
 
   // ---- preview: play it the way learners will get it -------------------------
   // A preview plays [from, to] and stops at `to`. "Preview result" plays part 1,
@@ -203,8 +212,9 @@
       <!-- svelte-ignore a11y-media-has-caption -->
       <video bind:this={videoEl} controls preload="metadata" on:loadedmetadata={onMeta} on:timeupdate={onTime}>
         {#if vttUrl}<track bind:this={trackEl} kind="captions" srclang="en" label="Transcript" src={vttUrl}
-          on:load={() => { if (trackEl?.track) trackEl.track.mode = ccOn ? 'showing' : 'hidden'; }} />{/if}
+          on:load={() => { if (trackEl?.track) trackEl.track.mode = trackMode; }} />{/if}
       </video>
+      {#if caption && !endCard}<div class="caption" aria-hidden="true"><span>{caption}</span></div>{/if}
       <div class="ptools">
         {#if playing}<span class="now">{@html icons.play} Previewing {playing.label} · <span class="mono">{clock(Math.max(0, t - playing.from))} / {clock(playing.to - playing.from)}</span></span>{/if}
         <button class="ptool" class:on={ccOn} on:click={() => (ccOn = !ccOn)} disabled={!vttUrl}
@@ -318,7 +328,17 @@
   .endcard p { font-size: 0.9rem; font-weight: 600; }
   .endcard .row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
   .btn.light { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
-  .preview video::cue { background: rgba(0, 0, 0, 0.78); color: #fff; }
+  .preview { container-type: inline-size; }
+  .caption {
+    position: absolute; left: 50%; bottom: 15%; transform: translateX(-50%);
+    width: max-content; max-width: min(80%, 44em); text-align: center; pointer-events: none;
+    font-size: clamp(0.72rem, 2.1cqw, 1.1rem); line-height: 1.45; font-weight: 500;
+  }
+  .caption span {
+    color: #fff; background: rgba(8, 8, 12, 0.72); padding: 0.18em 0.6em; border-radius: 6px;
+    box-decoration-break: clone; -webkit-box-decoration-break: clone; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+  .preview video::cue { background: rgba(8, 8, 12, 0.72); color: #fff; font-size: 70%; }
   .prange { position: absolute; top: 0; bottom: 0; background: rgba(245, 197, 24, 0.22); pointer-events: none; }
   .perr { position: absolute; inset: auto 0 0 0; padding: 0.5rem 0.8rem; font-size: 0.82rem; color: #fff; background: rgba(0, 0, 0, 0.7); }
   .timeline { display: grid; gap: 0.3rem; }
