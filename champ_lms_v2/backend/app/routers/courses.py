@@ -48,7 +48,6 @@ from app.models.test_series import AttemptGrant, TestAttempt, TestQuestion, Test
 from app.models.user import User
 from app.services import content_access
 from app.services.ai_service import AIServiceError, ai_service
-from app.services.bunny_storage import bunny_storage
 from app.services.clips import (
     MIN_CLIP_SECONDS, clip_bounds, is_clipped, merge_clip_segments,
     refresh_transcript_text, segments_in_clip, source_length,
@@ -57,6 +56,9 @@ from app.services.purge_service import (
     PurgeError, purge_course_test, purge_episode, purge_note,
 )
 from app.services.test_attempts import attempt_status
+from app.services.thumbnails import (
+    episode_thumbnail_url, module_thumbnail_url, thumbnail_has_text, thumbnail_view,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,11 +255,7 @@ def _episode_numbers(items: list[CourseItem]) -> dict[str, int]:
 
 
 def _thumb(ep: Episode) -> str | None:
-    if ep.thumbnail_url:
-        return ep.thumbnail_url
-    if ep.thumbnail_bunny_path:
-        return bunny_storage.thumbnail_url(ep.thumbnail_bunny_path)
-    return None
+    return episode_thumbnail_url(ep)
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -407,7 +405,7 @@ async def _admin_item(
             "episode_number": numbers.get(ep.id),
             "status": ep.status,
             "duration_seconds": ep.duration_seconds,
-            "thumbnail_url": _thumb(ep),
+            **thumbnail_view(ep),
             "has_remote_video": bool(ep.bunny_video_guid or ep.bunny_video_id),
             "source_filename": ep.source_filename,
             # Trim and split, in seconds of the whole Bunny video.
@@ -480,6 +478,7 @@ async def _admin_course(module: Module) -> dict:
         "category": module.category,
         "is_published": module.is_published,
         "access_mode": module.access_mode,
+        **thumbnail_view(module),
         "format": _course_format([i.kind for i in items]),
         "sections": [s.model_dump() for s in module.sections],
         "items": [await _admin_item(i, refs, numbers, parts) for i in items],
@@ -519,7 +518,8 @@ async def list_courses(admin: Annotated[User, Depends(require_admin)]):
             "runtime_seconds": runtime,
             "can_watch_count": await _people_count(m),
             "pending_requests": pending,
-            "thumbnail_url": _thumb(first_video) if first_video else None,
+            # The course's own thumbnail, else its first video's.
+            "thumbnail_url": module_thumbnail_url(m) or (_thumb(first_video) if first_video else None),
             "created_at": _utc(m.created_at),
         })
     return out
@@ -1692,6 +1692,8 @@ async def get_course(course_id: str, user: Annotated[User, Depends(get_current_u
         "title": module.title,
         "description": module.description,
         "category": module.category,
+        "thumbnail_url": module_thumbnail_url(module),
+        "thumbnail_has_text": thumbnail_has_text(module),
         "format": _course_format([i["kind"] for i in out_items]),
         "sections": [s.model_dump() for s in module.sections if s.id in used_sections],
         "items": out_items,

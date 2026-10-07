@@ -20,6 +20,7 @@ from app.services.bunny_stream import bunny_stream
 from app.services.bunny_storage import THUMBNAIL_BOX, bunny_storage
 from app.services.ai_service import ai_service
 from app.services.clips import apply_source_length
+from app.services.thumbnails import thumbnail_view
 from app.services.purge_service import (
     PurgeError,
     plan_episode_purge,
@@ -142,6 +143,7 @@ def _module_view(module: Module, episodes: list[Episode]) -> dict:
         "total_episodes": module.total_episodes,
         "source_type": module.source_type,
         "created_at": module.created_at,
+        **thumbnail_view(module),
         "episodes": [
             {
                 "id": ep.id,
@@ -152,7 +154,7 @@ def _module_view(module: Module, episodes: list[Episode]) -> dict:
                 "duration_seconds": ep.duration_seconds,
                 "bunny_video_guid": ep.bunny_video_guid or ep.bunny_video_id,
                 "has_remote_video": bool(ep.bunny_video_guid or ep.bunny_video_id),
-                "thumbnail_url": ep.thumbnail_url,
+                **thumbnail_view(ep),
                 "created_at": ep.created_at,
             }
             for ep in episodes

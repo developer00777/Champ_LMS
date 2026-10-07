@@ -33,9 +33,11 @@ from app.models.progress import WatchProgress
 from app.models.qna import EpisodeQuestion
 from app.models.test_request import TestRequest
 from app.models.test_series import AttemptGrant, TestAttempt, TestSeries
+from app.models.thumbnail import OWNER_EPISODE, OWNER_MODULE
 from app.models.zoom_session import ZoomSession
 from app.services.bunny_storage import bunny_storage
 from app.services.bunny_stream import bunny_stream
+from app.services.thumbnails import delete_thumbnails
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,7 @@ async def _purge_db_rows(episodes: list[Episode], redis=None) -> dict:
     wp_res = await WatchProgress.find(In(WatchProgress.episode_id, episode_ids)).delete()
     wp_deleted = getattr(wp_res, "deleted_count", 0) or 0
 
+    await delete_thumbnails(OWNER_EPISODE, episode_ids)
     ep_res = await Episode.find(In(Episode.id, episode_ids)).delete()
     ep_deleted = getattr(ep_res, "deleted_count", 0) or 0
 
@@ -357,6 +360,7 @@ async def purge_module(module: Module, redis=None) -> dict:
         zs.module_id = None
         await zs.save()
 
+    await delete_thumbnails(OWNER_MODULE, [module.id])
     await module.delete()
     return {
         "scope": "module",

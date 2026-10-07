@@ -26,6 +26,8 @@ from app.models.note import CourseNote, NoteAttachment
 from app.models.test_request import TestRequest
 # * Learner questions on course videos, answered by admins.
 from app.models.qna import EpisodeQuestion
+# * Course and episode thumbnails from the thumbnail studio (Mongo, not Bunny).
+from app.models.thumbnail import Thumbnail
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -37,7 +39,7 @@ __all__ = [
     "TestSeries", "TestAttempt", "TestQuestion", "AttemptGrant",
     "ContentAccessRule",
     "DailyChallenge", "DailyChallengeCompletion", "Kudos",
-    "CourseNote", "NoteAttachment", "TestRequest", "EpisodeQuestion",
+    "CourseNote", "NoteAttachment", "TestRequest", "EpisodeQuestion", "Thumbnail",
 ]
 
 DOCUMENT_MODELS = [
@@ -51,5 +53,5 @@ DOCUMENT_MODELS = [
     TestSeries, TestAttempt, AttemptGrant,
     ContentAccessRule,
     DailyChallenge, DailyChallengeCompletion, Kudos,
-    CourseNote, NoteAttachment, TestRequest, EpisodeQuestion,
+    CourseNote, NoteAttachment, TestRequest, EpisodeQuestion, Thumbnail,
 ]

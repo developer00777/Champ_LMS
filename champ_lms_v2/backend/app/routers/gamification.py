@@ -16,6 +16,7 @@ from app.models.enrollment import Enrollment
 from app.models.episode import Episode
 from app.services.gamification_service import GamificationService
 from app.services.bunny_storage import bunny_storage
+from app.services.thumbnails import module_thumbnail_url
 import redis.asyncio as aioredis
 
 router = APIRouter(tags=["gamification"])
@@ -536,7 +537,7 @@ async def my_upselling_track(
             "title": m.title,
             "category": m.category,
             "description": m.description,
-            "thumbnail_url": bunny_storage.thumbnail_url(m.thumbnail_bunny_path) if m.thumbnail_bunny_path else None,
+            "thumbnail_url": module_thumbnail_url(m),
             "total_episodes": m.total_episodes,
             "points_weight": m.points_weight,
             "progress": progress,

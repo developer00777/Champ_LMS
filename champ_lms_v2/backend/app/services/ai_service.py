@@ -13,6 +13,8 @@ NOTE: OpenRouter retires model ids. A retired id makes every call 404, which
 surfaces as an opaque failure on the endpoints that depend on it — so verify a
 new id against https://openrouter.ai/api/v1/models before setting it.
 """
+import base64
+import binascii
 import json
 import httpx
 from app.core.config import get_settings
@@ -368,6 +370,30 @@ with the most important idea. Use only what the material says. No preamble.
 {material}"""
 
 
+THUMBNAIL_IMAGE_PROMPT = """Create a 16:9 cover image for a corporate training course.
+
+Course: {title}
+{about}
+Visual style: {style}
+{direction}
+Requirements:
+- One clear central idea about the subject, readable at a glance even as a small card.
+- Strong, uncluttered composition with generous negative space{space}.
+- A cohesive, modern colour palette that looks premium on a dark website.
+- Absolutely no text, letters, numbers, words, captions, logos, watermarks, signs or user-interface elements anywhere in the image.
+- No recognisable real people and no brand marks."""
+
+# Short art direction per style the admin can pick in the thumbnail studio.
+THUMBNAIL_STYLES = {
+    "illustration": "flat editorial vector illustration, bold simple shapes, subtle paper grain, limited palette",
+    "3d": "soft 3D render, smooth clay-like materials, gentle studio lighting, rich colour",
+    "photo": "cinematic photograph, shallow depth of field, natural light, tasteful colour grade",
+    "abstract": "abstract composition of luminous flowing gradients and geometric forms",
+    "isometric": "clean isometric illustration of a small scene, crisp edges, soft shadows",
+    "minimal": "minimalist line art on a solid deep-coloured background, one bright accent colour",
+}
+
+
 class AIServiceError(RuntimeError):
     """An AI call failed, with a message safe and useful to show an admin."""
 
@@ -385,6 +411,37 @@ def _error_detail(resp: httpx.Response) -> str:
         if isinstance(err, str):
             return err[:200]
     return str(body)[:200]
+
+
+def _raise_for_status(
+    resp: httpx.Response, model: str, audio: bool = False, setting: str = "OPENROUTER_MODEL",
+) -> None:
+    """Turn an OpenRouter error status into an AIServiceError an admin can act on."""
+    if resp.status_code == 404:
+        raise AIServiceError(
+            f"OpenRouter does not recognise model '{model}' — it has most "
+            f"likely been retired. Set {setting} to a current id; "
+            "see openrouter.ai/api/v1/models."
+        )
+    if resp.status_code in (401, 403):
+        raise AIServiceError(
+            "OpenRouter rejected the API key (check OPENROUTER_API_KEY)."
+        )
+    if resp.status_code == 402:
+        # Audio has its own floor: OpenRouter refuses it below $0.50 of
+        # account balance even when text calls still go through.
+        if audio:
+            raise AIServiceError(
+                "OpenRouter refused the audio: the account balance is below the $0.50 "
+                "it needs for audio. Add credits at openrouter.ai/settings/credits."
+            )
+        raise AIServiceError("OpenRouter credits exhausted — top up the account.")
+    if resp.status_code == 429:
+        raise AIServiceError("OpenRouter rate-limited this request; try again shortly.")
+    if resp.status_code >= 400:
+        raise AIServiceError(
+            f"OpenRouter returned {resp.status_code}: {_error_detail(resp)}"
+        )
 
 
 def _extract_json_object(text: str) -> dict:
@@ -462,31 +519,7 @@ class AIService:
             except httpx.RequestError as exc:
                 raise AIServiceError(f"Could not reach OpenRouter: {exc}") from exc
 
-        if resp.status_code == 404:
-            raise AIServiceError(
-                f"OpenRouter does not recognise model '{model}' — it has most "
-                "likely been retired. Set OPENROUTER_MODEL to a current id "
-                "(e.g. google/gemini-2.5-flash); see openrouter.ai/api/v1/models."
-            )
-        if resp.status_code in (401, 403):
-            raise AIServiceError(
-                "OpenRouter rejected the API key (check OPENROUTER_API_KEY)."
-            )
-        if resp.status_code == 402:
-            # Audio has its own floor: OpenRouter refuses it below $0.50 of
-            # account balance even when text calls still go through.
-            if audio:
-                raise AIServiceError(
-                    "OpenRouter refused the audio: the account balance is below the $0.50 "
-                    "it needs for audio. Add credits at openrouter.ai/settings/credits."
-                )
-            raise AIServiceError("OpenRouter credits exhausted — top up the account.")
-        if resp.status_code == 429:
-            raise AIServiceError("OpenRouter rate-limited this request; try again shortly.")
-        if resp.status_code >= 400:
-            raise AIServiceError(
-                f"OpenRouter returned {resp.status_code}: {_error_detail(resp)}"
-            )
+        _raise_for_status(resp, model, audio=bool(audio))
 
         try:
             return resp.json()["choices"][0]["message"]["content"]
@@ -606,6 +639,64 @@ class AIService:
         )
         text = await self._chat(prompt, max_tokens=1024)
         return _extract_json_array(text)
+
+    async def generate_thumbnail(
+        self,
+        title: str,
+        about: str,
+        style: str,
+        direction: str = "",
+        leave_space: bool = False,
+    ) -> bytes:
+        """
+        A cover image for a course or episode, as raw image bytes.
+
+        The model is told to draw no text: image models still misspell words,
+        so a title goes on top afterwards, drawn crisply in the studio.
+        """
+        prompt = THUMBNAIL_IMAGE_PROMPT.format(
+            title=title.strip()[:200],
+            about=about.strip()[:1500],
+            style=THUMBNAIL_STYLES.get(style, THUMBNAIL_STYLES["illustration"]),
+            direction=f"Art direction from the course author: {direction.strip()[:500]}\n" if direction.strip() else "",
+            space=" on the left half, where a title will be placed later" if leave_space else "",
+        )
+        model = self.settings.openrouter_image_model
+        async with httpx.AsyncClient(timeout=180) as client:
+            try:
+                resp = await client.post(
+                    f"{OPENROUTER_BASE}/chat/completions",
+                    headers=self._headers(),
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "modalities": ["image", "text"],
+                        "image_config": {"aspect_ratio": "16:9"},
+                    },
+                )
+            except httpx.RequestError as exc:
+                raise AIServiceError(f"Could not reach OpenRouter: {exc}") from exc
+        _raise_for_status(resp, model, setting="OPENROUTER_IMAGE_MODEL")
+
+        try:
+            message = resp.json()["choices"][0]["message"]
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            raise AIServiceError(
+                f"Unexpected response shape from OpenRouter: {_error_detail(resp)}"
+            ) from exc
+        for image in message.get("images") or []:
+            url = (image.get("image_url") or {}).get("url") or ""
+            if url.startswith("data:") and "," in url:
+                try:
+                    return base64.b64decode(url.split(",", 1)[1])
+                except (ValueError, binascii.Error):
+                    continue
+        # A refusal or a text-only reply: show what the model said, briefly.
+        said = str(message.get("content") or "").strip()[:200]
+        raise AIServiceError(
+            "The image model didn't return a picture"
+            + (f": {said}" if said else ". Try again, or change the direction.")
+        )
 
     @property
     def enabled(self) -> bool:

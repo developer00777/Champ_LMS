@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # which the synced transcript depends on. 2.5 Flash / Flash-Lite were as
     # accurate on words but put lines past the end of the clip.
     openrouter_transcribe_model: str = "google/gemini-3.1-flash-lite"
+    # Model for AI thumbnails only. It must list "image" among its output
+    # modalities on openrouter.ai/api/v1/models. 3.1 Flash Image is the
+    # cheaper non-preview Gemini image model, about half a cent a thumbnail.
+    openrouter_image_model: str = "google/gemini-3.1-flash-image"
 
     # Zoom
     zoom_webhook_secret: str = ""

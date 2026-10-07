@@ -161,7 +161,13 @@
   {#if $isAdmin}<div class="admin-bar">Previewing as a learner. <a href="/admin/courses/{course.id}">Back to the canvas</a></div>{/if}
   {#if mode === 'browse'}
     {@const resume = resumeItem(course)}
-    <section class="s-hero" style={videos[0]?.thumbnail_url ? `--img:url(${videos[0].thumbnail_url})` : ''}>
+    {@const heroImg = (!course.thumbnail_has_text && course.thumbnail_url) || videos[0]?.thumbnail_url}
+    <section class="s-hero" class:with-poster={course.thumbnail_has_text && course.thumbnail_url}
+      style={heroImg ? `--img:url(${heroImg})` : ''}>
+      {#if course.thumbnail_has_text && course.thumbnail_url}
+        <!-- A text design already shows the title, so it sits beside this one rather than behind it. -->
+        <img class="s-poster" src={course.thumbnail_url} alt="" />
+      {/if}
       <div class="s-hero-in">
         <span class="fbadge">Series</span>
         <h1>{course.title}</h1>
@@ -396,6 +402,14 @@
     background-size: cover; background-position: center;
   }
   .s-hero-in { max-width: 560px; display: grid; gap: 0.6rem; justify-items: start; }
+  .s-hero.with-poster { position: relative; }
+  .s-poster {
+    position: absolute; right: 2rem; top: 50%; transform: translateY(-50%); width: min(42%, 480px);
+    aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+  .with-poster .s-hero-in { max-width: min(560px, 52%); }
+  @media (max-width: 860px) { .s-poster { display: none; } .with-poster .s-hero-in { max-width: 560px; } }
   .fbadge { font-size: 0.66rem; font-weight: 800; letter-spacing: 0.1em; padding: 2px 8px; border-radius: 4px; background: var(--accent); }
   .s-hero h1 { font-size: 2.2rem; font-weight: 800; line-height: 1.1; }
   .s-hero .meta { color: rgba(255, 255, 255, 0.75); font-size: 0.88rem; }

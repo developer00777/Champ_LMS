@@ -484,6 +484,34 @@ export const api = {
   requestCourseTest: (courseId: string, testId: string) =>
     request<{ id: string; status: string; created_at: string }>(`/courses/${courseId}/tests/${testId}/request`, { method: 'POST' }),
 
+  // Thumbnail studio — courses (modules) and episodes. Images are stored in
+  // MongoDB; the URL that comes back is served by the API under /thumbnails.
+  saveThumbnail: async (
+    kind: ThumbnailOwner, id: string, image: Blob, source: ThumbnailSource, design?: ThumbnailDesign | null,
+  ): Promise<ThumbnailState> => {
+    const form = new FormData();
+    form.append('file', image, 'thumbnail');
+    form.append('source', source);
+    if (design) form.append('design', JSON.stringify(design));
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/thumbnails/${kind}/${id}`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, err.detail ?? 'Could not save the thumbnail');
+    }
+    return res.json();
+  },
+  deleteThumbnail: (kind: ThumbnailOwner, id: string) =>
+    request<ThumbnailState>(`/admin/thumbnails/${kind}/${id}`, { method: 'DELETE' }),
+  // Returns a preview only (a data: URL); nothing is saved until saveThumbnail.
+  generateThumbnail: (body: {
+    owner_kind?: ThumbnailOwner; owner_id?: string; title?: string; context?: string;
+    style: ThumbnailAiStyle; direction?: string; leave_space?: boolean;
+  }) => request<{ image: string }>('/admin/thumbnails/generate', { method: 'POST', body: JSON.stringify(body) }),
+
   // Daily engagement: rotating challenge pool, kudos, streak
   dailyChallenges: () => request<DailyChallengeSet>('/daily/challenges'),
   completeDailyChallenge: (id: string) =>
@@ -746,6 +774,8 @@ export interface Module {
   id: string; title: string; description: string | null;
   category: string | null; tags: string[] | null;
   thumbnail_url: string | null; total_episodes: number; is_published: boolean;
+  // The thumbnail is a text design, which already shows the title.
+  thumbnail_has_text?: boolean;
   // "canvas" modules open in the course player at /course/{id}.
   layout?: 'classic' | 'canvas';
 }
@@ -759,6 +789,23 @@ export interface Episode {
   status: string; thumbnail_url: string | null;
 }
 export interface ModuleDetail extends Module { episodes: Episode[]; }
+
+// * Thumbnail studio types
+export type ThumbnailOwner = 'module' | 'episode';
+// upload = an image file; ai = an image model's picture; text = a text design drawn in the browser.
+export type ThumbnailSource = 'upload' | 'ai' | 'text';
+export type ThumbnailAiStyle = 'illustration' | '3d' | 'photo' | 'abstract' | 'isometric' | 'minimal';
+// A text design's settings, kept so it can be reopened and edited.
+export interface ThumbnailDesign {
+  template: string; palette: string; font: string; title: string; kicker: string;
+  // The design was drawn over a background image, which isn't kept.
+  had_image?: boolean;
+}
+export interface ThumbnailState {
+  thumbnail_url: string | null;
+  thumbnail_source: ThumbnailSource | null;
+  thumbnail_design: ThumbnailDesign | null;
+}
 
 // * Course canvas types
 export type CourseItemKind = 'video' | 'quiz' | 'test' | 'notes';
@@ -780,9 +827,9 @@ export interface QuizQuestion {
   explanation?: string | null; source_episode_id?: string | null;
 }
 interface AdminItemBase { id: string; kind: CourseItemKind; ref_id: string; section_id: string; title: string; }
-export interface AdminVideoItem extends AdminItemBase {
+export interface AdminVideoItem extends AdminItemBase, ThumbnailState {
   kind: 'video'; description: string | null; episode_number: number | null;
-  status: string; duration_seconds: number | null; thumbnail_url: string | null;
+  status: string; duration_seconds: number | null;
   has_remote_video: boolean;
   source_filename: string | null;
   // Trim and split, in seconds of the whole Bunny video (null = start / end).
@@ -812,7 +859,7 @@ export interface AdminNotesItem extends AdminItemBase {
   attachment_name: string | null; attachment_size: number | null;
 }
 export type AdminCourseItem = AdminVideoItem | AdminQuizItem | AdminTestItem | AdminNotesItem;
-export interface AdminCourse {
+export interface AdminCourse extends ThumbnailState {
   id: string; title: string; description: string | null; category: string | null;
   is_published: boolean; access_mode: 'open' | 'closed'; format: CourseFormat;
   sections: CourseSection[]; items: AdminCourseItem[];
@@ -861,6 +908,7 @@ export interface CourseItemView {
 }
 export interface CourseView {
   id: string; title: string; description: string | null; category: string | null;
+  thumbnail_url: string | null; thumbnail_has_text: boolean;
   format: CourseFormat; sections: CourseSection[]; items: CourseItemView[]; runtime_seconds: number;
 }
 export interface FeedRow { row_title: string; modules: Module[]; }
@@ -997,13 +1045,13 @@ export interface PurgeResult {
 }
 
 // * Admin module editor — extend/edit a module after it was created
-export interface AdminEpisodeDetail {
+export interface AdminEpisodeDetail extends ThumbnailState {
   id: string; title: string; description: string | null;
   sequence_order: number; status: string; duration_seconds: number | null;
   bunny_video_guid: string | null; has_remote_video: boolean;
-  thumbnail_url: string | null; created_at: string;
+  created_at: string;
 }
-export interface AdminModuleDetail {
+export interface AdminModuleDetail extends ThumbnailState {
   id: string; title: string; description: string | null;
   category: string | null; tags: string[] | null; target_roles: string[] | null;
   module_type: string; target_department: string | null;

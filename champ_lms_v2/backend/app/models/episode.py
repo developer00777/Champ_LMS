@@ -57,6 +57,12 @@ class Episode(Document):
     thumbnail_bunny_path: str | None = None
     # Bunny Stream auto-generated thumbnail URL (set when transcoding finishes)
     thumbnail_url: str | None = None
+    # Thumbnail studio image in Mongo (models/thumbnail.py). Wins over both
+    # Bunny thumbnails above. Never copied to the parts of a split video, so
+    # deleting one part can't take another part's image with it.
+    thumbnail_id: str | None = None
+    thumbnail_source: str | None = None  # upload | ai | text
+    thumbnail_design: dict | None = None
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

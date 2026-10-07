@@ -5,9 +5,14 @@
 
 {#if module}
   <div class="hero">
-    <!-- Background with fallback gradient when no thumbnail -->
-    <div class="hero-bg" style="background-image: url({module.thumbnail_url || ''})"></div>
+    <!-- Background with fallback gradient when no thumbnail. A text-design
+         thumbnail already carries the title, so it is shown as a poster beside
+         this title instead, over a blurred wash of its own colours. -->
+    <div class="hero-bg" class:wash={module.thumbnail_has_text} style="background-image: url({module.thumbnail_url || ''})"></div>
     <div class="hero-overlay"></div>
+    {#if module.thumbnail_has_text && module.thumbnail_url}
+      <img class="hero-poster" src={module.thumbnail_url} alt="" />
+    {/if}
     
     <div class="hero-content">
       {#if module.category}
@@ -67,6 +72,29 @@
   
   .hero:hover .hero-bg {
     transform: scale(1.02);
+  }
+
+  .hero-bg.wash, .hero:hover .hero-bg.wash {
+    filter: blur(48px) saturate(1.3);
+    opacity: 0.55;
+    transform: scale(1.25);
+  }
+
+  .hero-poster {
+    position: absolute;
+    z-index: 1;
+    right: 2.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: min(44%, 560px);
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+
+  @media (max-width: 860px) {
+    .hero-poster { display: none; }
   }
   
   .hero-overlay {

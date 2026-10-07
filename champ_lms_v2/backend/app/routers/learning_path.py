@@ -7,7 +7,7 @@ from app.models.user import User
 from app.models.module import Module
 from app.models.enrollment import Enrollment
 from app.models.learning_path import LearningPath, UserPathProgress
-from app.services.bunny_storage import bunny_storage
+from app.services.thumbnails import module_thumbnail_url
 
 router = APIRouter(tags=["learning_paths"])
 
@@ -94,7 +94,7 @@ async def get_path(
             "title": node.get("title") or (mod.title if mod else f"Node {i+1}"),
             "module_title": mod.title if mod else None,
             "module_category": mod.category if mod else None,
-            "thumbnail_url": bunny_storage.thumbnail_url(mod.thumbnail_bunny_path) if mod and mod.thumbnail_bunny_path else None,
+            "thumbnail_url": module_thumbnail_url(mod),
             "total_episodes": mod.total_episodes if mod else 0,
             "progress_pct": enr.completion_percentage if enr else 0,
             "mastered": bool(enr and enr.completed_at),

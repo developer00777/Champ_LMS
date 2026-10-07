@@ -6,7 +6,7 @@ from app.core.db import init_db, close_db
 from app.core.auth import seed_admin
 from app.core.redis import get_redis, close_redis
 from app.services.gamification_service import seed_gamification, rehydrate_leaderboards
-from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series, employees, daily, courses, qna
+from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series, employees, daily, courses, qna, thumbnails
 
 settings = get_settings()
 
@@ -72,6 +72,7 @@ app.include_router(daily.router)
 app.include_router(test_series.router)
 app.include_router(courses.router)
 app.include_router(qna.router)
+app.include_router(thumbnails.router)
 app.include_router(webhooks.router)
 # Bunny dashboard may be configured with /api prefix — support both paths
 app.include_router(webhooks.router, prefix="/api")

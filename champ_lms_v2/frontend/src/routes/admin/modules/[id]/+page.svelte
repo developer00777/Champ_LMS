@@ -2,7 +2,10 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { api, type AdminModuleDetail, type AdminEpisodeDetail } from '$lib/api/client';
-  import { uploadVideoHybrid, uploadThumbnail } from '$lib/utils/upload-client';
+  import { uploadVideoHybrid } from '$lib/utils/upload-client';
+  import ThumbnailField from '$lib/components/ThumbnailField.svelte';
+  import ThumbnailStudio from '$lib/components/ThumbnailStudio.svelte';
+  import type { PickedThumbnail } from '$lib/thumbnails/designer';
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
   const MAX_DIRECT_UPLOAD_SIZE = 1024 * 1024 * 1024;
@@ -26,7 +29,9 @@
   let epTitle = '';
   let epDescription = '';
   let videoFile: File | null = null;
-  let thumbFile: File | null = null;
+  let thumbPick: PickedThumbnail | null = null;
+  // The episode whose thumbnail is open in the studio, from the list below.
+  let thumbEp: AdminEpisodeDetail | null = null;
   let externalUrl = '';
   let addMode: 'file' | 'url' | 'later' = 'file';
   let uploading = false;
@@ -106,12 +111,8 @@
     }
   }
 
-  function pickThumb(e: Event) {
-    thumbFile = (e.target as HTMLInputElement).files?.[0] ?? null;
-  }
-
   function resetAddForm() {
-    epTitle = ''; epDescription = ''; videoFile = null; thumbFile = null;
+    epTitle = ''; epDescription = ''; videoFile = null; thumbPick = null;
     externalUrl = ''; addMode = 'file'; statusMsg = ''; addError = ''; uploadProgress = 0;
   }
 
@@ -156,9 +157,9 @@
         statusMsg = 'Bunny Stream is downloading and transcoding.';
       }
 
-      if (thumbFile) {
-        statusMsg = 'Uploading thumbnail…';
-        await uploadThumbnail({ episodeId: newEpisodeId, file: thumbFile, token });
+      if (thumbPick) {
+        statusMsg = 'Saving thumbnail…';
+        await api.saveThumbnail('episode', newEpisodeId, thumbPick.blob, thumbPick.source, thumbPick.design);
       }
 
       resetAddForm();
@@ -249,6 +250,11 @@
 
     <div class="form-card">
       <h2>Module details</h2>
+      <div class="thumb-field">
+        <span class="lbl">Thumbnail</span>
+        <ThumbnailField kind="module" ownerId={mod.id} title={mod.title} kicker={mod.category ?? ''}
+          state={mod} onChange={s => mod && (mod = { ...mod, ...s })} />
+      </div>
       <label>Title<input bind:value={title} /></label>
       <label>Description<input bind:value={description} placeholder="Optional" /></label>
       <div class="row">
@@ -307,9 +313,13 @@
           </p>
         {/if}
 
-        <label>Thumbnail (optional)
-          <input type="file" accept="image/*" on:change={pickThumb} />
-        </label>
+        <div class="thumb-field">
+          <span class="lbl">Thumbnail (optional)</span>
+          <ThumbnailField kind="episode" title={epTitle.trim() || 'New episode'} kicker={`Episode ${mod.episodes.length + 1}`}
+            context={`Part of the course: ${mod.title}${epDescription.trim() ? `
+About: ${epDescription.trim()}` : ''}`}
+            bind:picked={thumbPick} />
+        </div>
 
         {#if uploading && uploadProgress > 0}
           <div class="progress"><div class="bar" style="width: {uploadProgress}%"></div>
@@ -332,6 +342,10 @@
       <div class="ep-list">
         {#each mod.episodes as ep, i (ep.id)}
           <div class="ep">
+            <button class="ep-thumb" style={ep.thumbnail_url ? `background-image:url(${ep.thumbnail_url})` : ''}
+              on:click={() => (thumbEp = ep)} aria-label="Thumbnail for {ep.title}" title="Change thumbnail">
+              {#if !ep.thumbnail_url}<span>+</span>{/if}
+            </button>
             <div class="ord">
               <button class="arrow" disabled={i === 0 || busy} on:click={() => move(i, -1)} aria-label="Move up">▲</button>
               <span class="num">{ep.sequence_order}</span>
@@ -348,6 +362,7 @@
               {:else}
                 <b>{ep.title}</b>
                 <button class="link" on:click={() => startRename(ep)}>rename</button>
+                <button class="link" on:click={() => (thumbEp = ep)}>thumbnail</button>
               {/if}
               <div class="chips">
                 <span class="chip s-{ep.status}">{ep.status}</span>
@@ -358,6 +373,15 @@
           </div>
         {/each}
       </div>
+      {#if thumbEp}
+        <ThumbnailStudio kind="episode" ownerId={thumbEp.id} title={thumbEp.title}
+          kicker={`Episode ${thumbEp.sequence_order}`} current={thumbEp}
+          onClose={() => (thumbEp = null)} onSaved={s => {
+            // Update the row in place: a full reload would flash the skeleton.
+            if (mod && thumbEp) mod = { ...mod, episodes: mod.episodes.map(e => (e.id === thumbEp?.id ? { ...e, ...s } : e)) };
+            flash(s.thumbnail_source ? 'Thumbnail saved.' : 'Thumbnail removed.');
+          }} />
+      {/if}
       <p class="foot-note">
         To delete an episode or its Bunny video permanently, use the
         <a href="/admin/content">Content Library</a>.
@@ -423,6 +447,12 @@
   .arrow:disabled { opacity: 0.25; cursor: not-allowed; }
   .num { font-size: 0.82rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
   .ep-body { flex: 1; min-width: 0; }
+  .ep-thumb { width: 96px; aspect-ratio: 16 / 9; flex-shrink: 0; border-radius: 6px; cursor: pointer;
+              background: var(--surface2) center / cover no-repeat; border: 1px solid var(--border);
+              display: grid; place-items: center; color: var(--muted); font-size: 1.1rem; }
+  .ep-thumb:hover { border-color: var(--accent); }
+  .thumb-field { display: grid; gap: 0.35rem; max-width: 360px; }
+  .lbl { font-size: 0.82rem; color: var(--muted); }
   .ep-body b { font-size: 0.93rem; }
   .rename { display: flex; gap: 0.45rem; align-items: center; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }

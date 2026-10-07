@@ -1,13 +1,15 @@
 <script lang="ts">
   import { api } from '$lib/api/client';
-  import { uploadVideoHybrid, uploadThumbnail } from '$lib/utils/upload-client';
+  import { uploadVideoHybrid } from '$lib/utils/upload-client';
+  import ThumbnailField from '$lib/components/ThumbnailField.svelte';
+  import type { PickedThumbnail } from '$lib/thumbnails/designer';
 
   let moduleTitle = '';
   let moduleCategory = '';
   let episodeTitle = '';
   let episodeOrder = 1;
   let videoFile: File | null = null;
-  let thumbnailFile: File | null = null;
+  let thumbPick: PickedThumbnail | null = null;
   let externalVideoUrl = '';
 
   let step: 'module' | 'episode' | 'video' | 'done' = 'module';
@@ -95,9 +97,9 @@
       uploadMethod = result.method;
       statusMsg = `Video uploaded. Bunny Stream is transcoding...`;
 
-      if (thumbnailFile) {
-        statusMsg = 'Uploading thumbnail...';
-        await uploadThumbnail({ episodeId, file: thumbnailFile, token });
+      if (thumbPick) {
+        statusMsg = 'Saving thumbnail...';
+        await api.saveThumbnail('episode', episodeId, thumbPick.blob, thumbPick.source, thumbPick.design);
       }
 
       await api.publishModule(moduleId);
@@ -138,9 +140,9 @@
       uploadMethod = 'url';
       statusMsg = 'Bunny Stream is downloading and transcoding video...';
 
-      if (thumbnailFile) {
-        statusMsg = 'Uploading thumbnail...';
-        await uploadThumbnail({ episodeId, file: thumbnailFile, token });
+      if (thumbPick) {
+        statusMsg = 'Saving thumbnail...';
+        await api.saveThumbnail('episode', episodeId, thumbPick.blob, thumbPick.source, thumbPick.design);
       }
 
       await api.publishModule(moduleId);
@@ -281,10 +283,12 @@
 
       <hr class="divider-line" />
       
-      <label>Thumbnail Image (optional)
-        <p class="hint">Served via Bunny CDN with Optimizer (auto-WebP, resized to 480×270)</p>
-        <input type="file" accept="image/*" on:change={e => thumbnailFile = pickedFile(e)} />
-      </label>
+      <div class="thumb-field">
+        <span>Thumbnail (optional)</span>
+        <p class="hint">Design one with text, generate it with AI, or upload an image.</p>
+        <ThumbnailField kind="episode" title={episodeTitle || 'New episode'} kicker={moduleCategory}
+          context={`Part of the course: ${moduleTitle}`} bind:picked={thumbPick} />
+      </div>
     </div>
   {:else if step === 'done'}
     <div class="done-card">
@@ -303,6 +307,7 @@
 </div>
 
 <style>
+  .thumb-field { display: grid; gap: 0.4rem; max-width: 360px; }
   .page { max-width: 600px; margin: 0 auto; }
   .breadcrumb { font-size: 0.83rem; color: var(--muted); margin-bottom: 1rem; }
   .breadcrumb a { color: var(--accent); }

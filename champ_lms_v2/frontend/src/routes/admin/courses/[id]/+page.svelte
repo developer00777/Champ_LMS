@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/stores';
   import {
-    api, type AdminCourse, type AdminCourseItem, type CourseItemKind, type CourseSection,
+    api, type AdminCourse, type AdminCourseItem, type AdminVideoItem, type CourseItemKind, type CourseSection,
   } from '$lib/api/client';
   import { uploads, startVideoUpload, transcribeFiles, hasActiveUploads } from '$lib/stores/course-uploads';
   import { clock, runtime } from '$lib/utils/transcribe';
@@ -13,6 +13,7 @@
   import NotesInspector from '$lib/components/course/admin/NotesInspector.svelte';
   import AccessPanel from '$lib/components/course/admin/AccessPanel.svelte';
   import InsertMenu from '$lib/components/course/admin/InsertMenu.svelte';
+  import ThumbnailField from '$lib/components/ThumbnailField.svelte';
 
   $: id = $page.params.id;
 
@@ -90,6 +91,8 @@
   $: counts = course
     ? (['video', 'quiz', 'test', 'notes'] as CourseItemKind[]).map(k => [k, course!.items.filter(i => i.kind === k).length] as const)
     : [];
+  // Learners see the first video's frame until the course has its own thumbnail.
+  $: firstFrame = course?.items.find((i): i is AdminVideoItem => i.kind === 'video' && !!i.thumbnail_url)?.thumbnail_url ?? null;
   $: totalRuntime = course ? course.items.reduce((a, i) => a + (i.kind === 'video' ? i.duration_seconds ?? 0 : 0), 0) : 0;
 
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -558,6 +561,11 @@
           {:else}
             <div class="panel-h"><span>Course details</span></div>
             <div class="insp-body">
+              <div class="field"><span>Thumbnail</span>
+                <ThumbnailField kind="module" ownerId={course.id} title={course.title} kicker={course.category ?? ''}
+                  state={course} onChange={s => course && (course = { ...course, ...s })}
+                  fallbackUrl={firstFrame} fallbackNote="Until you add one, learners see the first video's frame." />
+              </div>
               <label class="field"><span>Description</span>
                 <textarea rows="4" bind:value={description} on:input={saveDetails}
                   on:focus={() => (descFocused = true)} on:blur={() => (descFocused = false)}></textarea></label>

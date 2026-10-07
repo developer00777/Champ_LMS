@@ -5,12 +5,16 @@
   import { clock, parseCaptions, segmentsToText, textToSegments } from '$lib/utils/transcribe';
   import { icons } from '../icons';
   import VideoEditor from './VideoEditor.svelte';
+  import ThumbnailStudio from '$lib/components/ThumbnailStudio.svelte';
 
   export let item: AdminVideoItem;
   export let courseId: string;
   export let onReload: () => void;
 
   let editing = false;
+  let thumbOpen = false;
+  $: thumbLabel = item.thumbnail_source === 'ai' ? 'AI image' : item.thumbnail_source === 'text' ? 'Text design'
+    : item.thumbnail_source === 'upload' ? 'Uploaded' : item.thumbnail_url ? 'Frame picked by Bunny' : 'None yet';
   $: srcLen = item.source_duration_seconds;
   $: clipped = item.clip_start != null || item.clip_end != null;
   $: rangeText = clipped && srcLen
@@ -123,6 +127,15 @@
     <span class="poster-ico">{@html icons.play}</span>
     {#if item.duration_seconds}<span class="dur">{clock(item.duration_seconds)}</span>{/if}
   </div>
+  <div class="setting thumb">
+    <div><b>Thumbnail</b><span>{thumbLabel}</span></div>
+    <button class="btn sm" on:click={() => (thumbOpen = true)}>{@html icons.sparkle} {item.thumbnail_source ? 'Change' : 'Create'}</button>
+  </div>
+  {#if thumbOpen}
+    <ThumbnailStudio kind="episode" ownerId={item.ref_id} title={item.title}
+      kicker={item.episode_number ? `Episode ${item.episode_number}` : ''} current={item}
+      onClose={() => (thumbOpen = false)} onSaved={() => { message = 'Thumbnail saved.'; onReload(); }} />
+  {/if}
 
   <div class="kv">
     <span>Video</span>

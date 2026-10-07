@@ -255,47 +255,6 @@ function uploadViaServer(options: {
 }
 
 /**
- * Upload thumbnail via server
- * Bunny Storage doesn't support direct browser upload, so always server-side
- */
-export async function uploadThumbnail(options: {
-  episodeId: string;
-  file: File;
-  token: string;
-  onProgress?: (bytesUploaded: number, bytesTotal: number) => void;
-}): Promise<void> {
-  const { episodeId, file, token, onProgress } = options;
-  
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const formData = new FormData();
-    formData.append('image', file);
-
-    if (onProgress) {
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          onProgress(e.loaded, e.total);
-        }
-      });
-    }
-
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`Thumbnail upload failed: ${xhr.status}`));
-      }
-    });
-
-    xhr.addEventListener('error', () => reject(new Error('Thumbnail upload failed')));
-    
-    xhr.open('POST', `/api/admin/episodes/${episodeId}/thumbnail`);
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    xhr.send(formData);
-  });
-}
-
-/**
  * Check if TUS is supported in current browser
  */
 export function isTusSupported(): boolean {

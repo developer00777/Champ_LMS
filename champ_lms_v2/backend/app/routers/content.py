@@ -16,7 +16,7 @@ from app.models.episode import Episode
 from app.models.progress import WatchProgress
 from app.models.recommendation import Recommendation
 from app.services.bunny_stream import bunny_stream
-from app.services.bunny_storage import bunny_storage
+from app.services.thumbnails import episode_thumbnail_url, module_thumbnail_url, thumbnail_has_text
 from app.services.clips import apply_source_length, clip_bounds, is_clipped, segments_in_clip
 import redis.asyncio as aioredis
 
@@ -50,6 +50,9 @@ class ModuleOut(BaseModel):
     category: str | None
     tags: list[str] | None
     thumbnail_url: str | None
+    # A text design already shows the title, so heroes that write the title
+    # over their background show it beside the text instead.
+    thumbnail_has_text: bool = False
     total_episodes: int
     is_published: bool
     # "canvas" modules open in the course player (/course/{id}) rather than
@@ -63,12 +66,6 @@ class ModuleOut(BaseModel):
 class FeedRow(BaseModel):
     row_title: str
     modules: list[ModuleOut]
-
-
-def _thumbnail_url(bunny_path: str | None) -> str | None:
-    if not bunny_path:
-        return None
-    return bunny_storage.thumbnail_url(bunny_path, 480, 270)
 
 
 @router.get("/feed", response_model=list[FeedRow])
@@ -113,7 +110,8 @@ async def get_feed(
                         description=m.description,
                         category=m.category,
                         tags=m.tags,
-                        thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
+                        thumbnail_url=module_thumbnail_url(m),
+                        thumbnail_has_text=thumbnail_has_text(m),
                         total_episodes=m.total_episodes,
                         is_published=m.is_published,
                         layout=m.layout,
@@ -139,7 +137,8 @@ async def get_feed(
                             description=m.description,
                             category=m.category,
                             tags=m.tags,
-                            thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
+                            thumbnail_url=module_thumbnail_url(m),
+                            thumbnail_has_text=thumbnail_has_text(m),
                             total_episodes=m.total_episodes,
                             is_published=m.is_published,
                             layout=m.layout,
@@ -161,7 +160,8 @@ async def get_feed(
                         description=m.description,
                         category=m.category,
                         tags=m.tags,
-                        thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
+                        thumbnail_url=module_thumbnail_url(m),
+                        thumbnail_has_text=thumbnail_has_text(m),
                         total_episodes=m.total_episodes,
                         is_published=m.is_published,
                         layout=m.layout,
@@ -180,7 +180,8 @@ async def get_feed(
                     description=m.description,
                     category=m.category,
                     tags=m.tags,
-                    thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
+                    thumbnail_url=module_thumbnail_url(m),
+                    thumbnail_has_text=thumbnail_has_text(m),
                     total_episodes=m.total_episodes,
                     is_published=m.is_published,
                     layout=m.layout,
@@ -215,7 +216,8 @@ async def list_required_modules(
             "title": m.title,
             "description": m.description,
             "category": m.category,
-            "thumbnail_url": _thumbnail_url(m.thumbnail_bunny_path),
+            "thumbnail_url": module_thumbnail_url(m),
+            "thumbnail_has_text": thumbnail_has_text(m),
             "total_episodes": m.total_episodes,
         }
         for m in modules
@@ -244,7 +246,8 @@ async def list_modules(
             description=m.description,
             category=m.category,
             tags=m.tags,
-            thumbnail_url=_thumbnail_url(m.thumbnail_bunny_path),
+            thumbnail_url=module_thumbnail_url(m),
+            thumbnail_has_text=thumbnail_has_text(m),
             total_episodes=m.total_episodes,
             is_published=m.is_published,
             layout=m.layout,
@@ -275,7 +278,8 @@ async def get_module(
         "description": module.description,
         "category": module.category,
         "tags": module.tags,
-        "thumbnail_url": _thumbnail_url(module.thumbnail_bunny_path),
+        "thumbnail_url": module_thumbnail_url(module),
+        "thumbnail_has_text": thumbnail_has_text(module),
         "total_episodes": module.total_episodes,
         "is_published": module.is_published,
         "layout": module.layout,
@@ -287,7 +291,7 @@ async def get_module(
                 "duration_seconds": ep.duration_seconds,
                 "sequence_order": ep.sequence_order,
                 "status": ep.status,
-                "thumbnail_url": ep.thumbnail_url or _thumbnail_url(ep.thumbnail_bunny_path),
+                "thumbnail_url": episode_thumbnail_url(ep),
             }
             for ep in episodes
         ],
@@ -409,7 +413,7 @@ async def search(
     return {
         "modules": [
             {"id": m.id, "title": m.title, "category": m.category,
-             "thumbnail_url": _thumbnail_url(m.thumbnail_bunny_path)}
+             "thumbnail_url": module_thumbnail_url(m)}
             for m in modules
         ],
         "episodes": [

@@ -56,6 +56,12 @@ class Module(Document):
     zoom_session_id: str | None = None  # references zoom_sessions.id
     # Bunny Storage path for thumbnail, served via CDN with Optimizer
     thumbnail_bunny_path: str | None = None
+    # Thumbnail studio (models/thumbnail.py): the image in Mongo, how it was
+    # made, and for text designs the settings, so the admin can reopen and
+    # edit them. Takes precedence over thumbnail_bunny_path.
+    thumbnail_id: str | None = None
+    thumbnail_source: str | None = None  # upload | ai | text
+    thumbnail_design: dict | None = None
     is_published: bool = False
     total_episodes: int = 0
     # module_type distinguishes the two training tracks:
