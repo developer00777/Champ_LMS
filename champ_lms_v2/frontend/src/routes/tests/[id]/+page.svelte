@@ -114,6 +114,12 @@
     if (expired[item.id]) { qSecondsLeft = 0; return; }
 
     qSecondsLeft = item.time_limit_seconds;
+    runQuestionClock();
+  }
+
+  /** Count down qSecondsLeft from wherever it is now. */
+  function runQuestionClock() {
+    if (qTimer) clearInterval(qTimer);
     qTimer = setInterval(() => {
       if (qSecondsLeft === null) return;
       qSecondsLeft -= 1;
@@ -216,6 +222,14 @@
     } catch (e: any) {
       error = e.message;
       submitting = false;
+      // The submit didn't land, so the test goes on: restart both clocks from
+      // where they stopped (not from full, which would hand back time).
+      if (secondsLeft !== null && secondsLeft > 0) {
+        if (timer) clearInterval(timer);
+        timer = setInterval(tick, 1000);
+      }
+      const item = paper?.questions[current];
+      if (item && !expired[item.id] && qSecondsLeft !== null && qSecondsLeft > 0) runQuestionClock();
     }
   }
 </script>

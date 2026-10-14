@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { api, type LeaderboardEntry, type Badge } from '$lib/api/client';
   import { auth } from '$lib/stores/auth';
   import Avatar from '$lib/components/Avatar.svelte';
@@ -15,14 +15,27 @@
     await Promise.all([loadBoard(), loadBadges()]);
   });
 
+  // Each request is numbered, so a slow reply for an older filter can't
+  // overwrite the board for the one typed since.
+  let requestNo = 0;
   async function loadBoard() {
+    const n = ++requestNo;
     loading = true;
     try {
-      entries = await api.leaderboard(dept || undefined);
+      const result = await api.leaderboard(dept || undefined);
+      if (n === requestNo) entries = result;
     } finally {
-      loading = false;
+      if (n === requestNo) loading = false;
     }
   }
+
+  // Typing in the filter waits for a short pause instead of a request per key.
+  let filterTimer: ReturnType<typeof setTimeout> | undefined;
+  function onFilterInput() {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(loadBoard, 300);
+  }
+  onDestroy(() => clearTimeout(filterTimer));
 
   async function loadBadges() {
     try { badges = await api.myBadges(); } catch {}
@@ -50,7 +63,7 @@
     <label class="search ui-rise" style="--i:2">
       <Icon name="building" size={18} />
       <span class="sr">Filter by department</span>
-      <input bind:value={dept} placeholder="Filter by department..." on:input={() => loadBoard()} />
+      <input bind:value={dept} placeholder="Filter by department..." on:input={onFilterInput} />
     </label>
   </header>
 

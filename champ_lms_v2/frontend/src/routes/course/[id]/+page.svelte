@@ -67,6 +67,9 @@
   function resumeItem(c: CourseView) {
     return c.items.find(i => !i.locked && !(i.kind === 'notes' ? seenNotes.has(i.id) : i.done)) ?? c.items[0];
   }
+  // The next item can be a quiz, test or notes page, which has no episode number.
+  const resumeLabel = (r: CourseItemView) =>
+    r.kind === 'video' && r.episode_number ? `Resume episode ${r.episode_number}` : `Continue: ${kindLabel[r.kind] ?? r.title}`;
 
   $: current = course?.items.find(i => i.id === currentId) ?? null;
   $: idx = course && current ? course.items.indexOf(current) : -1;
@@ -182,7 +185,7 @@
         <h1>{course.title}</h1>
         <p class="meta">{videos.length} episodes · {runtime(course.runtime_seconds)}{course.category ? ` · ${course.category}` : ''}</p>
         {#if course.description}<p class="desc">{course.description}</p>{/if}
-        <button class="btn primary" on:click={() => go(resume)}>{@html icons.play} {doneCount ? `Resume episode ${resume.episode_number}` : 'Play episode 1'}</button>
+        <button class="btn primary" on:click={() => go(resume)}>{@html icons.play} {doneCount ? resumeLabel(resume) : 'Play episode 1'}</button>
       </div>
     </section>
     {#each course.sections as s, si (s.id)}
