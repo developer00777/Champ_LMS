@@ -21,18 +21,34 @@ function createAuthStore() {
 
     async init() {
       if (!browser) return;
-      const token = localStorage.getItem('champ_token');
-      if (!token) {
-        update(s => ({ ...s, loading: false }));
-        return;
+      if (localStorage.getItem('champ_token')) {
+        try {
+          const user = await api.me();
+          set({ user, loading: false, error: null });
+          return;
+        } catch {
+          localStorage.removeItem('champ_token');
+        }
       }
-      try {
-        const user = await api.me();
-        set({ user, loading: false, error: null });
-      } catch {
-        localStorage.removeItem('champ_token');
-        set({ user: null, loading: false, error: null });
+      // Local dev: no valid session, so sign straight in as the DEV_LOGIN_EMAIL
+      // account. import.meta.env.DEV is false in `vite build`, so this whole
+      // block is stripped from the production bundle. Skipped after an
+      // explicit sign-out (see logout).
+      if (import.meta.env.DEV && !sessionStorage.getItem('champ_dev_login_off')) {
+        try {
+          const { access_token } = await api.devLogin();
+          localStorage.setItem('champ_token', access_token);
+          const user = await api.me();
+          set({ user, loading: false, error: null });
+          // Don't leave a freshly signed-in dev sitting on the sign-in form.
+          if (location.pathname === '/auth/login') goto('/');
+          return;
+        } catch {
+          // Backend not set up for dev login — fall through to the normal form.
+          localStorage.removeItem('champ_token');
+        }
       }
+      set({ user: null, loading: false, error: null });
     },
 
     async login(email: string, password: string) {
@@ -66,6 +82,9 @@ function createAuthStore() {
 
     logout() {
       localStorage.removeItem('champ_token');
+      // Let a dev sign out and use another account without being auto-signed
+      // back in on the next reload. Cleared when the tab closes.
+      if (import.meta.env.DEV) sessionStorage.setItem('champ_dev_login_off', '1');
       set({ user: null, loading: false, error: null });
       goto('/auth/login');
     },

@@ -119,7 +119,7 @@
     width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
     animation: pulse 1.6s infinite;
   }
-  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(229, 9, 20, 0.6); } 70% { box-shadow: 0 0 0 8px transparent; } }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 60%, transparent); } 70% { box-shadow: 0 0 0 8px transparent; } }
   h2 { font-size: 1.2rem; font-weight: 700; line-height: 1.3; }
   .facts {
     display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 1rem;
@@ -143,8 +143,8 @@
     border: 1px solid var(--border-hover); background: var(--surface2); color: var(--text);
   }
   .btn:hover:not(:disabled) { background: var(--surface3); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
   .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-  .error { color: #ff6b6b; font-size: 0.85rem; }
+  .error { color: var(--danger); font-size: 0.85rem; }
 </style>

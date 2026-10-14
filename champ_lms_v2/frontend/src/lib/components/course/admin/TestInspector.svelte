@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type AdminCourse, type AdminTestItem, type ParsedPdfForTest } from '$lib/api/client';
   import { icons } from '../icons';
+  import Select from '$lib/components/Select.svelte';
 
   export let course: AdminCourse;
   export let item: AdminTestItem;
@@ -124,11 +125,14 @@
         on:input={e => { const v = +e.currentTarget.value; if (v >= 1) save({ duration_minutes: v }); }} /></label>
   </div>
   <div class="row">
+    <!-- svelte-ignore a11y-label-has-associated-control -->
     <label class="field grow"><span>Opens</span>
-      <select value={item.unlock_rule} on:change={e => save({ unlock_rule: e.currentTarget.value === 'any' ? 'any' : 'all_videos' }, 0)}>
-        <option value="all_videos">After every episode is watched</option>
-        <option value="any">Any time</option>
-      </select></label>
+      <Select
+        value={item.unlock_rule}
+        size="sm"
+        options={[{ value: 'all_videos', label: 'After every episode is watched' }, { value: 'any', label: 'Any time' }]}
+        on:change={e => save({ unlock_rule: e.detail === 'any' ? 'any' : 'all_videos' }, 0)}
+      /></label>
   </div>
 
   <div class="lock-row">

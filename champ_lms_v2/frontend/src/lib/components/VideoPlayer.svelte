@@ -12,7 +12,8 @@
   let videoEl: HTMLVideoElement;
   let container: HTMLElement;
   let hls: any = null;
-  let autoAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
+  // One countdown drives auto-advance; Cancel and leaving the page both stop it.
+  let autoAdvanceTimer: ReturnType<typeof setInterval> | null = null;
   let showAutoAdvance = false;
   let countdown = 5;
 
@@ -111,6 +112,9 @@
   let rate = 1;
   let rel = 0; // current position in clip time
   let clipEnded = false;
+  // Once per play-through: a part whose clipEnd is at the video's end gets
+  // both the clipEnd stop and the native `ended` event.
+  let finishing = false;
 
   /** Jump to a point in clip time (a transcript line was clicked). */
   export function seek(seconds: number) {
@@ -189,6 +193,7 @@
   // counts real playback time from.
   function onPlaying() {
     paused = false;
+    finishing = false;
     if (reportedStart || skipLimitSeconds == null || !videoEl || !track) return;
     reportedStart = true;
     report();
@@ -233,12 +238,14 @@
     }
   });
 
+  let destroyed = false;
   onDestroy(() => {
+    destroyed = true;
     hls?.destroy();
     if (vttUrl) URL.revokeObjectURL(vttUrl);
     if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange);
     if (track) player.stopTracking();
-    if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
+    stopAutoAdvance();
     if (noticeTimer) clearTimeout(noticeTimer);
   });
 
@@ -266,30 +273,33 @@
 
   async function onEnded() {
     if (clipped && clipEnd !== null && !clipEnded) return; // a part stops at clipEnd, not here
+    if (finishing) return;
+    finishing = true;
     clipEnded = true;
     if (track) await player.complete();
+    // The learner may have left while completion was being saved.
+    if (destroyed) return;
     onComplete?.();
     // Auto-advance
+    stopAutoAdvance();
     showAutoAdvance = true;
     countdown = 5;
-    const tick = setInterval(() => {
+    autoAdvanceTimer = setInterval(() => {
       countdown--;
       if (countdown <= 0) {
-        clearInterval(tick);
-        showAutoAdvance = false;
+        stopAutoAdvance();
         onAutoAdvance?.();
       }
     }, 1000);
-    autoAdvanceTimer = setTimeout(() => {
-      showAutoAdvance = false;
-      onAutoAdvance?.();
-    }, 5100);
   }
 
-  function cancelAutoAdvance() {
+  function stopAutoAdvance() {
+    if (autoAdvanceTimer) clearInterval(autoAdvanceTimer);
+    autoAdvanceTimer = null;
     showAutoAdvance = false;
-    if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
   }
+
+  const cancelAutoAdvance = stopAutoAdvance;
 
   // ---- custom controls for a clipped part ----------------------------------
   function togglePlay() {
@@ -333,7 +343,8 @@
 <!-- Keyboard control for a clipped part's own controls; the native player
      handles its own keys. -->
 <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
-<div bind:this={container} class="player-wrap" class:clipped tabindex={clipped ? 0 : -1} on:keydown={onKey}>
+<div bind:this={container} class="player-wrap" class:clipped role="region" aria-label="Video player"
+     tabindex={clipped ? 0 : -1} on:keydown={onKey}>
   {#if useNative}
     <!-- Preferred: token-authenticated HLS in a native player. This is the ONLY
          path that fires timeupdate/ended, so it is the only one that records
@@ -387,7 +398,7 @@
       allowfullscreen
     ></iframe>
   {:else}
-    <div class="placeholder">Loading video...</div>
+    <div class="placeholder"><span class="ring"></span>Loading video…</div>
   {/if}
 
   {#if caption}
@@ -419,6 +430,7 @@
 
   {#if showAutoAdvance}
     <div class="auto-advance">
+      <span class="aa-count" style="--p:{(countdown / 5) * 100}%"><b>{countdown}</b></span>
       <p>Next episode in <strong>{countdown}s</strong></p>
       <button class="btn-ghost" on:click={cancelAutoAdvance}>Cancel</button>
     </div>
@@ -430,18 +442,20 @@
     position: relative;
     width: 100%;
     aspect-ratio: 16/9;
-    background: #000;
-    border-radius: 8px;
+    background: #0b0b0d;
+    border-radius: 28px;
     overflow: hidden;
+    box-shadow: var(--shadow-md);
+    animation: modal-in 520ms var(--ease-out) backwards;
   }
   .player-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .video, .bunny-embed {
-    width: 100%; height: 100%; border: none;
+    display: block; width: 100%; height: 100%; border: none;
   }
   .clipped .video { cursor: pointer; }
   .placeholder {
-    display: flex; align-items: center; justify-content: center;
-    height: 100%; color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.9rem;
+    height: 100%; color: rgba(244, 244, 246, 0.7); font-size: 0.9rem;
   }
   .cbar {
     position: absolute; left: 0; right: 0; bottom: 0;
@@ -508,20 +522,38 @@
     border-radius: 8px; padding: 0.55rem 0.9rem; font-size: 0.88rem;
     pointer-events: none;
   }
+  .ring {
+    width: 38px; height: 38px; border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.15); border-top-color: #f4f4f6;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { rotate: 360deg; } }
   .auto-advance {
     position: absolute; bottom: 1.5rem; right: 1.5rem;
-    background: rgba(0,0,0,0.85);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    display: flex; align-items: center; gap: 1rem;
+    background: rgba(12, 12, 14, 0.88); color: #f4f4f6;
+    border-radius: 999px;
+    padding: 0.45rem 0.5rem 0.45rem 0.5rem;
+    display: flex; align-items: center; gap: 0.8rem;
     font-size: 0.9rem;
+    animation: rise 420ms var(--ease-out) backwards;
+  }
+  /* Named aa-count, not count: the Q&A button's badge is .otool .count. */
+  .aa-count {
+    width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+    background: conic-gradient(#f4f4f6 var(--p), rgba(255, 255, 255, 0.15) 0);
+    transition: background 900ms linear;
+  }
+  .aa-count b {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    background: #0c0c0e; font-size: 0.85rem; animation: pop 400ms var(--ease-out);
   }
   .btn-ghost {
-    background: rgba(255,255,255,0.12);
-    color: #fff;
-    padding: 0.3rem 0.8rem;
-    border-radius: 4px;
-    font-size: 0.8rem;
+    background: rgba(255, 255, 255, 0.14);
+    color: #f4f4f6;
+    height: 34px; padding: 0 0.95rem;
+    border-radius: 999px;
+    font-size: 0.8rem; font-weight: 600;
+    transition: background-color var(--dur-2);
   }
+  .btn-ghost:hover { background: rgba(255, 255, 255, 0.24); }
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type AdminCourse, type AdminQuizItem, type AdminVideoItem, type QuizQuestion } from '$lib/api/client';
   import { icons } from '../icons';
+  import Select from '$lib/components/Select.svelte';
 
   export let course: AdminCourse;
   export let item: AdminQuizItem;
@@ -96,11 +97,15 @@
       <input type="range" min="1" max="20" value={item.question_count}
         on:input={e => saveSettings({ question_count: +e.currentTarget.value })} />
     </label>
+    <!-- svelte-ignore a11y-label-has-associated-control -->
     <label class="field" style="width:120px">
       <span>Difficulty</span>
-      <select value={item.difficulty} on:change={e => saveSettings({ difficulty: asDifficulty(e.currentTarget.value) }, 0)}>
-        <option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
-      </select>
+      <Select
+        value={item.difficulty}
+        size="sm"
+        options={[{ value: 'easy', label: 'Easy' }, { value: 'medium', label: 'Medium' }, { value: 'hard', label: 'Hard' }]}
+        on:change={e => saveSettings({ difficulty: asDifficulty(String(e.detail)) }, 0)}
+      />
     </label>
     <label class="field" style="width:90px">
       <span>Pass %</span>

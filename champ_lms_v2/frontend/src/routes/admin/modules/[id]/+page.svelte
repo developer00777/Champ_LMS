@@ -6,8 +6,16 @@
   import ThumbnailField from '$lib/components/ThumbnailField.svelte';
   import ThumbnailStudio from '$lib/components/ThumbnailStudio.svelte';
   import type { PickedThumbnail } from '$lib/thumbnails/designer';
+  import Icon from '$lib/components/Icon.svelte';
+  import Select from '$lib/components/Select.svelte';
+  import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
+  import Thumb from '$lib/components/Thumb.svelte';
 
   const CATEGORIES = ['sales', 'leadership', 'onboarding', 'product', 'engineering', 'ops'];
+  const CATEGORY_OPTIONS = [
+    { value: '', label: 'No category' },
+    ...CATEGORIES.map(c => ({ value: c, label: c[0].toUpperCase() + c.slice(1) })),
+  ];
   const MAX_DIRECT_UPLOAD_SIZE = 1024 * 1024 * 1024;
   const id = $page.params.id;
 
@@ -216,40 +224,61 @@
     } catch (e: any) { error = e.message; }
     finally { busy = false; }
   }
+
+  const MODES = [
+    { key: 'file', label: 'Upload file', icon: 'upload' },
+    { key: 'url', label: 'External URL', icon: 'link' },
+    { key: 'later', label: 'Add video later', icon: 'clock' },
+  ] as const;
+  const STATUS_TONE: Record<string, string> = { ready: 'mint', processing: 'butter', pending: 'sky', failed: 'danger' };
 </script>
 
 <svelte:head><title>{mod?.title ?? 'Module'} — Admin</title></svelte:head>
 
 <div class="page">
-  <p class="breadcrumb"><a href="/admin/content">← Content Library</a></p>
+  <Breadcrumbs items={[{ label: 'Admin', href: '/admin' }, { label: 'Content Library', href: '/admin/content' }, { label: mod?.title || 'Module' }]} />
 
-  {#if loading}
-    <div class="skeleton big"></div>
+  {#if loading && !mod}
+    <div class="ui-skeleton" style="height:96px;border-radius:24px;margin-bottom:1.25rem"></div>
+    <div class="ui-skeleton" style="height:300px;border-radius:28px;margin-bottom:1.25rem"></div>
+    {#each Array(3) as _}<div class="ui-skeleton" style="height:84px;border-radius:22px;margin-bottom:0.6rem"></div>{/each}
   {:else if !mod}
-    <p class="error">{error || 'Module not found'}</p>
-  {:else}
-    <div class="head">
-      <div>
-        <h1>{mod.title}</h1>
-        <p class="sub">
-          {mod.episodes.length} episode{mod.episodes.length === 1 ? '' : 's'}
-          {#if mod.category}· {mod.category}{/if}
-          · {mod.module_type}
-        </p>
-      </div>
-      <div class="head-actions">
-        <span class="status" class:live={mod.is_published}>
-          {mod.is_published ? 'Published' : 'Draft'}
-        </span>
-        <a href="/module/{mod.id}" class="btn">View as learner</a>
-      </div>
+    <div class="state ui-rise">
+      <span class="state-ico danger"><Icon name="alert" size={26} /></span>
+      <h2>Module not available</h2>
+      <p>{error || 'Module not found'}</p>
+      <a class="btn-ghost" href="/admin/content">Back to the library</a>
     </div>
+  {:else}
+    <header class="head">
+      <div class="head-copy">
+        <p class="eyebrow ui-rise" style="--i:1">Module editor</p>
+        <h1 class="ui-rise" style="--i:2">
+          <span class="title-text">{mod.title}</span>
+          <span class="title-mark" aria-hidden="true"><Icon name="layers" size={22} /></span>
+        </h1>
+        <div class="meta ui-rise" style="--i:3">
+          <span class="ui-pill sky"><Icon name="film" size={14} /> {mod.episodes.length} episode{mod.episodes.length === 1 ? '' : 's'}</span>
+          {#if mod.category}<span class="ui-pill lilac cap">{mod.category}</span>{/if}
+          <span class="ui-pill butter cap">{mod.module_type}</span>
+        </div>
+      </div>
+      <div class="head-actions ui-rise" style="--i:3">
+        <span class="status" class:live={mod.is_published}>
+          <span class="s-dot"></span>{mod.is_published ? 'Published' : 'Draft'}
+        </span>
+        <a href="/module/{mod.id}" class="btn-ghost"><Icon name="eye" size={16} /> View as learner</a>
+      </div>
+    </header>
 
-    {#if error}<p class="error">{error}</p>{/if}
-    {#if saved}<p class="ok">{saved}</p>{/if}
+    {#if error}<p class="note bad" role="alert"><Icon name="alert" size={16} /> {error}</p>{/if}
+    {#if saved}<p class="note good" role="status"><Icon name="checkCircle" size={16} /> {saved}</p>{/if}
 
-    <div class="form-card">
-      <h2>Module details</h2>
+    <section class="card ui-rise" style="--i:4">
+      <div class="card-head">
+        <span class="c-ico lilac"><Icon name="edit" size={18} /></span>
+        <h2>Module details</h2>
+      </div>
       <div class="thumb-field">
         <span class="lbl">Thumbnail</span>
         <ThumbnailField kind="module" ownerId={mod.id} title={mod.title} kicker={mod.category ?? ''}
@@ -258,60 +287,70 @@
       <label>Title<input bind:value={title} /></label>
       <label>Description<input bind:value={description} placeholder="Optional" /></label>
       <div class="row">
+        <!-- svelte-ignore a11y-label-has-associated-control -->
         <label>Category
-          <select bind:value={category}>
-            <option value="">—</option>
-            {#each CATEGORIES as c}<option value={c}>{c}</option>{/each}
-          </select>
+          <Select bind:value={category} size="lg" placeholder="No category" options={CATEGORY_OPTIONS} />
         </label>
         <label>Tags (comma separated)<input bind:value={tagsText} placeholder="pricing, discovery" /></label>
       </div>
       <div class="btn-row">
-        <button class="btn primary" disabled={busy} on:click={saveDetails}>
-          {busy ? 'Saving…' : 'Save details'}
+        <button class="btn-primary" disabled={busy} on:click={saveDetails}>
+          <Icon name="save" size={16} /> {busy ? 'Saving…' : 'Save details'}
         </button>
-        <button class="btn" disabled={busy} on:click={togglePublish}>
+        <button class="btn-ghost" disabled={busy} on:click={togglePublish}>
+          <Icon name={mod.is_published ? 'eyeOff' : 'send'} size={16} />
           {mod.is_published ? 'Unpublish' : 'Publish'}
         </button>
       </div>
-    </div>
+    </section>
 
-    <div class="ep-head">
-      <h2>Episodes</h2>
-      <button class="btn primary" on:click={() => { showAdd = !showAdd; addError = ''; }}>
-        {showAdd ? 'Cancel' : '+ Add episode'}
+    <div class="ep-head ui-rise" style="--i:5">
+      <h2>Episodes <span class="count">{mod.episodes.length}</span></h2>
+      <button class="btn-primary add-toggle" class:open={showAdd} on:click={() => { showAdd = !showAdd; addError = ''; }}>
+        <span class="plus"><Icon name="plus" size={16} /></span>
+        {showAdd ? 'Cancel' : 'Add episode'}
       </button>
     </div>
 
     {#if showAdd}
-      <div class="form-card add">
-        <h3>New episode — appended as #{mod.episodes.length + 1}</h3>
+      <section class="card add">
+        <div class="card-head">
+          <span class="c-ico mint"><Icon name="video" size={18} /></span>
+          <h3>New episode — appended as #{mod.episodes.length + 1}</h3>
+        </div>
         <label>Episode title *<input bind:value={epTitle} placeholder="e.g. Handling Price Objections" /></label>
         <label>Description<input bind:value={epDescription} placeholder="Optional" /></label>
 
-        <div class="mode-toggle">
-          <button class="mode-btn" class:active={addMode === 'file'} on:click={() => (addMode = 'file')}>Upload file</button>
-          <button class="mode-btn" class:active={addMode === 'url'} on:click={() => (addMode = 'url')}>External URL</button>
-          <button class="mode-btn" class:active={addMode === 'later'} on:click={() => (addMode = 'later')}>Add video later</button>
+        <div class="mode-toggle" role="group" aria-label="How the video arrives">
+          {#each MODES as m}
+            <button class="mode-btn" class:active={addMode === m.key} on:click={() => (addMode = m.key)}>
+              <Icon name={m.icon} size={16} /> {m.label}
+            </button>
+          {/each}
         </div>
 
-        {#if addMode === 'file'}
-          <p class="info">Direct upload, up to {formatBytes(MAX_DIRECT_UPLOAD_SIZE)} — sent to Bunny in resumable chunks. Larger files go through External URL.</p>
-          <label>Video file *
-            <input type="file" accept="video/*" on:change={pickVideo} />
-            {#if videoFile}<span class="file-info">{videoFile.name} ({formatBytes(videoFile.size)})</span>{/if}
-          </label>
-        {:else if addMode === 'url'}
-          <label>Video URL *
-            <input bind:value={externalUrl} placeholder="https://…" />
-          </label>
-          <p class="hint">Bunny Stream downloads straight from this link — it must be public and not expire immediately.</p>
-        {:else}
-          <p class="info">
-            Creates the episode slot now with no video. It stays in <b>pending</b> and
-            is hidden from learners until you upload one.
-          </p>
-        {/if}
+        {#key addMode}
+          <div class="mode-body">
+            {#if addMode === 'file'}
+              <p class="info"><Icon name="info" size={16} /> Direct upload, up to {formatBytes(MAX_DIRECT_UPLOAD_SIZE)} — sent to Bunny in resumable chunks. Larger files go through External URL.</p>
+              <label>Video file *
+                <input type="file" accept="video/*" on:change={pickVideo} />
+                {#if videoFile}<span class="file-info"><Icon name="file" size={14} /> {videoFile.name} ({formatBytes(videoFile.size)})</span>{/if}
+              </label>
+            {:else if addMode === 'url'}
+              <label>Video URL *
+                <input bind:value={externalUrl} placeholder="https://…" />
+              </label>
+              <p class="hint">Bunny Stream downloads straight from this link — it must be public and not expire immediately.</p>
+            {:else}
+              <p class="info">
+                <Icon name="info" size={16} />
+                <span>Creates the episode slot now with no video. It stays in <b>pending</b> and
+                is hidden from learners until you upload one.</span>
+              </p>
+            {/if}
+          </div>
+        {/key}
 
         <div class="thumb-field">
           <span class="lbl">Thumbnail (optional)</span>
@@ -322,52 +361,66 @@ About: ${epDescription.trim()}` : ''}`}
         </div>
 
         {#if uploading && uploadProgress > 0}
-          <div class="progress"><div class="bar" style="width: {uploadProgress}%"></div>
-            <span class="pct">{uploadProgress}%</span></div>
+          <div class="progress" role="progressbar" aria-valuenow={uploadProgress} aria-valuemin="0" aria-valuemax="100">
+            <div class="bar" style="width: {uploadProgress}%"></div>
+            <span class="pct">{uploadProgress}%</span>
+          </div>
         {/if}
-        {#if statusMsg}<p class="status-msg">{statusMsg}</p>{/if}
-        {#if addError}<p class="error">{addError}</p>{/if}
+        {#if statusMsg}<p class="status-msg"><span class="spin"></span> {statusMsg}</p>{/if}
+        {#if addError}<p class="note bad"><Icon name="alert" size={16} /> {addError}</p>{/if}
 
-        <button class="btn primary" disabled={uploading} on:click={addEpisode}>
-          {uploading ? 'Working…' : 'Add episode'}
-        </button>
-      </div>
+        <div class="btn-row">
+          <button class="btn-primary" disabled={uploading} on:click={addEpisode}>
+            <Icon name="plus" size={16} /> {uploading ? 'Working…' : 'Add episode'}
+          </button>
+        </div>
+      </section>
     {/if}
 
     {#if mod.episodes.length === 0}
-      <div class="empty">
-        <p>No episodes yet. Add the first one above.</p>
+      <div class="state small ui-rise" style="--i:6">
+        <span class="state-ico"><Icon name="film" size={24} /></span>
+        <h2>No episodes yet</h2>
+        <p>Add the first one above.</p>
       </div>
     {:else}
       <div class="ep-list">
         {#each mod.episodes as ep, i (ep.id)}
-          <div class="ep">
-            <button class="ep-thumb" style={ep.thumbnail_url ? `background-image:url(${ep.thumbnail_url})` : ''}
-              on:click={() => (thumbEp = ep)} aria-label="Thumbnail for {ep.title}" title="Change thumbnail">
-              {#if !ep.thumbnail_url}<span>+</span>{/if}
+          <div class="ep ui-rise" style="--i:{Math.min(i + 6, 12)}">
+            <button class="ep-thumb" on:click={() => (thumbEp = ep)} aria-label="Thumbnail for {ep.title}" title="Change thumbnail">
+              {#if ep.thumbnail_url}<Thumb src={ep.thumbnail_url} />{:else}<Icon name="plus" size={16} />{/if}
             </button>
             <div class="ord">
-              <button class="arrow" disabled={i === 0 || busy} on:click={() => move(i, -1)} aria-label="Move up">▲</button>
+              <button class="arrow" disabled={i === 0 || busy} on:click={() => move(i, -1)} aria-label="Move up">
+                <Icon name="chevronUp" size={16} />
+              </button>
               <span class="num">{ep.sequence_order}</span>
               <button class="arrow" disabled={i === mod.episodes.length - 1 || busy}
-                      on:click={() => move(i, 1)} aria-label="Move down">▼</button>
+                      on:click={() => move(i, 1)} aria-label="Move down">
+                <Icon name="chevronDown" size={16} />
+              </button>
             </div>
+            <span class="ep-ico {STATUS_TONE[ep.status] ?? 'sky'}" aria-hidden="true">
+              <Icon name={ep.has_remote_video ? 'play' : 'video'} size={18} stroke={ep.has_remote_video ? 0 : 1.75} />
+            </span>
             <div class="ep-body">
               {#if editingEp === ep.id}
                 <div class="rename">
                   <input bind:value={editTitle} />
-                  <button class="btn sm primary" disabled={busy} on:click={saveRename}>Save</button>
-                  <button class="btn sm" on:click={() => (editingEp = '')}>Cancel</button>
+                  <button class="btn-primary sm" disabled={busy} on:click={saveRename}>Save</button>
+                  <button class="btn-ghost sm" on:click={() => (editingEp = '')}>Cancel</button>
                 </div>
               {:else}
-                <b>{ep.title}</b>
-                <button class="link" on:click={() => startRename(ep)}>rename</button>
-                <button class="link" on:click={() => (thumbEp = ep)}>thumbnail</button>
+                <div class="ep-title">
+                  <b>{ep.title}</b>
+                  <button class="link" on:click={() => startRename(ep)}><Icon name="edit" size={13} /> rename</button>
+                  <button class="link" on:click={() => (thumbEp = ep)}><Icon name="sparkles" size={13} /> thumbnail</button>
+                </div>
               {/if}
               <div class="chips">
-                <span class="chip s-{ep.status}">{ep.status}</span>
-                <span class="chip">{fmtDuration(ep.duration_seconds)}</span>
-                {#if !ep.has_remote_video}<span class="chip warn">no video uploaded</span>{/if}
+                <span class="chip s-{ep.status}"><span class="c-dot"></span>{ep.status}</span>
+                <span class="chip"><Icon name="clock" size={12} /> {fmtDuration(ep.duration_seconds)}</span>
+                {#if !ep.has_remote_video}<span class="chip warn"><Icon name="alert" size={12} /> no video uploaded</span>{/if}
               </div>
             </div>
           </div>
@@ -383,103 +436,189 @@ About: ${epDescription.trim()}` : ''}`}
           }} />
       {/if}
       <p class="foot-note">
-        To delete an episode or its Bunny video permanently, use the
-        <a href="/admin/content">Content Library</a>.
+        <Icon name="info" size={14} />
+        <span>To delete an episode or its Bunny video permanently, use the
+        <a href="/admin/content">Content Library</a>.</span>
       </p>
     {/if}
   {/if}
 </div>
 
 <style>
-  .page { max-width: 820px; margin: 0 auto; padding-bottom: 4rem; }
-  .breadcrumb { font-size: 0.83rem; margin-bottom: 1rem; }
-  .breadcrumb a { color: var(--accent); text-decoration: none; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start;
-          gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
-  .head-actions { display: flex; align-items: center; gap: 0.6rem; }
-  h1 { font-size: 1.5rem; font-weight: 800; margin-bottom: 0.3rem; }
-  .sub { color: var(--muted); font-size: 0.85rem; }
-  .status { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--muted);
-            border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.6rem; }
-  .status.live { color: var(--success); border-color: var(--success); }
+  .page { max-width: 880px; margin: 0 auto; }
 
-  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-               padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.25rem; }
-  .form-card.add { border-color: var(--accent); }
-  h2 { font-size: 1.1rem; font-weight: 700; }
-  h3 { font-size: 0.98rem; font-weight: 700; }
-  label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.82rem; color: var(--muted); flex: 1; }
-  input, select { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 6px; padding: 0.55rem 0.75rem; font-size: 0.88rem; outline: none;
-    font-family: inherit; width: 100%; }
-  input:focus, select:focus { border-color: var(--accent); }
+  /* ---------- header ---------- */
+  .head { display: flex; justify-content: space-between; align-items: flex-end; gap: 1.25rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  .head-copy { min-width: 0; }
+  .eyebrow { color: var(--muted); font-size: 0.92rem; font-weight: 500; margin-bottom: 0.3rem; }
+  h1 { font-size: clamp(1.6rem, 1.1rem + 1.6vw, 2.3rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1.08; display: flex; align-items: center; gap: 0.6rem; }
+  .title-text { min-width: 0; overflow-wrap: anywhere; }
+  .title-mark {
+    flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
+    background: var(--tile-mint); color: var(--tile-ink); rotate: -8deg;
+    animation: pop 600ms var(--ease-out) 300ms backwards;
+  }
+  h1:hover .title-mark { rotate: 8deg; transition: rotate var(--dur-3) var(--ease-out); }
+  .meta { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.75rem; }
+  .cap { text-transform: capitalize; }
+  .head-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .status {
+    display: inline-flex; align-items: center; gap: 0.45rem; height: 34px; padding: 0 0.85rem;
+    border-radius: 999px; font-size: 0.78rem; font-weight: 700; background: var(--surface2); color: var(--muted);
+  }
+  .status.live { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+  .s-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .status.live .s-dot { animation: pulse-ring 1.6s var(--ease-out) infinite; }
+
+  /* ---------- notes ---------- */
+  .note {
+    display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.86rem; font-weight: 500;
+    padding: 0.7rem 0.95rem; border-radius: 16px; margin-bottom: 1rem; animation: rise 360ms var(--ease-out);
+  }
+  .note :global(.icon) { flex: none; margin-top: 1px; }
+  .note.bad { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+  .note.good { background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success); }
+
+  /* ---------- cards / forms ---------- */
+  .card {
+    background: var(--surface); border-radius: 28px; box-shadow: var(--shadow-sm);
+    padding: 1.4rem 1.5rem 1.5rem; display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.5rem;
+  }
+  .card.add { box-shadow: 0 0 0 2px var(--accent), var(--shadow); animation: rise 420ms var(--ease-out); }
+  .card-head { display: flex; align-items: center; gap: 0.7rem; }
+  .c-ico { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: var(--tile-ink); transition: rotate var(--dur-3) var(--ease-out); }
+  .card:hover .c-ico { rotate: -12deg; }
+  .c-ico.lilac { background: var(--tile-lilac); }
+  .c-ico.mint { background: var(--tile-mint); }
+  h2 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; }
+  h3 { font-size: 1.02rem; font-weight: 700; }
+  label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.82rem; font-weight: 500; color: var(--muted); flex: 1; min-width: 200px; }
+  input {
+    background: var(--surface2); border: 1px solid transparent; color: var(--text);
+    border-radius: 14px; padding: 0.7rem 0.9rem; font-size: 0.9rem; font-family: inherit; width: 100%;
+    transition: background-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+  }
+  input:hover { background: var(--surface3); }
+  input:focus { background: var(--surface); box-shadow: 0 0 0 2px var(--accent); outline: none; }
+  input[type='file'] { padding: 0.55rem; cursor: pointer; }
   .row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-  .btn-row { display: flex; gap: 0.6rem; }
+  .btn-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .btn-row :global(.icon), .add-toggle :global(.icon), .head-actions :global(.icon) { flex: none; }
+  .sm { height: 36px; padding: 0 0.9rem; font-size: 0.8rem; }
 
-  .info { font-size: 0.82rem; color: var(--muted); background: var(--surface2);
-          padding: 0.65rem 0.8rem; border-radius: 6px; line-height: 1.55; }
-  .hint { font-size: 0.75rem; color: var(--muted); }
-  .file-info { font-size: 0.78rem; color: var(--muted); margin-top: 0.2rem; }
-  .error { color: #e05260; font-size: 0.85rem; }
-  .ok { color: var(--success); font-size: 0.85rem; margin-bottom: 1rem; }
-  .status-msg { color: var(--gold); font-size: 0.83rem; }
+  .info {
+    display: flex; gap: 0.55rem; align-items: flex-start;
+    font-size: 0.84rem; color: var(--tile-ink); background: var(--tile-sky);
+    padding: 0.75rem 0.95rem; border-radius: 16px; line-height: 1.55;
+  }
+  .info :global(.icon) { flex: none; margin-top: 2px; }
+  .hint { font-size: 0.78rem; color: var(--muted); }
+  .file-info { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.15rem; animation: fade 300ms var(--ease-out); }
+  .mode-body { display: flex; flex-direction: column; gap: 0.75rem; animation: rise 320ms var(--ease-out); }
+  .status-msg { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); font-size: 0.84rem; font-weight: 500; }
+  .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--surface3); border-top-color: var(--accent); animation: spin 800ms linear infinite; }
+  @keyframes spin { to { rotate: 360deg; } }
 
-  .mode-toggle { display: flex; gap: 0.5rem; }
-  .mode-btn { flex: 1; padding: 0.55rem 0.8rem; background: var(--surface2);
-              border: 1px solid var(--border); border-radius: 6px; color: var(--text);
-              cursor: pointer; font-size: 0.83rem; }
-  .mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .mode-toggle { display: flex; gap: 0.3rem; padding: 0.3rem; border-radius: 999px; background: var(--surface2); }
+  .mode-btn {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+    height: 40px; padding: 0 0.8rem; border-radius: 999px; background: transparent; color: var(--muted);
+    font-size: 0.84rem; font-weight: 600;
+    transition: background-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out), box-shadow var(--dur-2);
+  }
+  .mode-btn:hover { color: var(--text); }
+  .mode-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+  .mode-btn.active :global(.icon) { animation: pop 360ms var(--ease-out); }
 
-  .progress { width: 100%; height: 22px; background: var(--surface2);
-              border-radius: 11px; overflow: hidden; position: relative; }
-  .bar { height: 100%; background: var(--accent); transition: width 0.3s ease; }
-  .pct { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-         font-size: 0.72rem; font-weight: 600; color: #fff; }
+  .progress { width: 100%; height: 26px; background: var(--surface2); border-radius: 999px; overflow: hidden; position: relative; }
+  .bar { height: 100%; background: var(--accent); border-radius: inherit; transition: width 0.3s var(--ease-out); }
+  .pct { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.74rem; font-weight: 700; color: #fff; mix-blend-mode: difference; }
 
-  .ep-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.9rem; }
+  /* ---------- episodes ---------- */
+  .ep-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.9rem; }
+  .ep-head h2 { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 1.4rem; }
+  .count { min-width: 26px; height: 24px; padding: 0 7px; border-radius: 99px; font-size: 0.78rem; display: inline-grid; place-items: center; background: var(--surface2); color: var(--text-secondary); }
+  .plus { display: inline-grid; transition: rotate var(--dur-3) var(--ease-out); }
+  .add-toggle.open .plus { rotate: 45deg; }
+  .add-toggle:hover .plus { scale: 1.15; }
+
   .ep-list { display: flex; flex-direction: column; gap: 0.6rem; }
-  .ep { display: flex; gap: 0.9rem; align-items: center; background: var(--surface);
-        border: 1px solid var(--border); border-radius: 9px; padding: 0.85rem 1rem; }
-  .ord { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; flex-shrink: 0; }
-  .arrow { background: none; border: none; color: var(--muted); font-size: 0.6rem;
-           cursor: pointer; padding: 0.1rem; line-height: 1; }
-  .arrow:hover:not(:disabled) { color: var(--accent); }
+  .ep {
+    display: flex; gap: 0.9rem; align-items: center; background: var(--surface);
+    border-radius: 22px; padding: 0.7rem 1.1rem 0.7rem 0.7rem; box-shadow: var(--shadow-sm);
+    transition: translate var(--dur-3) var(--ease-out), box-shadow var(--dur-3) var(--ease-out);
+  }
+  .ep:hover { translate: 4px 0; box-shadow: var(--shadow); }
+  .ord { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; background: var(--surface2); border-radius: 16px; padding: 0.15rem 0.2rem; }
+  .arrow {
+    width: 30px; height: 24px; display: grid; place-items: center; border-radius: 10px;
+    background: none; color: var(--muted); transition: color var(--dur-2), background-color var(--dur-2), translate var(--dur-2) var(--ease-out);
+  }
+  .arrow:hover:not(:disabled) { color: var(--text); background: var(--surface3); }
+  .arrow:first-child:hover:not(:disabled) { translate: 0 -2px; }
+  .arrow:last-child:hover:not(:disabled) { translate: 0 2px; }
   .arrow:disabled { opacity: 0.25; cursor: not-allowed; }
-  .num { font-size: 0.82rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .num { font-size: 0.85rem; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  .ep-ico { flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; color: var(--tile-ink); transition: scale var(--dur-3) var(--ease-out), rotate var(--dur-3) var(--ease-out); }
+  .ep-ico :global(svg[stroke-width='0']) { fill: currentColor; translate: 1px 0; }
+  .ep:hover .ep-ico { scale: 1.08; rotate: -8deg; }
+  .ep-ico.mint { background: var(--tile-mint); }
+  .ep-ico.butter { background: var(--tile-butter); }
+  .ep-ico.sky { background: var(--tile-sky); }
+  .ep-ico.danger { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
   .ep-body { flex: 1; min-width: 0; }
-  .ep-thumb { width: 96px; aspect-ratio: 16 / 9; flex-shrink: 0; border-radius: 6px; cursor: pointer;
-              background: var(--surface2) center / cover no-repeat; border: 1px solid var(--border);
-              display: grid; place-items: center; color: var(--muted); font-size: 1.1rem; }
-  .ep-thumb:hover { border-color: var(--accent); }
-  .thumb-field { display: grid; gap: 0.35rem; max-width: 360px; }
-  .lbl { font-size: 0.82rem; color: var(--muted); }
-  .ep-body b { font-size: 0.93rem; }
-  .rename { display: flex; gap: 0.45rem; align-items: center; }
-  .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
-  .chip { font-size: 0.7rem; color: var(--muted); background: var(--surface2);
-          border-radius: 999px; padding: 0.16rem 0.5rem; }
-  .chip.warn { color: #ffc107; }
-  .chip.s-ready { color: var(--success); }
-  .chip.s-processing { color: #ffc107; }
-  .chip.s-failed { color: #e05260; }
+  /* Episode thumbnail: opens the thumbnail studio. */
+  .ep-thumb {
+    position: relative; overflow: hidden; flex-shrink: 0; width: 96px; aspect-ratio: 16 / 9; border-radius: 12px; cursor: pointer;
+    display: grid; place-items: center; background: var(--surface2); color: var(--muted);
+    box-shadow: inset 0 0 0 1px var(--border-hover);
+    transition: box-shadow var(--dur-2), color var(--dur-2);
+  }
+  .ep-thumb:hover { box-shadow: inset 0 0 0 2px var(--accent); color: var(--text); }
+  .ep-thumb:hover :global(.thumb-media) { scale: 1.06; }
+  .thumb-field { display: grid; gap: 0.35rem; max-width: 380px; }
+  .lbl { font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); }
+  .ep-title { display: flex; align-items: baseline; gap: 0.3rem; flex-wrap: wrap; }
+  .ep-title b { font-size: 0.98rem; font-weight: 600; overflow-wrap: anywhere; }
+  .rename { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; animation: fade 240ms var(--ease-out); }
+  .rename input { flex: 1; min-width: 160px; padding: 0.5rem 0.8rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-size: 0.72rem; font-weight: 600; color: var(--muted); background: var(--surface2);
+    border-radius: 999px; padding: 0.2rem 0.6rem; text-transform: capitalize;
+  }
+  .c-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); text-transform: none; }
+  .chip.s-ready { color: var(--success); background: color-mix(in srgb, var(--success) 13%, transparent); }
+  .chip.s-processing { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); }
+  .chip.s-processing .c-dot { animation: pulse-ring 1.4s var(--ease-out) infinite; }
+  .chip.s-failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .link {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+    background: none; color: var(--muted); font-size: 0.76rem; font-weight: 600;
+    padding: 0.15rem 0.5rem; border-radius: 99px; opacity: 0.8;
+    transition: color var(--dur-2), background-color var(--dur-2), opacity var(--dur-2);
+  }
+  .ep:hover .link { opacity: 1; }
+  .link:hover { color: var(--text); background: var(--surface2); }
 
-  .btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
-         border-radius: 6px; padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600;
-         cursor: pointer; text-decoration: none; white-space: nowrap; }
-  .btn:hover:not(:disabled) { border-color: var(--accent); }
-  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .btn.sm { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
-  .link { background: none; border: none; color: var(--accent); font-size: 0.74rem;
-          cursor: pointer; padding: 0 0 0 0.5rem; font-weight: 600; }
+  /* ---------- states ---------- */
+  .state { display: flex; flex-direction: column; align-items: center; gap: 0.7rem; text-align: center; padding: 3rem 1.5rem; border-radius: 28px; background: var(--surface); }
+  .state.small { padding: 2.6rem 1rem; }
+  .state h2 { font-size: 1.25rem; }
+  .state p { color: var(--muted); }
+  .state-ico { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: var(--tile-sky); color: var(--tile-ink); animation: pop 520ms var(--ease-out); }
+  .state-ico.danger { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+  .foot-note { display: flex; gap: 0.45rem; align-items: flex-start; font-size: 0.8rem; color: var(--muted); margin-top: 1.1rem; padding-left: 0.3rem; }
+  .foot-note :global(.icon) { flex: none; margin-top: 2px; }
+  .foot-note a { color: var(--text); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 
-  .empty { text-align: center; padding: 2.5rem 1rem; background: var(--surface);
-           border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 0.88rem; }
-  .foot-note { font-size: 0.78rem; color: var(--muted); margin-top: 1rem; }
-  .foot-note a { color: var(--accent); }
-
-  .skeleton { border-radius: 10px; background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
-              background-size: 200% 100%; animation: shimmer 1.4s infinite; }
-  .skeleton.big { height: 320px; }
-  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  @media (max-width: 760px) {
+    .card { padding: 1.1rem; border-radius: 24px; }
+    .mode-toggle { flex-direction: column; border-radius: 20px; }
+    .ep { padding-right: 0.8rem; gap: 0.65rem; }
+    .ep-ico { display: none; }
+    .head-actions { width: 100%; }
+  }
 </style>

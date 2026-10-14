@@ -89,19 +89,45 @@
 </div>
 
 <style>
-  .box { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.4rem; display: grid; gap: 0.85rem; justify-items: start; }
-  .ico { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px; font-size: 1.35rem; color: #f5c518; background: rgba(245, 197, 24, 0.13); }
-  .ico.ok { color: #2ecc71; background: rgba(46, 204, 113, 0.14); }
-  .ico.warn { color: #f0a540; background: rgba(240, 165, 64, 0.14); }
-  h2 { font-size: 1.25rem; font-weight: 700; }
+  .box {
+    background: var(--surface); border-radius: 28px; box-shadow: var(--shadow-sm); padding: 1.6rem;
+    display: grid; gap: 0.9rem; justify-items: start; animation: rise 480ms var(--ease-out) backwards;
+  }
+  .ico {
+    display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; font-size: 1.35rem;
+    color: var(--tile-ink); background: var(--tile-butter); rotate: -8deg; animation: pop 560ms var(--ease-out) 200ms backwards;
+  }
+  .ico.ok { background: var(--tile-mint); }
+  .ico.warn { background: var(--tile-peach); }
+  /* A gentle pulse while the request waits on the admin. */
+  .ico.warn::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; animation: pulse-ring 1.8s var(--ease-out) infinite;
+  }
+  .ico { position: relative; }
+  h2 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
   .facts { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-  .pill { display: inline-flex; gap: 0.3rem; align-items: center; height: 24px; padding: 0 10px; border-radius: 99px; font-size: 0.76rem; font-weight: 600; background: var(--surface3); color: var(--text-secondary); }
-  .pill.ok { background: rgba(46, 204, 113, 0.14); color: #2ecc71; }
-  .muted { color: var(--muted); font-size: 0.9rem; line-height: 1.55; max-width: 65ch; }
-  .muted a { color: var(--text); text-decoration: underline; }
-  .lockline { display: flex; gap: 0.4rem; align-items: center; color: #f0a540; font-size: 0.86rem; }
-  .btn { display: inline-flex; align-items: center; height: 38px; padding: 0 1.1rem; border-radius: 8px; font-weight: 600; font-size: 0.88rem; border: 1px solid var(--border-hover); background: var(--surface2); color: var(--text); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pill {
+    display: inline-flex; gap: 0.3rem; align-items: center; height: 30px; padding: 0 12px; border-radius: 99px; font-size: 0.78rem; font-weight: 600;
+    background: var(--surface2); color: var(--text-secondary);
+    animation: pop 420ms var(--ease-out) backwards;
+  }
+  .pill:nth-child(2) { animation-delay: 60ms; } .pill:nth-child(3) { animation-delay: 120ms; }
+  .pill:nth-child(4) { animation-delay: 180ms; } .pill:nth-child(5) { animation-delay: 240ms; }
+  .pill.ok { background: var(--tile-mint); color: var(--tile-ink); }
+  .muted { color: var(--muted); font-size: 0.92rem; line-height: 1.6; max-width: 65ch; }
+  .muted a { color: var(--text); text-decoration: underline; font-weight: 600; }
+  .lockline {
+    display: flex; gap: 0.5rem; align-items: center; color: var(--tile-ink); font-size: 0.86rem; font-weight: 500;
+    background: var(--tile-butter); padding: 0.5rem 0.9rem; border-radius: 99px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; height: 44px; padding: 0 1.3rem; border-radius: 999px; font-weight: 600; font-size: 0.9rem;
+    background: var(--surface2); color: var(--text);
+    transition: background-color var(--dur-2), translate var(--dur-2) var(--ease-out), box-shadow var(--dur-2);
+  }
+  .btn:hover:not(:disabled) { background: var(--surface3); translate: 0 -1px; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: var(--shadow); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .error { color: #ff6b6b; }
+  .error { color: var(--danger); animation: wiggle 420ms var(--ease-out); }
 </style>

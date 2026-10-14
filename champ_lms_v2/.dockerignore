@@ -1,0 +1,17 @@
+# Local secrets and dev-only settings never go into an image. backend/.env
+# in particular can carry DEBUG=true and DEV_LOGIN_EMAIL, which together
+# switch on the passwordless /auth/dev-login route. Production config comes
+# from the host's environment variables instead.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Rebuilt inside the image; host copies (Windows binaries, stale output)
+# would only overwrite them.
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+backend/.venv
+backend/venv
+**/__pycache__
+**/*.pyc

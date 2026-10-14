@@ -14,6 +14,7 @@ from app.models.assessment import AssessmentAttempt
 from app.models.module import Module
 from app.models.enrollment import Enrollment
 from app.models.episode import Episode
+from app.services import content_access
 from app.services.gamification_service import GamificationService
 from app.services.bunny_storage import bunny_storage
 from app.services.thumbnails import module_thumbnail_url
@@ -498,6 +499,9 @@ async def my_upselling_track(
     filters.append(Or(*or_conditions))
 
     modules = await Module.find(*filters).sort(-Module.created_at).to_list()
+    # Same gate as the feed: never list (or leak the title of) a course the
+    # learner can't open, such as a closed canvas course they weren't added to.
+    modules = await content_access.filter_visible(modules, user)
 
     # Pull learner progress for these modules
     module_ids = [m.id for m in modules]

@@ -55,22 +55,34 @@
 </div>
 
 <style>
-  .tx { display: grid; gap: 0.5rem; }
+  .tx { display: grid; gap: 0.6rem; animation: fade 420ms var(--ease-out) backwards; }
   .tx-h { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
   .tx-h input[type='search'] {
-    flex: 1; min-width: 180px; font: inherit; font-size: 0.88rem; color: var(--text);
-    background: var(--surface); border: 1px solid var(--border-hover); border-radius: 8px; padding: 0.45rem 0.7rem;
+    flex: 1; min-width: 180px; font: inherit; font-size: 0.88rem; color: var(--text); height: 42px;
+    background: var(--surface2); border: none; border-radius: 999px; padding: 0 1rem;
+    transition: background-color var(--dur-2), box-shadow var(--dur-2) var(--ease-out);
   }
-  .follow { display: inline-flex; gap: 0.35rem; align-items: center; font-size: 0.8rem; color: var(--muted); }
+  .tx-h input[type='search']:focus { background: var(--surface); box-shadow: 0 0 0 2px var(--accent); outline: none; }
+  .follow {
+    display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+    height: 34px; padding: 0 0.8rem; border-radius: 999px; background: var(--surface2); cursor: pointer;
+  }
   .follow input { accent-color: var(--accent); }
   .src { display: inline-flex; gap: 0.3rem; align-items: center; font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
   .tx-list { position: relative; list-style: none; margin: 0; padding: 0; max-height: 380px; overflow: auto; }
   .line {
-    display: grid; grid-template-columns: 52px 1fr; gap: 0.6rem; width: 100%; text-align: left;
-    padding: 0.45rem 0.5rem; border-radius: 8px; color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5;
+    display: grid; grid-template-columns: 56px 1fr; gap: 0.6rem; width: 100%; text-align: left;
+    padding: 0.5rem 0.6rem; border-radius: 16px; color: var(--text-secondary); font-size: 0.92rem; line-height: 1.55;
+    transition: background-color var(--dur-2) var(--ease-out), color var(--dur-2);
   }
   .line:hover { background: var(--surface2); }
-  .line.active { background: rgba(229, 9, 20, 0.14); color: var(--text); }
-  .t { font-family: ui-monospace, Consolas, monospace; font-size: 0.74rem; color: var(--muted); padding-top: 0.15rem; font-variant-numeric: tabular-nums; }
+  .line:hover .t { color: var(--text); }
+  .line.active { background: var(--tile-lilac); color: var(--tile-ink); }
+  .line.active .t { background: var(--accent); color: var(--on-accent); }
+  .t {
+    font-size: 0.72rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums;
+    height: 22px; display: inline-grid; place-items: center; border-radius: 99px; background: var(--surface2);
+    transition: background-color var(--dur-2), color var(--dur-2);
+  }
   .empty { color: var(--muted); font-size: 0.88rem; padding: 0.5rem; }
 </style>

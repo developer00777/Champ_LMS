@@ -1,198 +1,97 @@
 <script lang="ts">
   import { moduleHref, type Module } from '$lib/api/client';
+  import Icon from './Icon.svelte';
+  import { tilt } from '$lib/actions/auto-motion';
   export let module: Module | null = null;
+  /** Show the upload shortcut on the empty state (admins only). */
+  export let canUpload = false;
+
+  $: hasImage = !!module?.thumbnail_url && module.thumbnail_url !== '/placeholder-thumb.svg';
 </script>
 
 {#if module}
-  <div class="hero">
-    <!-- Background with fallback gradient when no thumbnail. A text-design
-         thumbnail already carries the title, so it is shown as a poster beside
-         this title instead, over a blurred wash of its own colours. -->
-    <div class="hero-bg" class:wash={module.thumbnail_has_text} style="background-image: url({module.thumbnail_url || ''})"></div>
-    <div class="hero-overlay"></div>
-    {#if module.thumbnail_has_text && module.thumbnail_url}
-      <img class="hero-poster" src={module.thumbnail_url} alt="" />
-    {/if}
-    
-    <div class="hero-content">
-      {#if module.category}
-        <span class="badge badge-category">{module.category}</span>
-      {/if}
-      <h1>{module.title}</h1>
-      {#if module.description}
-        <p class="desc">{module.description}</p>
-      {:else}
-        <p class="desc">Start learning with this module.</p>
-      {/if}
-      <div class="hero-actions">
-        <a href={moduleHref(module)} class="btn-primary">
-          <span class="play-icon">▶</span> Play
+  <!-- Text sits on a solid surface, image on its own side: readable in both
+       themes without a dark overlay. -->
+  <article class="hero ui-rise">
+    <div class="copy">
+      <span class="eyebrow"><span class="dot"></span> Featured for you</span>
+      {#if module.category}<span class="badge badge-category">{module.category}</span>{/if}
+      <h2>{module.title}</h2>
+      <p class="desc">{module.description || 'Start learning with this module.'}</p>
+      <div class="actions">
+        <a href={moduleHref(module)} class="btn-primary play-btn">
+          <span class="play-ico"><Icon name="play" size={14} stroke={0} /></span> Start learning
         </a>
-        <a href={moduleHref(module)} class="btn-ghost">More Info</a>
+        <a href={moduleHref(module)} class="btn-ghost">Details</a>
       </div>
     </div>
-  </div>
+    <a class="art" href={moduleHref(module)} tabindex="-1" aria-hidden="true" use:tilt={{ max: 5 }}>
+      {#if hasImage}
+        <img src={module.thumbnail_url} alt="" loading="lazy" />
+      {:else}
+        <span class="art-fallback"><Icon name="film" size={54} stroke={1.4} /></span>
+      {/if}
+      {#if module.total_episodes > 1}<span class="eps">{module.total_episodes} episodes</span>{/if}
+    </a>
+  </article>
 {:else}
-  <!-- Empty hero state -->
-  <div class="hero hero-empty">
-    <div class="hero-content">
-      <h1>Welcome to Champ LMS</h1>
-      <p class="desc">Start your learning journey today.</p>
-      <div class="hero-actions">
-        <a href="/admin/upload" class="btn-primary">Upload First Video</a>
-      </div>
+  <article class="hero empty ui-rise">
+    <div class="copy">
+      <span class="eyebrow"><span class="dot"></span> Getting started</span>
+      <h2>Welcome to Champ LMS</h2>
+      <p class="desc">Your learning plan appears here as soon as courses are published.</p>
+      {#if canUpload}
+        <div class="actions">
+          <a href="/admin/upload" class="btn-primary">Upload the first video <Icon name="arrowRight" size={17} /></a>
+        </div>
+      {/if}
     </div>
-  </div>
+  </article>
 {/if}
 
 <style>
   .hero {
-    position: relative;
-    width: 100%;
-    min-height: 450px;
-    display: flex;
-    align-items: flex-end;
-    margin-bottom: 3rem;
-    border-radius: 16px;
-    overflow: hidden;
-    background: linear-gradient(135deg, var(--surface) 0%, var(--surface2) 100%);
+    display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 1.25rem; align-items: stretch;
+    padding: 0.75rem;
+    background: var(--surface); border-radius: 32px; box-shadow: var(--shadow-sm);
+    margin-bottom: 2.75rem;
   }
-  
-  .hero-bg {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    transition: transform 0.3s ease;
-  }
-  
-  .hero:hover .hero-bg {
-    transform: scale(1.02);
-  }
-
-  .hero-bg.wash, .hero:hover .hero-bg.wash {
-    filter: blur(48px) saturate(1.3);
-    opacity: 0.55;
-    transform: scale(1.25);
-  }
-
-  .hero-poster {
-    position: absolute;
-    z-index: 1;
-    right: 2.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    width: min(44%, 560px);
-    aspect-ratio: 16 / 9;
-    object-fit: cover;
-    border-radius: 12px;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  }
-
-  @media (max-width: 860px) {
-    .hero-poster { display: none; }
-  }
-  
-  .hero-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(
-      to top,
-      var(--bg) 0%,
-      rgba(10, 10, 15, 0.8) 40%,
-      rgba(10, 10, 15, 0.3) 70%,
-      transparent 100%
-    );
-    background: linear-gradient(
-      to right,
-      var(--bg) 0%,
-      rgba(10, 10, 15, 0.9) 30%,
-      rgba(10, 10, 15, 0.6) 60%,
-      rgba(10, 10, 15, 0.2) 100%
-    );
-  }
-  
-  .hero-content {
-    position: relative;
-    z-index: 2;
-    padding: 3rem 2.5rem;
-    max-width: 600px;
-  }
-  
-  h1 {
-    font-size: 2.5rem;
-    font-weight: 800;
-    line-height: 1.1;
-    margin: 0.75rem 0;
-    text-shadow: 0 2px 12px rgba(0,0,0,0.5);
-    letter-spacing: -0.02em;
-  }
-  
+  .copy { display: flex; flex-direction: column; align-items: flex-start; gap: 0.75rem; padding: 1.9rem 1.4rem 1.6rem 1.6rem; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--path); animation: pulse-ring 1.6s var(--ease-out) infinite; }
+  h2 { font-size: clamp(1.6rem, 1.1rem + 1.6vw, 2.4rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1.08; }
   .desc {
-    color: var(--muted);
-    font-size: 1rem;
-    line-height: 1.6;
-    margin-bottom: 1.5rem;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    max-width: 480px;
+    color: var(--muted); font-size: 0.98rem; line-height: 1.6; max-width: 46ch;
+    display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
-  
-  .hero-actions {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
+  .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: auto; padding-top: 0.6rem; }
+  .play-ico {
+    width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--on-accent); color: var(--accent); margin-left: -0.6rem;
+    transition: transform var(--dur-3) var(--ease-out);
   }
-  
-  .play-icon {
-    margin-right: 0.4rem;
-    font-size: 0.8em;
+  .play-ico :global(svg) { fill: currentColor; translate: 1px 0; }
+  .play-btn:hover .play-ico { transform: scale(1.15) rotate(-8deg); }
+
+  .art {
+    position: relative; display: block; overflow: hidden;
+    border-radius: 24px; min-height: 280px; background: var(--tile-sky);
   }
-  
-  .btn-primary, .btn-ghost {
-    padding: 0.7rem 1.8rem;
-    font-size: 1rem;
+  .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform 900ms var(--ease-out); }
+  .hero:hover .art img { transform: scale(1.05); }
+  .art-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--tile-ink); opacity: 0.55; }
+  .eps {
+    position: absolute; left: 14px; bottom: 14px;
+    padding: 0.35rem 0.8rem; border-radius: 99px;
+    background: var(--surface); color: var(--text); font-size: 0.78rem; font-weight: 600;
   }
-  
-  /* Empty state */
-  .hero-empty {
-    background: linear-gradient(135deg, var(--surface) 0%, var(--surface2) 50%, var(--surface) 100%);
-    background-size: 200% 200%;
-    animation: gradientShift 8s ease infinite;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-  }
-  
-  .hero-empty .hero-content {
-    max-width: 500px;
-    padding: 4rem 2rem;
-  }
-  
-  @keyframes gradientShift {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-  }
-  
-  @media (max-width: 768px) {
-    .hero {
-      min-height: 350px;
-    }
-    h1 {
-      font-size: 1.8rem;
-    }
-    .hero-content {
-      padding: 2rem 1.5rem;
-    }
+  .hero.empty { grid-template-columns: 1fr; background: var(--tile-mint); color: var(--tile-ink); }
+  .hero.empty .desc, .hero.empty .eyebrow { color: color-mix(in srgb, var(--tile-ink) 70%, transparent); }
+
+  @media (max-width: 820px) {
+    .hero { grid-template-columns: 1fr; }
+    .art { order: -1; min-height: 200px; }
+    .copy { padding: 1.1rem 0.9rem 1rem; }
   }
 </style>

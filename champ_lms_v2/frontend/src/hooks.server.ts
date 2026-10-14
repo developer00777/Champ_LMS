@@ -6,11 +6,16 @@ import type { Handle } from '@sveltejs/kit';
 // already used by vite.config.ts for local dev.
 const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:8000';
 
+// Connection-level headers belong to the client's hop, not ours. Node's fetch
+// refuses some outright: forwarding `expect: 100-continue` (sent by curl and
+// .NET clients on POSTs, never by browsers) fails the request with a 500.
+const HOP_BY_HOP = ['host', 'connection', 'keep-alive', 'expect', 'transfer-encoding', 'upgrade', 'proxy-connection', 'te', 'trailer'];
+
 export const handle: Handle = async ({ event, resolve }) => {
   if (event.url.pathname.startsWith('/api')) {
     const target = new URL(event.url.pathname.replace(/^\/api/, '') + event.url.search, API_INTERNAL_URL);
     const headers = new Headers(event.request.headers);
-    headers.delete('host');
+    for (const h of HOP_BY_HOP) headers.delete(h);
 
     // Forward the body as a stream rather than buffering it. The video
     // server-relay fallback carries files up to 1GB; an arrayBuffer() here

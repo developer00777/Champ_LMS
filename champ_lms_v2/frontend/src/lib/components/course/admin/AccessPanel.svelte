@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type AdminCourse, type AdminTestItem, type ContentKind, type ModuleAccessPeople } from '$lib/api/client';
+  import { api, type AccessPerson, type AdminCourse, type AdminTestItem, type ContentKind, type ModuleAccessPeople } from '$lib/api/client';
   import { icons } from '../icons';
+  import SortHeader from '$lib/components/SortHeader.svelte';
+  import Select from '$lib/components/Select.svelte';
+  import { ariaSort, sortRows, NO_SORT, type SortAccessors } from '$lib/utils/table-sort';
 
   export let course: AdminCourse;
   export let focusTestId: string | null = null;
@@ -9,6 +12,7 @@
 
   type Kind = 'team' | 'dept' | 'person';
   const KIND_LABEL: Record<Kind, string> = { team: 'Team', dept: 'Department', person: 'Person' };
+  const KINDS: Kind[] = ['team', 'dept', 'person'];
 
   let teams: string[] = [];
   let departments: string[] = [];
@@ -101,18 +105,36 @@
   }
 
   const count = (c: ModuleAccessPeople | null) => (c?.people ?? []).filter(p => p.can_access && p.role === 'learner' && p.is_active).length;
+
+  // The selected test's row for each person, looked up once rather than per cell.
+  $: testPerson = new Map((currentTest?.people ?? []).map(x => [x.user_id, x]));
+  let sort = NO_SORT;
+  const sortBy = (tp: Map<string, AccessPerson>): SortAccessors<AccessPerson> => ({
+    name: p => p.full_name || p.email,
+    team: p => p.team,
+    watch: p => p.can_access,
+    ask: p => !!tp.get(p.user_id)?.can_access,
+    left: p => tp.get(p.user_id)?.attempts?.left ?? 0,
+  });
+  // The test columns come and go with the test; don't keep sorting by a hidden one.
+  $: if (!currentTest && (sort.key === 'ask' || sort.key === 'left')) sort = NO_SORT;
+  $: rows = sortRows(people, sort, sortBy(testPerson));
 </script>
 
 <div class="access">
   {#if error}<p class="error">{error}</p>{/if}
   {#if loading && !watch}
-    <p class="hint">Loading who can see this course…</p>
+    <div class="acc-grid" aria-busy="true" aria-label="Loading who can see this course">
+      <div class="ui-skeleton" style="height:260px;border-radius:26px"></div>
+      <div class="ui-skeleton" style="height:260px;border-radius:26px"></div>
+    </div>
+    <div class="ui-skeleton" style="height:220px;border-radius:26px"></div>
   {:else}
     <div class="acc-grid">
-      {#each [{ kind: 'module', target: watch, title: 'Watch access', copy: 'People here can watch every episode and read the notes and transcripts, as often as they like. There is no view limit and no end date.' }, { kind: 'test', target: currentTest, title: 'Test access', copy: 'People here can see the tests and ask to take them. Each attempt still needs your approval.' }] as panel}
-        <section class="acc-panel">
+      {#each [{ kind: 'module', target: watch, title: 'Watch access', copy: 'People here can watch every episode and read the notes and transcripts, as often as they like. There is no view limit and no end date.' }, { kind: 'test', target: currentTest, title: 'Test access', copy: 'People here can see the tests and ask to take them. Each attempt still needs your approval.' }] as panel, pi}
+        <section class="acc-panel ui-rise" style="--i:{pi}">
           <div class="acc-h">
-            <h3>{panel.title}</h3>
+            <h3><span class="h-ico {panel.kind === 'test' ? 'butter' : 'sky'}">{@html panel.kind === 'test' ? icons.test : icons.eye}</span>{panel.title}</h3>
             {#if panel.kind === 'test' && !testItems.length}
               <span class="pill">No tests</span>
             {:else if count(panel.target)}
@@ -125,9 +147,8 @@
             <p class="hint">This course has no tests. Add one on the canvas and choose here who may ask to take it.</p>
           {:else}
             {#if panel.kind === 'test' && testItems.length > 1}
-              <select bind:value={testId} aria-label="Which test">
-                {#each testItems as t}<option value={t.ref_id}>{t.title}</option>{/each}
-              </select>
+              <Select bind:value={testId} ariaLabel="Which test" size="sm" shape="pill"
+                options={testItems.map(t => ({ value: t.ref_id, label: t.title }))} />
             {/if}
             <p class="copy">{panel.copy}</p>
             <div class="chips">
@@ -139,14 +160,11 @@
               {/each}
             </div>
             <div class="acc-add">
-              <select bind:value={addKind[panel.kind]} on:change={() => (addValue[panel.kind] = '')} aria-label="Add by">
-                <option value="team">Team</option><option value="dept">Department</option><option value="person">Person</option>
-              </select>
-              <select bind:value={addValue[panel.kind]} aria-label="Who">
-                {#each options(addKind[panel.kind]) as o}
-                  <option value={o}>{addKind[panel.kind] === 'person' ? personName(o) : o}</option>
-                {/each}
-              </select>
+              <Select bind:value={addKind[panel.kind]} on:change={() => (addValue[panel.kind] = '')} ariaLabel="Add by" size="sm" shape="pill"
+                options={KINDS.map(k => ({ value: k, label: KIND_LABEL[k] }))} />
+              <Select bind:value={addValue[panel.kind]} ariaLabel="Who" size="sm" shape="pill" placeholder="Nobody to add"
+                options={options(addKind[panel.kind], teams, departments, people)
+                  .map(o => ({ value: o, label: addKind[panel.kind] === 'person' ? personName(o) : o }))} />
               <button class="btn" on:click={() => add(panel.kind === 'test' ? 'test' : 'module', panel.target)}>Add</button>
             </div>
             {#if panel.kind === 'test'}
@@ -157,13 +175,23 @@
       {/each}
     </div>
 
-    <h3 class="tbl-h">What each person gets</h3>
-    <div class="table-wrap">
+    <h3 class="tbl-h ui-rise" style="--i:2">What each person gets</h3>
+    <div class="table-wrap ui-rise" style="--i:3">
       <table>
-        <thead><tr><th>Person</th><th>Team</th><th>Can watch</th>{#if currentTest}<th>Can ask for “{currentTest.title}”</th><th>Attempts left</th>{/if}</tr></thead>
+        <thead>
+          <tr>
+            <th aria-sort={ariaSort(sort, 'name')}><SortHeader field="name" bind:sort>Person</SortHeader></th>
+            <th aria-sort={ariaSort(sort, 'team')}><SortHeader field="team" bind:sort>Team</SortHeader></th>
+            <th aria-sort={ariaSort(sort, 'watch')}><SortHeader field="watch" bind:sort>Can watch</SortHeader></th>
+            {#if currentTest}
+              <th aria-sort={ariaSort(sort, 'ask')}><SortHeader field="ask" bind:sort>Can ask for “{currentTest.title}”</SortHeader></th>
+              <th aria-sort={ariaSort(sort, 'left')}><SortHeader field="left" bind:sort>Attempts left</SortHeader></th>
+            {/if}
+          </tr>
+        </thead>
         <tbody>
-          {#each people as p (p.user_id)}
-            {@const t = currentTest?.people.find(x => x.user_id === p.user_id)}
+          {#each rows as p (p.user_id)}
+            {@const t = testPerson.get(p.user_id)}
             <tr>
               <td><b>{p.full_name ?? p.email}</b></td>
               <td>{p.team ?? '—'}</td>
@@ -174,7 +202,7 @@
               {/if}
             </tr>
           {:else}
-            <tr><td colspan="5" class="hint">No learner accounts yet.</td></tr>
+            <tr><td colspan={currentTest ? 5 : 3} class="hint">No learner accounts yet.</td></tr>
           {/each}
         </tbody>
       </table>
@@ -184,27 +212,45 @@
 
 <style>
   .access { display: grid; gap: 1rem; }
+  .error { color: var(--danger); font-size: 0.86rem; padding: 0.7rem 0.9rem; border-radius: 18px; background: color-mix(in srgb, var(--danger) 12%, var(--surface)); animation: rise 320ms var(--ease-out); }
   .acc-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); }
-  .acc-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; display: grid; gap: 0.75rem; align-content: start; }
+  .acc-panel {
+    background: var(--surface); border-radius: 26px; box-shadow: var(--shadow-sm); padding: 1.2rem; display: grid; gap: 0.85rem; align-content: start;
+    transition: box-shadow var(--dur-3) var(--ease-out), translate var(--dur-3) var(--ease-out);
+  }
+  .acc-panel:hover { box-shadow: var(--shadow); translate: 0 -2px; }
   .acc-h { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-  h3 { font-size: 1.05rem; font-weight: 700; }
-  .copy { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; }
+  h3 { font-size: 1.12rem; font-weight: 700; letter-spacing: -0.015em; display: flex; align-items: center; gap: 0.55rem; }
+  .h-ico {
+    width: 34px; height: 34px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 1rem; color: var(--tile-ink); flex: none;
+    transition: rotate var(--dur-3) var(--ease-out);
+  }
+  .acc-panel:hover .h-ico { rotate: -10deg; }
+  .h-ico.sky { background: var(--tile-sky); }
+  .h-ico.butter { background: var(--tile-butter); }
+  .copy { font-size: 0.86rem; color: var(--text-secondary); line-height: 1.55; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-  .chip { display: inline-flex; align-items: center; gap: 0.4rem; height: 30px; padding: 0 0.25rem 0 0.65rem; border-radius: 99px; background: var(--surface2); font-size: 0.82rem; }
-  .chip .k { font-size: 0.64rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-  .chip button { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: var(--muted); }
-  .chip button:hover { background: var(--surface3); color: var(--text); }
-  .none { display: flex; gap: 0.4rem; align-items: center; color: #ff6b70; font-weight: 600; font-size: 0.82rem; }
-  .acc-add { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 0.4rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.4rem; height: 32px; padding: 0 0.25rem 0 0.75rem; border-radius: 99px; background: var(--surface2); font-size: 0.83rem;
+    animation: pop 340ms var(--ease-out) backwards;
+    transition: background-color var(--dur-2) var(--ease-out);
+  }
+  .chip:hover { background: var(--surface3); }
+  .chip .k { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+  .chip button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--muted); transition: background-color var(--dur-2), color var(--dur-2), rotate var(--dur-3) var(--ease-out); }
+  .chip button:hover { background: var(--surface); color: var(--danger); rotate: 90deg; }
+  .none { display: flex; gap: 0.45rem; align-items: center; height: 32px; padding: 0 0.8rem; border-radius: 99px; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); font-weight: 600; font-size: 0.82rem; }
+  .acc-add { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 0.45rem; }
   @media (max-width: 460px) { .acc-add { grid-template-columns: 1fr; } }
-  select { font: inherit; font-size: 0.85rem; color: var(--text); background: var(--bg); border: 1px solid var(--border-hover); border-radius: 8px; height: 34px; padding: 0 0.5rem; min-width: 0; }
   .start { justify-self: start; }
   .tbl-h { margin-top: 0.5rem; }
-  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .table-wrap { overflow-x: auto; border-radius: 26px; background: var(--surface); box-shadow: var(--shadow-sm); }
   table { width: 100%; min-width: 620px; border-collapse: collapse; }
-  th { text-align: left; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); }
-  td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.86rem; }
+  th { text-align: left; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 0.9rem 1.1rem 0.7rem; border-bottom: 1px solid var(--border); }
+  td { padding: 0.75rem 1.1rem; border-bottom: 1px solid var(--border); font-size: 0.87rem; transition: background-color var(--dur-2) var(--ease-out); }
+  tbody tr { animation: fade 360ms var(--ease-out) backwards; }
+  tbody tr:hover td { background: var(--surface2); }
   tr:last-child td { border-bottom: 0; }
-  .yes { color: #2ecc71; font-weight: 600; display: inline-flex; gap: 0.3rem; align-items: center; }
-  .no { color: var(--muted); }
+  .yes { color: var(--tile-ink); background: var(--tile-mint); font-weight: 600; display: inline-flex; gap: 0.3rem; align-items: center; height: 26px; padding: 0 0.65rem; border-radius: 99px; font-size: 0.78rem; }
+  .no { color: var(--muted); display: inline-flex; height: 26px; align-items: center; padding: 0 0.65rem; border-radius: 99px; background: var(--surface2); font-size: 0.78rem; }
 </style>

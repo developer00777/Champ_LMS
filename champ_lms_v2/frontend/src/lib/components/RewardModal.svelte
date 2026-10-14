@@ -17,8 +17,9 @@
     rewardQueue.shift();
   }
 
+  // Listened for on the window, so Escape works without the overlay having focus.
   function closeOnKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') dismiss();
+    if (show && e.key === 'Escape') dismiss();
   }
 
   onDestroy(() => {
@@ -26,18 +27,11 @@
   });
 </script>
 
+<svelte:window on:keydown={closeOnKey} />
+
 {#if show}
-  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
-  <div
-    class="overlay"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="reward-title"
-    tabindex="0"
-    on:click|self={dismiss}
-    on:keydown={closeOnKey}
-    transition:fade={{ duration: 180 }}
-  >
+  <!-- The backdrop is a mouse shortcut only; keyboard users close with Escape or the button. -->
+  <div class="overlay" role="presentation" on:click|self={dismiss} transition:fade={{ duration: 180 }}>
     {#if confetti.length}
       <div class="confetti">
         {#each confetti as _, i}
@@ -46,7 +40,7 @@
       </div>
     {/if}
 
-    <div class="modal" transition:scale={{ duration: 220, start: 0.9 }}>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="reward-title" transition:scale={{ duration: 220, start: 0.9 }}>
       {#if current?.level_up}
         <div class="level-up-banner">⭐ Level {current.new_level ?? '?'}!</div>
         <h2 id="reward-title">Level Up</h2>
@@ -95,7 +89,6 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.72);
-    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -152,7 +145,7 @@
     font-weight: 700;
   }
   .points { color: var(--gold); }
-  .xp { color: #c084fc; }
+  .xp { color: var(--violet); }
   .badge { color: var(--success); }
   .btn-primary {
     width: 100%;

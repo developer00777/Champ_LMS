@@ -51,6 +51,17 @@ router = APIRouter(tags=["test-series"])
 MAX_PDF_BYTES = 10 * 1024 * 1024  # 10MB — a question paper is text, not media
 
 
+def _utc(dt: datetime | None) -> datetime | None:
+    """
+    Mongo hands datetimes back without a timezone. They are UTC; say so, or a
+    browser reads them as local time and an attempt made a minute ago in India
+    shows as five and a half hours old.
+    """
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 # --------------------------------------------------------------------------
 # Schemas
 # --------------------------------------------------------------------------
@@ -166,7 +177,7 @@ def _admin_view(t: TestSeries) -> dict:
         "total_questions": len(t.questions),
         "source_filename": t.source_filename,
         "source_parser": t.source_parser,
-        "created_at": t.created_at,
+        "created_at": _utc(t.created_at),
         "questions": [
             {
                 "id": q.id,
@@ -269,13 +280,22 @@ def _questions_from_in(items: list[QuestionIn]) -> list[TestQuestion]:
         options = [o for o in q.options if o.strip()]
         if not options and (q.expected_answer or qtype == QUESTION_TYPE_WRITTEN):
             qtype = QUESTION_TYPE_WRITTEN
+        # Dropping blank options shifts the ones after them, so the answer key
+        # has to follow its option. A blank chosen answer becomes no answer
+        # (the question then reads as not scorable) rather than its neighbour.
+        correct_index = q.correct_index
+        if correct_index is not None and 0 <= correct_index < len(q.options):
+            correct_index = (
+                None if not q.options[correct_index].strip()
+                else sum(1 for o in q.options[:correct_index] if o.strip())
+            )
 
         kwargs: dict[str, Any] = {
             "question": q.question,
             "question_type": qtype,
             "options": [] if qtype == QUESTION_TYPE_WRITTEN else options,
             # A written question has no option index to be correct.
-            "correct_index": None if qtype == QUESTION_TYPE_WRITTEN else q.correct_index,
+            "correct_index": None if qtype == QUESTION_TYPE_WRITTEN else correct_index,
             "explanation": q.explanation,
             "topic": q.topic,
             "marks": max(1, q.marks),
@@ -582,7 +602,7 @@ async def list_test_series_admin(admin: Annotated[User, Depends(require_admin)])
             "pass_threshold": t.pass_threshold,
             "duration_minutes": t.duration_minutes,
             "source_filename": t.source_filename,
-            "created_at": t.created_at,
+            "created_at": _utc(t.created_at),
             "attempt_count": len(attempts),
             "average_score": round(sum(scores) / len(scores)) if scores else None,
             "pass_rate": round(sum(1 for a in attempts if a.passed) / len(attempts) * 100)
@@ -917,7 +937,7 @@ async def test_results(
             "correct_count": a.correct_count,
             "total_questions": a.total_questions,
             "passed": a.passed,
-            "submitted_at": a.submitted_at,
+            "submitted_at": _utc(a.submitted_at),
             "breakdown": a.breakdown,
             "topic_stats": _topic_stats(a.breakdown),
             "has_ai_analysis": a.ai_analysis is not None,
@@ -1396,20 +1416,25 @@ async def my_attempts(user: Annotated[User, Depends(get_current_user)]):
         -TestAttempt.submitted_at
     ).to_list()
     test_ids = list({a.test_id for a in attempts})
-    titles = {
-        t.id: t.title
+    tests = {
+        t.id: t
         for t in (await TestSeries.find(In(TestSeries.id, test_ids)).to_list() if test_ids else [])
     }
     return [
         {
             "attempt_id": a.id,
             "test_id": a.test_id,
-            "test_title": titles.get(a.test_id, "(deleted test)"),
+            "test_title": tests[a.test_id].title if a.test_id in tests else "(deleted test)",
             "score": a.score,
             "passed": a.passed,
             "correct_count": a.correct_count,
             "total_questions": a.total_questions,
-            "submitted_at": a.submitted_at,
+            # score is marks_earned / marks_total, not correct / total, so the
+            # history row shows marks too or weighted questions look wrong.
+            "marks_earned": a.marks_earned,
+            "marks_total": a.marks_total,
+            "pass_threshold": tests[a.test_id].pass_threshold if a.test_id in tests else None,
+            "submitted_at": _utc(a.submitted_at),
         }
         for a in attempts
     ]
@@ -1453,7 +1478,7 @@ async def get_attempt(
         "marks_total": attempt.marks_total,
         "correct_count": attempt.correct_count,
         "total_questions": attempt.total_questions,
-        "submitted_at": attempt.submitted_at,
+        "submitted_at": _utc(attempt.submitted_at),
         "breakdown": attempt.breakdown,
         "topic_stats": _topic_stats(attempt.breakdown),
         "ai_analysis": attempt.ai_analysis,

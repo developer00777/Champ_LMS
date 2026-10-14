@@ -16,8 +16,13 @@
 </div>
 
 <style>
-  .prose { max-width: 70ch; display: grid; gap: 0.6rem; font-size: 0.95rem; line-height: 1.65; }
-  h3 { font-size: 1.02rem; font-weight: 700; margin-top: 0.35rem; }
-  ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.25rem; }
-  .empty { color: var(--muted); }
+  .prose { max-width: 70ch; display: grid; gap: 0.65rem; font-size: 0.97rem; line-height: 1.7; animation: fade 420ms var(--ease-out) backwards; }
+  h3 { font-size: 1.12rem; font-weight: 700; letter-spacing: -0.015em; margin-top: 0.5rem; }
+  ul { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 0.35rem; }
+  li { position: relative; padding-left: 1.3rem; }
+  li::before {
+    content: ''; position: absolute; left: 0.25rem; top: 0.68em; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--path, var(--accent));
+  }
+  .empty { color: var(--muted); padding: 1rem 1.1rem; border-radius: 18px; background: var(--surface2); }
 </style>

@@ -2,6 +2,7 @@
   import { api, type CourseItemView, type AttemptResult } from '$lib/api/client';
   import { handleReward, gamification } from '$lib/stores/gamification';
   import { icons } from './icons';
+  import { countUp } from '$lib/actions/motion';
 
   export let courseId: string;
   export let item: CourseItemView;
@@ -53,14 +54,21 @@
   {:else if step < questions.length}
     {@const q = questions[step]}
     <div class="top"><span class="eyebrow">{item.title} · question {step + 1} of {questions.length}</span><span class="src">{@html icons.sparkle} AI-written</span></div>
-    <h2>{q.question}</h2>
-    <div class="opts">
-      {#each q.options as o, oi}
-        <button class="opt" class:picked={answers[step] === oi} on:click={() => (answers[step] = oi)}>
-          <span class="letter">{'ABCDEFGH'[oi]}</span>{o}
-        </button>
-      {/each}
+    <div class="steps" aria-hidden="true">
+      {#each questions as _, qi}<i class:on={qi <= step} class:ans={answers[qi] != null}></i>{/each}
     </div>
+    {#key step}
+      <div class="qwrap">
+        <h2>{q.question}</h2>
+        <div class="opts">
+          {#each q.options as o, oi}
+            <button class="opt" style="--i:{oi}" class:picked={answers[step] === oi} on:click={() => (answers[step] = oi)}>
+              <span class="letter">{'ABCDEFGH'[oi]}</span>{o}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/key}
     <div class="nav">
       <button class="btn" on:click={() => (step -= 1)} disabled={step === 0}>Back</button>
       {#if step + 1 < questions.length}
@@ -71,12 +79,12 @@
     </div>
   {:else if result}
     <span class="eyebrow">Your score</span>
-    <span class="score">{result.score}%</span>
+    <span class="score"><span use:countUp={result.score}></span>%</span>
     <span class="pill" class:ok={result.passed}>{result.passed ? 'Passed' : 'Not passed yet'} · pass mark {result.pass_threshold}%</span>
     {#if result.feedback}
       <ol class="fb">
-        {#each result.feedback as f}
-          <li class:right={f.correct}>
+        {#each result.feedback as f, fi}
+          <li class:right={f.correct} style="--i:{Math.min(fi + 1, 10)}">
             <b>{f.question}</b>
             {#if f.correct}<span class="ok">Correct: {f.correct_answer}</span>
             {:else}<span class="miss">You chose {f.your_answer ?? 'nothing'}. The answer is {f.correct_answer}.</span>{/if}
@@ -94,28 +102,61 @@
 </div>
 
 <style>
-  .box { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.4rem; display: grid; gap: 0.9rem; justify-items: start; }
-  .ico { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px; font-size: 1.35rem; color: #b596ff; background: rgba(181, 150, 255, 0.14); }
-  h2 { font-size: 1.25rem; font-weight: 700; line-height: 1.3; }
-  .muted { color: var(--muted); font-size: 0.9rem; line-height: 1.55; max-width: 65ch; }
+  .box {
+    background: var(--surface); border-radius: 28px; box-shadow: var(--shadow-sm); padding: 1.6rem;
+    display: grid; gap: 0.95rem; justify-items: start; animation: rise 480ms var(--ease-out) backwards;
+  }
+  .ico {
+    display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; font-size: 1.35rem;
+    color: var(--tile-ink); background: var(--tile-lilac); rotate: -8deg; animation: pop 560ms var(--ease-out) 200ms backwards;
+  }
+  h2 { font-size: 1.4rem; font-weight: 700; line-height: 1.3; letter-spacing: -0.02em; }
+  .muted { color: var(--muted); font-size: 0.92rem; line-height: 1.6; max-width: 65ch; }
   .top { display: flex; justify-content: space-between; gap: 1rem; width: 100%; flex-wrap: wrap; }
-  .eyebrow { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-  .src { display: inline-flex; gap: 0.3rem; align-items: center; font-size: 0.75rem; color: var(--muted); }
+  .eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .src { display: inline-flex; gap: 0.3rem; align-items: center; font-size: 0.75rem; font-weight: 600; color: var(--tile-ink); background: var(--tile-lilac); border-radius: 99px; padding: 0.2rem 0.6rem; }
+  .steps { display: flex; gap: 4px; width: 100%; }
+  .steps i { flex: 1; height: 5px; border-radius: 99px; background: var(--surface3); transition: background-color var(--dur-3) var(--ease-out); }
+  .steps i.ans { background: color-mix(in srgb, var(--accent) 45%, var(--surface3)); }
+  .steps i.on { background: var(--accent); }
+  .qwrap { display: grid; gap: 0.95rem; width: 100%; animation: q-in 380ms var(--ease-out) backwards; }
+  @keyframes q-in { from { opacity: 0; translate: 18px 0; } }
   .opts { display: grid; gap: 0.5rem; width: 100%; }
-  .opt { display: flex; gap: 0.8rem; align-items: center; width: 100%; text-align: left; padding: 0.8rem 0.9rem; border-radius: 10px; border: 1px solid var(--border-hover); background: var(--bg); font-size: 0.92rem; }
-  .opt:hover { border-color: var(--text-secondary); }
-  .opt.picked { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(229, 9, 20, 0.2); }
-  .letter { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--border-hover); font-size: 0.72rem; flex: none; }
+  .opt {
+    display: flex; gap: 0.8rem; align-items: center; width: 100%; text-align: left; padding: 0.6rem 0.9rem 0.6rem 0.6rem;
+    border-radius: 18px; background: var(--surface2); font-size: 0.94rem;
+    animation: rise 380ms var(--ease-out) backwards; animation-delay: calc(80ms + var(--i) * 50ms);
+    transition: background-color var(--dur-2) var(--ease-out), translate var(--dur-2) var(--ease-out), box-shadow var(--dur-2);
+  }
+  .opt:hover { background: var(--surface3); translate: 3px 0; }
+  .opt.picked { background: var(--tile-lilac); color: var(--tile-ink); box-shadow: inset 0 0 0 2px var(--accent); }
+  .letter {
+    display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--surface);
+    font-size: 0.78rem; font-weight: 700; flex: none; transition: background-color var(--dur-2), color var(--dur-2);
+  }
+  .opt.picked .letter { background: var(--accent); color: var(--on-accent); animation: pop 360ms var(--ease-out); }
   .nav { display: flex; gap: 0.5rem; justify-content: flex-end; width: 100%; flex-wrap: wrap; }
-  .btn { height: 38px; padding: 0 1.1rem; border-radius: 8px; font-weight: 600; font-size: 0.88rem; border: 1px solid var(--border-hover); background: var(--surface2); color: var(--text); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn {
+    display: inline-flex; align-items: center; height: 42px; padding: 0 1.2rem; border-radius: 999px; font-weight: 600; font-size: 0.88rem;
+    background: var(--surface2); color: var(--text);
+    transition: background-color var(--dur-2), translate var(--dur-2) var(--ease-out);
+  }
+  .btn:hover:not(:disabled) { background: var(--surface3); translate: 0 -1px; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .pill { display: inline-flex; height: 24px; align-items: center; padding: 0 10px; border-radius: 99px; font-size: 0.76rem; font-weight: 600; background: rgba(240, 165, 64, 0.14); color: #f0a540; }
-  .pill.ok { background: rgba(46, 204, 113, 0.14); color: #2ecc71; }
-  .score { font-size: 3.2rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-  .fb { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.6rem; width: 100%; }
-  .fb li { display: grid; gap: 0.15rem; font-size: 0.88rem; }
-  .fb .ok { color: #2ecc71; }
-  .fb .miss { color: #f0a540; }
-  .error { color: #ff6b6b; }
+  .pill { display: inline-flex; height: 30px; align-items: center; padding: 0 12px; border-radius: 99px; font-size: 0.78rem; font-weight: 600; background: var(--tile-butter); color: var(--tile-ink); animation: pop 420ms var(--ease-out) 200ms backwards; }
+  .pill.ok { background: var(--tile-mint); }
+  .score { font-size: 3.6rem; font-weight: 700; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; animation: pop 600ms var(--ease-out) backwards; }
+  .fb { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; width: 100%; }
+  .fb li {
+    display: grid; gap: 0.2rem; font-size: 0.88rem; padding: 0.75rem 0.95rem; border-radius: 18px;
+    background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+    animation: rise 420ms var(--ease-out) backwards; animation-delay: calc(var(--i) * 60ms);
+  }
+  .fb li.right { background: var(--tile-mint); color: var(--tile-ink); }
+  .fb li.right .muted { color: inherit; opacity: 0.72; }
+  .fb .ok { color: inherit; font-weight: 600; }
+  .fb .miss { color: var(--text); font-weight: 500; }
+  .error { color: var(--danger); animation: wiggle 420ms var(--ease-out); }
 </style>

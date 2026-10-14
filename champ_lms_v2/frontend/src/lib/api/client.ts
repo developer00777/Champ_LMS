@@ -26,9 +26,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, err.detail ?? 'Request failed');
+    throw new ApiError(res.status, detailMessage(err.detail, 'Request failed'), err.detail);
   }
   return res.json();
+}
+
+// FastAPI's `detail` is a string for HTTPException, a list of
+// {loc, msg} objects for 422 validation errors, and sometimes an object
+// with a `message` (e.g. a rejected bulk upload). Always show readable text.
+function detailMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d: any) => (typeof d === 'string' ? d : d?.msg ? `${(d.loc ?? []).filter((p: unknown) => p !== 'body').join('.')}${d.loc?.length > 1 ? ': ' : ''}${d.msg}` : ''))
+      .filter(Boolean);
+    if (msgs.length) return msgs.join('; ');
+  }
+  if (detail && typeof detail === 'object' && typeof (detail as any).message === 'string') return (detail as any).message;
+  return fallback;
 }
 
 export const api = {
@@ -41,6 +56,8 @@ export const api = {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
   },
+  // Local dev only — the backend 404s this unless DEBUG and DEV_LOGIN_EMAIL are set.
+  devLogin: () => request<{ access_token: string }>('/auth/dev-login', { method: 'POST' }),
   me: () => request<User>('/auth/me'),
   updateProfile: (body: { full_name?: string }) =>
     request<{ id: string; full_name: string | null; employee_code: string | null; avatar_url: string | null }>(
@@ -57,7 +74,7 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+      throw new ApiError(res.status, detailMessage(err.detail, 'Upload failed'), err.detail);
     }
     return res.json();
   },
@@ -182,7 +199,9 @@ export const api = {
   xpHistory: (limit = 20) => request<XpEvent[]>(`/me/xp-history?limit=${limit}`),
   quests: () => request<Quest[]>('/quests/me'),
   upsellingTrack: () => request<UpskillingTrack>('/me/upselling-track'),
-  activityFeed: (limit = 20) => request<ActivityItem[]>(`/activity/recent?limit=${limit}`),
+  // The endpoint wraps the list: { entries: [...] }.
+  activityFeed: (limit = 20) =>
+    request<{ entries: ActivityItem[] }>(`/activity/recent?limit=${limit}`).then((r) => r?.entries ?? []),
   shareAchievement: (type: string, refId: string) =>
     request<SharePayload>('/share/achievement', {
       method: 'POST',
@@ -276,7 +295,7 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+      throw new ApiError(res.status, detailMessage(err.detail, 'Upload failed'), err.detail);
     }
     return res.json();
   },
@@ -304,7 +323,7 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+      throw new ApiError(res.status, detailMessage(err.detail, 'Upload failed'), err.detail);
     }
     return res.json();
   },
@@ -384,7 +403,7 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new ApiError(res.status, err.detail ?? 'Transcription failed');
+      throw new ApiError(res.status, detailMessage(err.detail, 'Transcription failed'), err.detail);
     }
     return res.json();
   },
@@ -428,7 +447,7 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new ApiError(res.status, err.detail ?? 'Upload failed');
+      throw new ApiError(res.status, detailMessage(err.detail, 'Upload failed'), err.detail);
     }
     return res.json();
   },
@@ -632,7 +651,8 @@ export interface TimeLimitSuggestions {
     current_seconds: number | null; suggested_seconds: number; why: string | null;
   }[];
   applied: boolean;
-  applied_count: number;
+  // Absent when every question already had a limit (only `message` is sent).
+  applied_count?: number;
   message?: string;
 }
 
@@ -654,8 +674,11 @@ export interface ModuleAudienceOut {
   title: string; category: string | null; is_published: boolean;
   audience_teams: string[]; audience_departments: string[];
   target_roles: string[]; required_for_teams: string[];
-  // false = open to everyone; true = limited to the listed audience
+  // false = no audience set; true = limited to the listed audience
   is_restricted: boolean;
+  // "closed" (canvas courses and their tests): an empty audience means nobody,
+  // not everyone, so unrestricted + closed is visible to no learner.
+  access_mode?: 'open' | 'closed';
   // Tests only: legacy single-department targeting, and paper size.
   department?: string | null;
   total_questions?: number;
@@ -673,6 +696,8 @@ export interface AttemptStatus {
   allowed: number | null;
   left: number | null;
   exhausted: boolean;
+  // Approval-gated tests start everyone at 0; only granted attempts count.
+  requires_approval?: boolean;
 }
 export interface AttemptGrantRow {
   grant_id: string; user_id: string; full_name: string | null;
@@ -735,40 +760,55 @@ export interface RewardSummary {
   level_up?: boolean;
   new_level?: number;
 }
+// Shape of GET /me/level. xp_to_next_level is the XP still *remaining*;
+// the level's band runs from current_level_xp to next_level_xp.
 export interface LevelInfo {
-  level: number; xp: number; xp_to_next_level: number;
-  tier: string; next_tier: string | null;
+  level: number; xp: number; tier: string;
+  current_level_xp: number; next_level_xp: number; xp_to_next_level: number;
+  next_tier?: string | null;
 }
+// Shape of GET /me/xp-history. The backend sends no id, so never key a list on one.
 export interface XpEvent {
-  id: string; reason: string; amount: number;
-  created_at: string; ref_id?: string | null;
+  reason: string; amount: number; created_at: string;
+  ref_type?: string | null; ref_id?: string | null;
 }
+// Shape of GET /quests/me (routers/gamification.py my_quests).
 export interface Quest {
-  quest_id: string; title: string; description: string | null;
+  quest_id: string; key?: string; title: string; description?: string | null;
   scope: 'daily' | 'weekly' | 'monthly';
+  period_key?: string;
   target: number; progress: number; completed: boolean;
-  xp_reward: number; points_reward: number;
+  completed_at?: string | null;
+  reward_xp: number; reward_points: number;
+  just_rewarded?: boolean;
 }
+// Shape of GET /me/upselling-track (routers/gamification.py my_upselling_track).
 export interface UpskillingTrack {
-  type: string; track: string;
-  total_modules: number; mastered_modules: number;
+  type: string; track: string; user_department?: string | null;
+  total_modules: number; completed_modules?: number; mastered_modules: number;
   mastery_percentage: number;
   modules: {
     module_id: string; title: string;
+    category?: string | null; description?: string | null;
+    thumbnail_url?: string | null; total_episodes?: number;
     status: 'not_started' | 'in_progress' | 'completed' | 'mastered';
+    // Enrollment completion_percentage: a float, round before showing it.
     progress: number;
+    completed?: boolean; mastered?: boolean;
   }[];
   rank_in_department: number;
+  department_size?: number;
 }
 export interface SharePayload {
   type: string; ref_id: string; user_name: string;
   share_text: string; share_url: string;
   badge?: string;
 }
+// One entry of GET /activity/recent.
 export interface ActivityItem {
-  id: string; type: string; message: string;
-  points?: number; xp?: number; created_at: string;
-  metadata?: Record<string, any>;
+  type: string; user_id: string; full_name: string | null; department: string | null;
+  module_id: string; module_title: string; module_category: string | null;
+  completed_at: string | null;
 }
 export interface Module {
   id: string; title: string; description: string | null;
@@ -1066,15 +1106,32 @@ export interface ModuleEditBody {
 }
 
 // * Test Series types
+// One question as /admin/test-series returns and accepts it (QuestionIn /
+// _admin_view in routers/test_series.py). A "written" question has no options
+// or correct_index: the AI grades the typed answer, so it is always scorable.
 export interface TestQuestionDraft {
   id?: string;
   question: string;
+  question_type?: 'mcq' | 'written';
   options: string[];
   correct_index: number | null;
   explanation: string | null;
   topic: string | null;
   marks: number;
+  expected_answer?: string | null;
+  max_words?: number | null;
+  time_limit_seconds?: number | null;
+  time_limit_source?: string | null;
   scorable?: boolean;
+}
+// Mirrors TestQuestion.scorable on the backend, judged as the question will be
+// saved: blank options are dropped on save, so they don't count, and a blank
+// option can't be the right answer.
+export function isScorable(q: TestQuestionDraft): boolean {
+  if (q.question_type === 'written') return !!q.question?.trim();
+  const i = q.correct_index;
+  return i !== null && i !== undefined && i >= 0 && i < q.options.length
+    && !!q.options[i]?.trim() && q.options.filter((o) => o.trim()).length >= 2;
 }
 export interface ParsedPdf {
   source_filename: string | null;
@@ -1190,12 +1247,19 @@ export interface ProctoringReport {
   event_count: number;
   events?: ProctorEvent[];
 }
+// One graded question in an attempt (submit_test in routers/test_series.py).
+// Written questions have no options/correct_index; correct_answer is the
+// reference answer (may be null) and the AI's verdict is in ai_feedback.
 export interface BreakdownRow {
   question_id: string; question: string; options: string[];
+  question_type?: 'mcq' | 'written';
   your_index: number | null; your_answer: string | null;
-  correct_index: number; correct_answer: string;
+  correct_index: number | null; correct_answer: string | null;
   correct: boolean; explanation: string | null;
   topic: string | null; marks: number;
+  awarded?: number;
+  ai_feedback?: string | null;
+  graded_by?: 'auto' | 'ai' | 'skipped' | 'ungraded';
 }
 export interface TopicStat { correct: number; total: number; accuracy: number; }
 export interface TestResult {
@@ -1230,6 +1294,8 @@ export interface MyAttempt {
   attempt_id: string; test_id: string; test_title: string;
   score: number; passed: boolean;
   correct_count: number; total_questions: number; submitted_at: string;
+  // Optional: older API deploys don't send these yet.
+  marks_earned?: number; marks_total?: number; pass_threshold?: number | null;
 }
 export interface TestResultRow {
   attempt_id: string; user_id: string;

@@ -5,6 +5,25 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Set the theme before first paint so a dark-mode user never sees a
+         white flash. Mirrors lib/stores/theme.ts. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('champ_theme');
+          var dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          // Animations stay on unless switched off in the app (lib/stores/motion.ts).
+          document.documentElement.dataset.motion = localStorage.getItem('champ_motion') === 'reduced' ? 'reduced' : 'full';
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+          document.documentElement.dataset.motion = 'full';
+        }
+      })();
+    </script>
+    <link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+    <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" />
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

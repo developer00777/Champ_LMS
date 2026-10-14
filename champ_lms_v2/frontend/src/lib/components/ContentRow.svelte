@@ -1,5 +1,7 @@
 <script lang="ts">
   import VideoCard from './VideoCard.svelte';
+  import Icon from './Icon.svelte';
+  import { reveal } from '$lib/actions/motion';
   import type { Module } from '$lib/api/client';
 
   export let title: string;
@@ -16,124 +18,55 @@
     canScrollRight = rowEl.scrollLeft < (rowEl.scrollWidth - rowEl.clientWidth - 10);
   }
 
-  function scrollLeft() { 
-    rowEl?.scrollBy({ left: -800, behavior: 'smooth' }); 
-    setTimeout(updateScrollButtons, 300);
-  }
-  
-  function scrollRight() { 
-    rowEl?.scrollBy({ left: 800, behavior: 'smooth' }); 
-    setTimeout(updateScrollButtons, 300);
+  function scrollByDir(dir: 1 | -1) {
+    rowEl?.scrollBy({ left: dir * Math.max(300, rowEl.clientWidth * 0.8), behavior: 'smooth' });
+    setTimeout(updateScrollButtons, 350);
   }
 </script>
 
-<section class="row">
+<section class="row" use:reveal>
   <div class="row-header">
-    <h2 class="row-title">{title}</h2>
+    <h2 class="row-title">{title} <span class="count">{modules.length}</span></h2>
     <div class="scroll-btns">
-      <button 
-        on:click={scrollLeft} 
-        aria-label="Scroll left"
-        class:disabled={!canScrollLeft}
-      >‹</button>
-      <button 
-        on:click={scrollRight} 
-        aria-label="Scroll right"
-        class:disabled={!canScrollRight}
-      >›</button>
+      <button class="ui-round" on:click={() => scrollByDir(-1)} aria-label="Scroll left" disabled={!canScrollLeft}>
+        <Icon name="chevronLeft" size={18} />
+      </button>
+      <button class="ui-round ink" on:click={() => scrollByDir(1)} aria-label="Scroll right" disabled={!canScrollRight}>
+        <Icon name="chevronRight" size={18} />
+      </button>
     </div>
   </div>
-  <div class="cards-wrapper">
-    <div class="cards" bind:this={rowEl} on:scroll={updateScrollButtons}>
-      {#each modules as mod}
+  <div class="cards" bind:this={rowEl} on:scroll={updateScrollButtons}>
+    {#each modules as mod, i (mod.id)}
+      <div class="slot ui-rise" style="--i:{Math.min(i, 8)}">
         <VideoCard module={mod} progress={progressMap[mod.id] ?? 0} />
-      {/each}
-    </div>
+      </div>
+    {/each}
   </div>
 </section>
 
 <style>
-  .row { 
-    margin: 0 0 3rem;
+  .row { margin: 0 0 2.75rem; }
+  .row-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.9rem; }
+  .row-title { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: center; gap: 0.6rem; }
+  .count {
+    font-size: 0.75rem; font-weight: 700; padding: 0.15rem 0.55rem; border-radius: 99px;
+    background: var(--surface2); color: var(--muted);
   }
-  
-  .row-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1rem;
-    padding: 0 0.2rem;
-  }
-  
-  .row-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: var(--text);
-    letter-spacing: -0.01em;
-  }
-  
-  .scroll-btns { 
-    display: flex; 
-    gap: 0.5rem; 
-  }
-  
-  .scroll-btns button {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: 50%;
-    font-size: 1.3rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    cursor: pointer;
-  }
-  
-  .scroll-btns button:hover:not(.disabled) { 
-    background: var(--surface2);
-    border-color: var(--muted);
-    transform: scale(1.05);
-  }
-  
-  .scroll-btns button.disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-  
-  .cards-wrapper {
-    position: relative;
-    margin: 0 -2rem;
-    padding: 0 2rem;
-  }
-  
+  .scroll-btns { display: flex; gap: 0.45rem; }
+  .scroll-btns button:disabled { opacity: 0.35; transform: none; }
+
   .cards {
-    display: flex;
-    gap: 1rem;
-    overflow-x: auto;
-    padding: 0.5rem 0.2rem 1rem;
-    scrollbar-width: none;
-    scroll-snap-type: x mandatory;
+    display: flex; align-items: stretch; gap: 1rem; overflow-x: auto;
+    /* Room for the hover lift and shadow, which overflow would otherwise clip. */
+    padding: 0.6rem 0.4rem 1.4rem; margin: -0.6rem -0.4rem -0.8rem;
+    scrollbar-width: none; scroll-snap-type: x proximity;
   }
-  
-  .cards::-webkit-scrollbar { 
-    display: none; 
-  }
-  
-  .cards > :global(*) {
-    scroll-snap-align: start;
-  }
-  
+  .cards::-webkit-scrollbar { display: none; }
+  /* Slots stretch to the tallest card so the whole row is one height. */
+  .slot { scroll-snap-align: start; flex-shrink: 0; display: flex; }
+
   @media (max-width: 768px) {
-    .row-title {
-      font-size: 1.1rem;
-    }
-    
-    .cards-wrapper {
-      margin: 0 -1rem;
-      padding: 0 1rem;
-    }
+    .row-title { font-size: 1.15rem; }
   }
 </style>

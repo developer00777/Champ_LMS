@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     admin_email: str = ""
     admin_password: str = ""
 
+    # Local-only passwordless sign-in (POST /auth/dev-login) as this existing
+    # account. Ignored unless DEBUG=true AND this is set, so production
+    # (DEBUG unset, no DEV_LOGIN_EMAIL) is unaffected.
+    dev_login_email: str = ""
+
     # Database — set MONGODB_URL directly, or rely on Railway's MongoDB
     # plugin, which injects MONGO_URL instead (picked up as a fallback
     # below since the plugin's variable name isn't ours to control).

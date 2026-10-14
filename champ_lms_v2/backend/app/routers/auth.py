@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
+from app.core.config import get_settings
 from app.models.user import User
 from app.services.bunny_storage import bunny_storage
 
@@ -78,6 +79,22 @@ async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
     # * must_change_password lets the client route straight to the change form
     # * after a first sign-in with an admin-issued password.
     return {"access_token": token, "must_change_password": user.must_change_password}
+
+
+@router.post("/dev-login", response_model=TokenResponse, include_in_schema=False)
+async def dev_login():
+    """
+    Passwordless sign-in as the existing DEV_LOGIN_EMAIL account, for local
+    dev only. Answers 404 unless DEBUG=true and DEV_LOGIN_EMAIL is set, so on
+    the live server the route behaves as if it didn't exist.
+    """
+    settings = get_settings()
+    if not (settings.debug and settings.dev_login_email):
+        raise HTTPException(status_code=404, detail="Not Found")
+    user = await User.find_one(User.email == settings.dev_login_email)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return {"access_token": create_access_token({"sub": user.id})}
 
 
 @router.get("/me", response_model=UserOut)

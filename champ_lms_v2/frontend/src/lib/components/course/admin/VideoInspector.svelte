@@ -6,6 +6,7 @@
   import { icons } from '../icons';
   import VideoEditor from './VideoEditor.svelte';
   import ThumbnailStudio from '$lib/components/ThumbnailStudio.svelte';
+  import Thumb from '$lib/components/Thumb.svelte';
 
   export let item: AdminVideoItem;
   export let courseId: string;
@@ -123,7 +124,8 @@
 </script>
 
 <div class="insp-body">
-  <div class="poster" style={item.thumbnail_url ? `background-image:url(${item.thumbnail_url})` : ''}>
+  <div class="poster">
+    {#if item.thumbnail_url}<Thumb src={item.thumbnail_url} eager />{/if}
     <span class="poster-ico">{@html icons.play}</span>
     {#if item.duration_seconds}<span class="dur">{clock(item.duration_seconds)}</span>{/if}
   </div>
