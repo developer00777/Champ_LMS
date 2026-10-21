@@ -1,4 +1,5 @@
 import type { Handle } from '@sveltejs/kit';
+import { blockedResponse, clientIp, ipAllowlistEnabled, isAllowedIp, isExemptPath } from '$lib/server/ip-allowlist';
 
 // In the combined container, FastAPI runs internally on this port and is
 // never exposed directly — the SvelteKit Node server is the only process
@@ -12,6 +13,17 @@ const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:8000'
 const HOP_BY_HOP = ['host', 'connection', 'keep-alive', 'expect', 'transfer-encoding', 'upgrade', 'proxy-connection', 'te', 'trailer'];
 
 export const handle: Handle = async ({ event, resolve }) => {
+  if (event.url.pathname === '/healthz') {
+    return new Response('ok', { headers: { 'cache-control': 'no-store' } });
+  }
+
+  if (ipAllowlistEnabled && !isExemptPath(event.url.pathname)) {
+    const ip = clientIp(event.request.headers, () => event.getClientAddress());
+    if (!isAllowedIp(ip)) {
+      return blockedResponse(ip, event.url.pathname.startsWith('/api'));
+    }
+  }
+
   if (event.url.pathname.startsWith('/api')) {
     const target = new URL(event.url.pathname.replace(/^\/api/, '') + event.url.search, API_INTERNAL_URL);
     const headers = new Headers(event.request.headers);
