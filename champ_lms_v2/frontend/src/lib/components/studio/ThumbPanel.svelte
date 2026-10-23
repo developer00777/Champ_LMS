@@ -70,5 +70,6 @@
 
 <style>
   .shot { width: 100%; border-radius: 8px; border: 1px solid var(--st-line); display: block; }
-  .cur { aspect-ratio: 16/9; border-radius: 8px; overflow: hidden; background: var(--st-deep); display: grid; place-items: center; border: 1px solid var(--st-line); }
+  /* Thumb fills its positioned parent; without this it fills the whole studio. */
+  .cur { position: relative; aspect-ratio: 16/9; border-radius: 8px; overflow: hidden; background: var(--st-deep); display: grid; place-items: center; border: 1px solid var(--st-line); }
 </style>
