@@ -255,11 +255,27 @@
     { id: 'details', label: 'Details', icon: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 11h14M5 16h9"/></svg>' },
     { id: 'thumb', label: 'Thumbnail', icon: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="15.5" cy="9.5" r="1.5"/></svg>' },
   ];
+
+  // The studio opens from inside sticky side panels and the course canvas,
+  // which trap z-index; on the body it always sits above the page. The page
+  // underneath is held still while it's open, so nothing drifts behind it.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    const html = document.documentElement;
+    const before = [html.style.overflow, document.body.style.overflow];
+    html.style.overflow = document.body.style.overflow = 'hidden';
+    return {
+      destroy() {
+        node.remove();
+        [html.style.overflow, document.body.style.overflow] = before;
+      },
+    };
+  }
 </script>
 
 <svelte:window on:keydown={onKey} />
 
-<div class="studio" role="dialog" aria-modal="true" aria-label="Video studio">
+<div class="studio" role="dialog" aria-modal="true" aria-label="Video studio" use:portal>
     <header class="top">
       <button class="icon" on:click={close} aria-label="Close the studio" title="Close (Esc)">{@html icons.x}</button>
       <div class="ttl">
@@ -396,7 +412,7 @@
   .studio {
     --st-bg: #0e0f13; --st-panel: #15161c; --st-deep: #0a0b0e; --st-raise: #1e2028; --st-line: #2a2c36;
     --st-text: #ececf1; --st-muted: #9a9ba8; --st-hot: #ff3b45;
-    position: fixed; inset: 0; z-index: 400; background: var(--st-bg); color: var(--st-text);
+    position: fixed; inset: 0; z-index: 1000; background: var(--st-bg); color: var(--st-text);
     display: grid; grid-template-rows: auto 1fr auto; font-size: 0.86rem; color-scheme: dark;
   }
 
@@ -411,7 +427,9 @@
   .icon:disabled { opacity: 0.35; }
 
   .main { display: grid; grid-template-columns: 76px 360px 1fr; min-height: 0; }
-  .rail { display: grid; align-content: start; gap: 2px; padding: 0.5rem 0.35rem; border-right: 1px solid var(--st-line); background: var(--st-panel); overflow-y: auto; }
+  .rail { display: grid; align-content: start; gap: 2px; padding: 0.5rem 0.35rem; border-right: 1px solid var(--st-line); background: var(--st-panel); overflow-y: auto; scrollbar-width: none; }
+  .rail::-webkit-scrollbar { display: none; }
+  .studio :global(*) { scrollbar-width: thin; scrollbar-color: #3a3c48 transparent; }
   .rail button { display: grid; justify-items: center; gap: 0.2rem; padding: 0.5rem 0.2rem; border-radius: 9px; color: var(--st-muted); font-size: 0.66rem; font-weight: 600; }
   .rail button:hover { color: var(--st-text); background: var(--st-raise); }
   .rail button.on { color: #fff; background: var(--st-raise); box-shadow: inset 2px 0 0 var(--st-hot); }
@@ -455,6 +473,11 @@
   .help dt { font-family: ui-monospace, Consolas, monospace; color: #fff; }
   .help dd { margin: 0; color: var(--st-muted); }
 
+  /* Short screens: a tighter rail, so every tool fits without scrolling. */
+  @media (max-height: 860px) {
+    .rail button { padding: 0.3rem 0.2rem; gap: 0.1rem; font-size: 0.62rem; }
+    .ri { font-size: 1.05rem; }
+  }
   @media (max-width: 1100px) {
     .main { grid-template-columns: 64px 300px 1fr; }
   }

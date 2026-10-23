@@ -80,6 +80,6 @@
     border: 1px solid var(--border-hover); background: var(--surface2); color: var(--text); font-weight: 600; font-size: 0.78rem;
   }
   .tf-btn:hover { background: var(--surface3); }
-  .tf-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tf-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .tf-btn.primary:hover { background: var(--accent-hover); }
 </style>

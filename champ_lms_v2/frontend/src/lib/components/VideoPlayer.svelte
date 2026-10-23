@@ -581,7 +581,7 @@
   .otool:disabled { opacity: 0.5; cursor: not-allowed; }
   .otool .count {
     min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; display: grid; place-items: center;
-    background: var(--accent); color: #fff; font-size: 0.68rem;
+    background: var(--accent); color: var(--on-accent); font-size: 0.68rem;
   }
   /* Overlays and captions (EditedLayer) are sized to the player's width. */
   .player-wrap { container-type: inline-size; }

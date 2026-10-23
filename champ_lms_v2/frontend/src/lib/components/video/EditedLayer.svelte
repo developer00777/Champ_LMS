@@ -141,8 +141,9 @@
   .pre-bold .line { text-transform: uppercase; }
   .pre-pop .w { display: inline-block; transition: transform 120ms, background-color 120ms, color 120ms; border-radius: 0.2em; padding: 0 0.08em; }
   .pre-pop .w.now { background: var(--cap-hi, #ffd23f); color: #111; -webkit-text-stroke: 0; transform: scale(1.12) rotate(-1.5deg); }
-  .pre-karaoke .w { opacity: 0.45; transition: color 120ms, opacity 120ms; }
-  .pre-karaoke .w.said, .pre-karaoke .w.now { opacity: 1; }
+  /* Words still to come are dimmed in colour, not faded, so their outline keeps them readable on a light slide. */
+  .pre-karaoke .w { color: color-mix(in srgb, var(--cap-color, #fff) 50%, #6b6b75); transition: color 120ms; }
+  .pre-karaoke .w.said { color: var(--cap-color, #fff); }
   .pre-karaoke .w.now { color: var(--cap-hi, #7ef0a8); }
 
   /* ---- brand mark ---- */

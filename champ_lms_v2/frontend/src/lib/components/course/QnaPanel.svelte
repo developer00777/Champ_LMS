@@ -187,7 +187,7 @@
   .reply { display: grid; gap: 0.4rem; margin-top: 0.2rem; }
   .btn { display: inline-flex; align-items: center; gap: 0.35rem; height: 32px; padding: 0 0.9rem; border-radius: 8px; border: 1px solid var(--border-hover); background: var(--surface2); color: var(--text); font-weight: 600; font-size: 0.82rem; }
   .btn.sm { height: 28px; padding: 0 0.7rem; font-size: 0.78rem; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .btn.ghost { background: transparent; }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .icon-btn { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: var(--muted); }

@@ -30,6 +30,11 @@
   });
 
   function onKey(e: KeyboardEvent) { if (!ep && e.key === 'Escape') onClose(); }
+  // On the body, like the editor, so the page can't cover it.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
+  }
 </script>
 
 <svelte:window on:keydown={onKey} />
@@ -37,7 +42,7 @@
 {#if ep}
   <StudioEditor initial={ep} {localFile} {onClose} {onSaved} />
 {:else}
-  <div class="loading" role="dialog" aria-modal="true" aria-label="Video studio">
+  <div class="loading" role="dialog" aria-modal="true" aria-label="Video studio" use:portal>
     {#if error}
       <p>{error}</p>
       <button on:click={onClose}>Close</button>
@@ -48,7 +53,7 @@
 {/if}
 
 <style>
-  .loading { position: fixed; inset: 0; z-index: 400; background: #0e0f13; color: #9a9ba8; display: grid; place-items: center; align-content: center; gap: 0.8rem; }
+  .loading { position: fixed; inset: 0; z-index: 1000; background: #0e0f13; color: #9a9ba8; display: grid; place-items: center; align-content: center; gap: 0.8rem; }
   .loading button { height: 32px; padding: 0 0.9rem; border-radius: 8px; background: #1e2028; color: #ececf1; font-weight: 600; }
   .ring { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,.15); border-top-color: #fff; animation: spin .9s linear infinite; }
   @keyframes spin { to { rotate: 360deg; } }

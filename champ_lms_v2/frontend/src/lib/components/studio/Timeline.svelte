@@ -313,7 +313,7 @@
         <div class="lane caps" on:pointerdown={laneDown}>
           {#each segs as sgm}
             <span class="seg" class:gone={inCut(sgm.start, sgm.end)} class:out={sgm.end <= d.start || sgm.start >= d.end}
-              style="left:{pct(sgm.start)}%; width:{pct(Math.max(0.4, sgm.end - sgm.start))}%" title={sgm.text}>{sgm.text}</span>
+              style="left:{pct(sgm.start)}%; width:{pct(Math.max(0.4, sgm.end - sgm.start))}%" title={sgm.text}>{(sgm.end - sgm.start) * pps >= 44 ? sgm.text : ''}</span>
           {/each}
           {#if !segs.length}<span class="empty">No transcript yet: captions, AI and transcript cutting use it.</span>{/if}
         </div>

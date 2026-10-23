@@ -256,7 +256,7 @@
   .pre-bold, .pre-pop, .pre-karaoke { font-weight: 900; -webkit-text-stroke: 0.05em #000; paint-order: stroke fill; display: block; line-height: 54px; }
   .pre-bold { text-transform: uppercase; font-size: 0.78rem; }
   .pre-pop .now { background: var(--hi, #ffd23f); color: #111; -webkit-text-stroke: 0; padding: 0 0.15em; border-radius: 0.2em; display: inline-block; transform: rotate(-2deg) scale(1.08); }
-  .pre-karaoke .dim { opacity: 0.45; }
+  .pre-karaoke .dim { color: color-mix(in srgb, var(--cc, #fff) 50%, #6b6b75); }
   .pre-karaoke .now { color: var(--hi, #7ef0a8); }
   .pre-minimal { text-shadow: 0 1px 3px #000; }
   .f-display { font-family: 'Arial Black', Impact, sans-serif; }

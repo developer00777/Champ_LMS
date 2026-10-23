@@ -182,7 +182,7 @@
   .pill.wait { background: rgba(240, 165, 64, 0.13); color: #f0a540; }
   .btn { display: inline-flex; align-items: center; height: 34px; padding: 0 1rem; border-radius: 8px; font-weight: 600; font-size: 0.85rem; border: 1px solid var(--border-hover); background: var(--surface2); color: var(--text); }
   .btn.sm { height: 30px; padding: 0 0.8rem; font-size: 0.8rem; }
-  .btn.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .btn.primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
   .btn.ghost { background: transparent; }
   .btn.danger { color: #ff6b70; }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }

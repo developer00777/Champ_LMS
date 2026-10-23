@@ -403,7 +403,7 @@
   .ts-tabs button:hover { color: var(--text); }
   .ts-tabs button.on { color: var(--text); border-color: var(--accent); }
   .ti { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--surface3); font-size: 0.72rem; font-weight: 800; }
-  .on .ti { background: var(--accent); color: #fff; }
+  .on .ti { background: var(--accent); color: var(--on-accent); }
 
   .ts-body { display: grid; gap: 1.1rem; padding: 1.1rem 1.25rem; grid-template-columns: minmax(0, 1fr); }
   @media (min-width: 900px) { .ts-body { grid-template-columns: minmax(0, 1fr) 340px; } }
@@ -494,7 +494,7 @@
     font-weight: 600; font-size: 0.84rem; white-space: nowrap;
   }
   .ts-btn:hover:not(:disabled) { background: var(--surface3); }
-  .ts-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ts-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .ts-btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
   .ts-btn.ghost { background: transparent; }
   .ts-btn.danger { color: #ff8a8f; border-color: rgba(255, 107, 112, 0.35); }
