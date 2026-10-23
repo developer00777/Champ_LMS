@@ -590,7 +590,11 @@ class AIService:
             except httpx.RequestError as exc:
                 raise AIServiceError(f"Could not reach OpenRouter: {exc}") from exc
 
-        _raise_for_status(resp, model, audio=bool(audio))
+        # Audio goes to the transcription model, so its errors name that setting.
+        _raise_for_status(
+            resp, model, audio=bool(audio),
+            setting="OPENROUTER_TRANSCRIBE_MODEL" if audio else "OPENROUTER_MODEL",
+        )
 
         try:
             return resp.json()["choices"][0]["message"]["content"]

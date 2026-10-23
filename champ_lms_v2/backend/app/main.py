@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,12 +10,22 @@ from app.services.gamification_service import seed_gamification, rehydrate_leade
 from app.routers import auth, content, progress, gamification, admin, zoom, assessments, webhooks, learning_path, challenges, social, test_series, employees, daily, courses, qna, thumbnails, video_studio
 
 settings = get_settings()
+# Uvicorn configures this one, so its lines reach the deploy logs at INFO.
+logger = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await seed_admin()
+    # Which OpenRouter models the AI features run on, so a deploy's logs show it.
+    if settings.openrouter_api_key:
+        logger.info(
+            "AI via OpenRouter: text=%s transcribe=%s image=%s",
+            settings.openrouter_model, settings.openrouter_transcribe_model, settings.openrouter_image_model,
+        )
+    else:
+        logger.warning("AI features are off: OPENROUTER_API_KEY is not set")
     # * seed the badge catalog, then rebuild the Redis leaderboard from Mongo
     await seed_gamification()
     await rehydrate_leaderboards(await get_redis())
