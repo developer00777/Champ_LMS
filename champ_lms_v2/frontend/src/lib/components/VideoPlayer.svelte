@@ -3,7 +3,11 @@
   import { player } from '$lib/stores/player';
   import type { TranscriptSegment } from '$lib/api/client';
   import { icons } from '$lib/components/course/icons';
-  import { lineAt, segmentsToVtt } from '$lib/utils/transcribe';
+  import { segmentsToVtt } from '$lib/utils/transcribe';
+  import {
+    chapterIndexAt, cutAt, cutSecondsBetween, frameStyle, lookFilter, mutedAt, speedAt, type VideoEdits,
+  } from '$lib/utils/video-edits';
+  import EditedLayer from '$lib/components/video/EditedLayer.svelte';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -67,11 +71,49 @@
   // time) after the video pauses, so a question can be pinned to that moment.
   export let onQna: ((atSeconds: number) => void) | null = null;
   export let qnaCount = 0;
+  // Video studio edits in clip time: cuts are jumped over, chapters marked on
+  // the scrub bar, speed and mute effects applied as it plays, and overlays,
+  // caption style, look, zooms and brand drawn over it.
+  export let edits: VideoEdits | null = null;
+  $: cuts = edits?.cuts ?? [];
+  $: chapters = edits?.chapters ?? [];
+  $: effects = edits?.effects ?? [];
+  // Speed and mute change playback itself, so the player has to own its controls.
+  $: timed = effects.some(e => e.kind === 'speed' || e.kind === 'mute');
+  $: chapterIdx = chapterIndexAt(chapters, rel);
+  $: videoStyle = [lookFilter(edits?.look) && `filter: ${lookFilter(edits?.look)};`, frameStyle(edits?.look, effects, frameT)].filter(Boolean).join(' ');
+  let chaptersOpen = false;
+  // Overlays, word-by-word captions and cut skips follow the frame, not the
+  // video's few time updates a second.
+  let frameT = 0;
+  let raf = 0;
+  function tick() {
+    raf = 0;
+    if (!videoEl || videoEl.paused) return;
+    frameT = Math.max(0, videoEl.currentTime - clipStart);
+    const cut = !videoEl.seeking && cutAt(cuts, frameT);
+    if (cut) videoEl.currentTime = clipStart + cut.end;
+    else applyEffects(frameT);
+    raf = requestAnimationFrame(tick);
+  }
+  /** The learner's speed times the edit's, and their mute or the edit's. */
+  function applyEffects(t: number) {
+    if (!videoEl || !timed) return;
+    const want = rate * speedAt(effects, t);
+    if (Math.abs(videoEl.playbackRate - want) > 0.001) videoEl.playbackRate = want;
+    const mute = muted || mutedAt(effects, t);
+    if (videoEl.muted !== mute) videoEl.muted = mute;
+  }
+  function startFrames() { if (!raf && typeof requestAnimationFrame !== 'undefined') raf = requestAnimationFrame(tick); }
 
   // ---- captions ------------------------------------------------------------
   const CC_KEY = 'champ_cc';
   let ccOn = false;
-  try { ccOn = localStorage.getItem(CC_KEY) === '1'; } catch { /* storage blocked */ }
+  // The learner's own choice wins; until they make one, the studio's default.
+  try {
+    const saved = localStorage.getItem(CC_KEY);
+    ccOn = saved === null ? !!edits?.captions?.default_on : saved === '1';
+  } catch { ccOn = !!edits?.captions?.default_on; }
   let trackEl: HTMLTrackElement;
   let vttUrl = '';
   // Cues sit in source time: the video element plays the whole Bunny video.
@@ -79,7 +121,7 @@
   $: {
     if (vttUrl) URL.revokeObjectURL(vttUrl);
     vttUrl = captions.length
-      ? URL.createObjectURL(new Blob([segmentsToVtt(captions, clipStart, clipped ? 'line:80%' : '')], { type: 'text/vtt' }))
+      ? URL.createObjectURL(new Blob([segmentsToVtt(captions, clipStart, custom ? 'line:80%' : '')], { type: 'text/vtt' }))
       : '';
   }
   // Captions are drawn over the video (.caption), sized to the player, since
@@ -91,7 +133,6 @@
   let trackMode: TextTrackMode = 'hidden';
   $: trackMode = ccOn && vttUrl && videoFs ? 'showing' : 'hidden';
   $: if (trackEl?.track) trackEl.track.mode = trackMode;
-  $: caption = ccOn && captions.length && !videoFs ? lineAt(captions, rel) : '';
   function toggleCc() {
     ccOn = !ccOn;
     try { localStorage.setItem(CC_KEY, ccOn ? '1' : '0'); } catch { /* storage blocked */ }
@@ -102,11 +143,14 @@
   }
 
   $: clipped = clipStart > 0 || clipEnd !== null;
+  // Own controls for a clipped part, and for a video with cuts or chapters,
+  // which the browser's scrub bar can't show.
+  $: custom = clipped || cuts.length > 0 || chapters.length > 0 || timed;
   let duration = 0; // the whole video's, once known
   $: endAbs = clipEnd ?? duration;
   $: clipLength = Math.max(0, endAbs - clipStart);
 
-  // Custom-controls state (clipped parts only).
+  // Custom-controls state (clipped parts and edited videos).
   let paused = true;
   let muted = false;
   let rate = 1;
@@ -166,8 +210,13 @@
       target = Math.min(Math.max(target, clipStart), end);
       if (target < end - 0.5) clipEnded = false;
     }
+    // Landing inside a cut plays on from its end.
+    const cut = cutAt(cuts, target - clipStart);
+    if (cut) target = clipStart + cut.end;
     if (skipLimitSeconds != null) {
-      const limit = clipStart + furthestAtSeek + skipLimitSeconds;
+      // Cuts are jumped over unplayed, so they don't count towards the limit.
+      const limit = clipStart + furthestAtSeek + skipLimitSeconds
+        + cutSecondsBetween(cuts, furthestAtSeek, target - clipStart);
       if (target > limit + 0.5) { target = limit; showSkipNotice(); }
     }
     if (Math.abs(target - videoEl.currentTime) > 0.05) videoEl.currentTime = target;
@@ -193,6 +242,7 @@
   // counts real playback time from.
   function onPlaying() {
     paused = false;
+    startFrames();
     finishing = false;
     if (reportedStart || skipLimitSeconds == null || !videoEl || !track) return;
     reportedStart = true;
@@ -241,6 +291,7 @@
   let destroyed = false;
   onDestroy(() => {
     destroyed = true;
+    if (raf) cancelAnimationFrame(raf);
     hls?.destroy();
     if (vttUrl) URL.revokeObjectURL(vttUrl);
     if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange);
@@ -266,6 +317,13 @@
       }
     }
     rel = Math.max(0, t - clipStart);
+    if (videoEl.paused) frameT = rel;
+    const cut = !videoEl.seeking && cutAt(cuts, rel);
+    if (cut) {
+      videoEl.currentTime = clipStart + cut.end;
+      return;
+    }
+    applyEffects(rel);
     report();
     if (!videoEl.seeking) furthest = Math.max(furthest, rel);
     onTime?.(rel);
@@ -301,7 +359,7 @@
 
   const cancelAutoAdvance = stopAutoAdvance;
 
-  // ---- custom controls for a clipped part ----------------------------------
+  // ---- custom controls for a clipped part or an edited video ---------------
   function togglePlay() {
     if (!videoEl) return;
     if (videoEl.paused) {
@@ -318,15 +376,19 @@
   function cycleRate() {
     const rates = [1, 1.25, 1.5, 2];
     rate = rates[(rates.indexOf(rate) + 1) % rates.length];
-    if (videoEl) videoEl.playbackRate = rate;
+    if (videoEl) videoEl.playbackRate = rate * speedAt(effects, rel);
   }
-  function toggleMute() { muted = !muted; if (videoEl) videoEl.muted = muted; }
+  function toggleMute() { muted = !muted; if (videoEl) videoEl.muted = muted || mutedAt(effects, rel); }
   function fullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else container.requestFullscreen?.().catch(() => {});
   }
+  function jumpToChapter(i: number) {
+    chaptersOpen = false;
+    if (videoEl && chapters[i]) { videoEl.currentTime = clipStart + chapters[i].start; videoEl.play().catch(() => {}); }
+  }
   function onKey(e: KeyboardEvent) {
-    if (!clipped || (e.target as HTMLElement).closest('input, button, select')) return;
+    if (!custom || (e.target as HTMLElement).closest('input, button, select')) return;
     if (e.key === ' ' || e.key === 'k') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); nudge(5); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); nudge(-5); }
@@ -343,8 +405,8 @@
 <!-- Keyboard control for a clipped part's own controls; the native player
      handles its own keys. -->
 <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
-<div bind:this={container} class="player-wrap" class:clipped role="region" aria-label="Video player"
-     tabindex={clipped ? 0 : -1} on:keydown={onKey}>
+<div bind:this={container} class="player-wrap" class:clipped={custom} role="region" aria-label="Video player"
+     tabindex={custom ? 0 : -1} on:keydown={onKey}>
   {#if useNative}
     <!-- Preferred: token-authenticated HLS in a native player. This is the ONLY
          path that fires timeupdate/ended, so it is the only one that records
@@ -353,9 +415,10 @@
     <video
       bind:this={videoEl}
       class="video"
-      controls={!clipped}
+      controls={!custom}
       preload="metadata"
-      on:click={() => clipped && togglePlay()}
+      style={videoStyle}
+      on:click={() => custom && togglePlay()}
       on:timeupdate={onTimeUpdate}
       on:seeking={onSeeking}
       on:seeked={onSeeked}
@@ -369,15 +432,36 @@
           on:load={() => { if (trackEl?.track) trackEl.track.mode = trackMode; }} />
       {/if}
     </video>
-    {#if clipped}
+    {#if custom}
       <div class="cbar">
         <button on:click={togglePlay} aria-label={paused ? 'Play' : 'Pause'}>
           {#if paused}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
           {:else}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>{/if}
         </button>
         <span class="ctime">{clock(rel)} / {clock(clipLength)}</span>
-        <input class="cscrub" type="range" min="0" max={clipLength || 0} step="0.1" value={rel} on:input={onScrub}
-          aria-label="Seek" style="--pct:{clipLength ? (rel / clipLength) * 100 : 0}%" />
+        <span class="scrub">
+          <input class="cscrub" type="range" min="0" max={clipLength || 0} step="0.1" value={rel} on:input={onScrub}
+            aria-label="Seek" style="--pct:{clipLength ? (rel / clipLength) * 100 : 0}%" />
+          {#if clipLength}
+            {#each cuts as c}<i class="cutzone" style="left:{(c.start / clipLength) * 100}%; width:{((c.end - c.start) / clipLength) * 100}%"></i>{/each}
+            {#each chapters as c, i}{#if i > 0}<i class="chtick" style="left:{(c.start / clipLength) * 100}%"></i>{/if}{/each}
+          {/if}
+        </span>
+        {#if chapters.length}
+          <span class="chwrap">
+            <button class="txt chname" on:click={() => (chaptersOpen = !chaptersOpen)} aria-expanded={chaptersOpen}
+              title="Chapters">{chapterIdx >= 0 ? chapters[chapterIdx].title : 'Chapters'}</button>
+            {#if chaptersOpen}
+              <span class="chmenu" role="menu">
+                {#each chapters as c, i}
+                  <button role="menuitem" class:cur={i === chapterIdx} on:click={() => jumpToChapter(i)}>
+                    <span class="mono">{clock(c.start)}</span> {c.title}
+                  </button>
+                {/each}
+              </span>
+            {/if}
+          </span>
+        {/if}
         <button class="txt" on:click={cycleRate} aria-label="Playback speed">{rate}×</button>
         <button on:click={toggleMute} aria-label={muted ? 'Unmute' : 'Mute'}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/>{#if muted}<path d="M16 9.5l5 5M21 9.5l-5 5"/>{:else}<path d="M15.5 9a4 4 0 010 6M18 6.5a7.5 7.5 0 010 11"/>{/if}</svg>
@@ -401,8 +485,8 @@
     <div class="placeholder"><span class="ring"></span>Loading video…</div>
   {/if}
 
-  {#if caption}
-    <div class="caption" class:raised={clipped} aria-hidden="true"><span>{caption}</span></div>
+  {#if useNative}
+    <EditedLayer {edits} t={frameT} from={0} to={clipLength} {captions} ccOn={ccOn && !videoFs} raised={custom} />
   {/if}
 
   {#if useNative || onQna}
@@ -475,7 +559,7 @@
   .cbar .txt { font-size: 0.78rem; font-weight: 700; padding: 0 0.4rem; font-variant-numeric: tabular-nums; }
   .ctime { font-size: 0.78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .cscrub {
-    flex: 1; min-width: 60px; height: 4px; appearance: none; border-radius: 4px; cursor: pointer;
+    height: 4px; appearance: none; border-radius: 4px; cursor: pointer;
     background: linear-gradient(to right, var(--accent) var(--pct), rgba(255, 255, 255, 0.3) var(--pct));
   }
   .cscrub::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
@@ -499,19 +583,22 @@
     min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; display: grid; place-items: center;
     background: var(--accent); color: #fff; font-size: 0.68rem;
   }
-  /* Captions: sized to the player's width, clear of the controls. */
+  /* Overlays and captions (EditedLayer) are sized to the player's width. */
   .player-wrap { container-type: inline-size; }
-  .caption {
-    position: absolute; left: 50%; bottom: 13%; transform: translateX(-50%);
-    width: max-content; max-width: min(78%, 46em); text-align: center; pointer-events: none; z-index: 3;
-    font-size: clamp(0.72rem, 2.1cqw, 1.2rem); line-height: 1.45; font-weight: 500; letter-spacing: 0.01em;
-  }
-  .caption.raised { bottom: 70px; }
-  .caption span {
-    color: #fff; background: rgba(8, 8, 12, 0.72); padding: 0.18em 0.6em; border-radius: 6px;
-    box-decoration-break: clone; -webkit-box-decoration-break: clone;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  }
+  .scrub { position: relative; flex: 1; min-width: 60px; display: flex; align-items: center; }
+  .scrub .cscrub { width: 100%; }
+  .cutzone { position: absolute; top: 50%; height: 4px; translate: 0 -50%; pointer-events: none;
+    background: repeating-linear-gradient(135deg, rgba(0,0,0,.65) 0 3px, rgba(255,255,255,.18) 3px 6px); border-radius: 2px; }
+  .chtick { position: absolute; top: 50%; width: 3px; height: 8px; translate: -50% -50%; background: rgba(0,0,0,.85); pointer-events: none; border-radius: 1px; }
+  .chwrap { position: relative; }
+  .cbar .chname { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; line-height: 32px; }
+  .chmenu { position: absolute; right: 0; bottom: 40px; min-width: 15rem; max-height: 14rem; overflow: auto; display: grid;
+    background: rgba(14,14,18,.96); border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 0.3rem; z-index: 6; }
+  .cbar .chmenu button { display: flex; gap: 0.6rem; justify-content: flex-start; text-align: left; height: auto;
+    padding: 0.45rem 0.55rem; font-size: 0.8rem; border-radius: 7px; }
+  .cbar .chmenu button.cur { background: rgba(255,255,255,.14); }
+  .chmenu .mono { font-variant-numeric: tabular-nums; opacity: 0.7; }
+  .video { transition: filter 200ms; }
   /* The browser's own captions, in its full screen only: smaller than its default. */
   .video::cue { background: rgba(8, 8, 12, 0.72); color: #fff; font-size: 70%; line-height: 1.4; }
   .skip-notice {

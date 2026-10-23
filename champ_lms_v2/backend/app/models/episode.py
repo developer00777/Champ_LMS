@@ -52,6 +52,10 @@ class Episode(Document):
     # Length of the whole Bunny video. duration_seconds is what the learner
     # sees (the clip's length), so the source length needs its own field.
     source_duration_seconds: int | None = None
+    # Video studio edits on top of the trim (see services/video_edits.py):
+    # cuts, chapters, text overlays, caption style, look and brand mark. Source
+    # time, and the same package on every part of a split video.
+    edits: dict | None = None
 
     # Bunny Storage path for episode thumbnail (manually uploaded)
     thumbnail_bunny_path: str | None = None

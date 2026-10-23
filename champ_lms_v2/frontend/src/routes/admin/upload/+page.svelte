@@ -329,8 +329,10 @@
         {#if uploadMethod}
           <span class="ui-pill sky method-info"><Icon name={uploadMethod === 'url' ? 'link' : 'upload'} size={14} /> Uploaded via {uploadMethod === 'url' ? 'external URL (fast)' : 'direct upload'}</span>
         {/if}
+        <p class="studio-tip"><Icon name="film" size={15} /> Once it's ready, trim, cut, add chapters, text and captions, or let AI find the highlights, in the video studio.</p>
         <div class="done-actions">
           <a href="/admin" class="btn-ghost">Back to dashboard</a>
+          <a href="/admin/modules/{moduleId}?edit={episodeId}" class="btn-ghost">Edit in video studio</a>
           <a href="/module/{moduleId}" class="btn-primary">View module <Icon name="arrowRight" size={17} /></a>
         </div>
       </section>
@@ -340,6 +342,7 @@
 
 <style>
   .page { max-width: 680px; margin: 0 auto; }
+  .studio-tip { display: inline-flex; gap: 0.45rem; align-items: center; font-size: 0.85rem; color: var(--muted); }
   .head { margin-bottom: 1.25rem; }
   .eyebrow { color: var(--muted); font-size: 0.92rem; font-weight: 500; margin-bottom: 0.35rem; }
   h1 { font-size: var(--fs-hero); font-weight: 700; letter-spacing: -0.035em; line-height: 1.04; display: flex; align-items: center; gap: 0.6rem; }

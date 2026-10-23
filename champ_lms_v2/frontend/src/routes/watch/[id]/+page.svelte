@@ -126,6 +126,8 @@
       streamUrl={streamData.stream_url}
       embedUrl={streamData.embed_url}
       {captions}
+      clipStart={streamData.clip_start ?? 0} clipEnd={streamData.clip_end ?? null}
+      edits={streamData.edits ?? null}
       onComplete={onEpisodeComplete}
       onAutoAdvance={onAutoAdvance}
     />

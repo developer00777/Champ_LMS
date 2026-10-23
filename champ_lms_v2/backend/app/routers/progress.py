@@ -12,6 +12,7 @@ from app.models.progress import WatchProgress
 from app.models.enrollment import Enrollment
 from app.models.assessment import Assessment, AssessmentAttempt
 from app.services.gamification_service import GamificationService
+from app.services.video_edits import cut_seconds_between
 import redis.asyncio as aioredis
 
 router = APIRouter(prefix="/progress", tags=["progress"])
@@ -117,6 +118,9 @@ async def _skip_limited(
         last = last.replace(tzinfo=timezone.utc)
     elapsed = max(0.0, (now - last).total_seconds())
     ceiling = previous + MAX_SKIP_SECONDS + elapsed * MAX_PLAYBACK_RATE + 5
+    # Cuts made in the video studio are jumped over without being played, and
+    # its sped-up stretches cover more of the video per second.
+    ceiling += cut_seconds_between(episode, previous, watched)
     return int(min(watched, ceiling))
 
 

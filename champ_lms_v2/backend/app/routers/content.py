@@ -18,6 +18,7 @@ from app.models.recommendation import Recommendation
 from app.services.bunny_stream import bunny_stream
 from app.services.thumbnails import episode_thumbnail_url, module_thumbnail_url, thumbnail_has_text
 from app.services.clips import apply_source_length, clip_bounds, is_clipped, segments_in_clip
+from app.services.video_edits import edits_in_clip
 import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
@@ -377,6 +378,8 @@ async def get_stream_url(
         "course_id": course_id,
         "clip_start": clip_bounds(ep)[0] if is_clipped(ep) else None,
         "clip_end": clip_bounds(ep)[1] if is_clipped(ep) else None,
+        # Video studio edits (cuts, chapters, overlays, styling), in clip time.
+        "edits": edits_in_clip(ep),
         "embed_url": embed_url,          # Bunny iframe player — works with Token Auth enabled
         "stream_url": stream_url,        # Direct HLS manifest — may 403 if Token Auth enabled
         "expires_in": 14400,

@@ -1,4 +1,5 @@
 import type { ProctorEvent } from '$lib/utils/exam-lockdown';
+import type { Chapter, VideoEdits } from '$lib/utils/video-edits';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
 
@@ -391,6 +392,16 @@ export const api = {
     request<AdminCourse>(`/admin/courses/${id}/items/${itemId}/clip`, { method: 'PUT', body: JSON.stringify(body) }),
   joinNextPart: (id: string, itemId: string) =>
     request<AdminCourse>(`/admin/courses/${id}/items/${itemId}/join-next`, { method: 'POST' }),
+  // Video studio: one editor for any episode, in a course or a classic module.
+  // Times are seconds of the whole Bunny video; nothing on Bunny changes.
+  studio: (episodeId: string) => request<StudioEpisode>(`/admin/episodes/${episodeId}/studio`),
+  saveStudio: (episodeId: string, body: { start: number; end: number; split_at: number[]; edits: VideoEdits }) =>
+    request<StudioEpisode>(`/admin/episodes/${episodeId}/studio`, { method: 'PUT', body: JSON.stringify(body) }),
+  studioJoinNext: (episodeId: string) =>
+    request<StudioEpisode>(`/admin/episodes/${episodeId}/join-next`, { method: 'POST' }),
+  // Suggestions only; nothing is saved until the studio saves.
+  studioAi: <T extends StudioAiTask>(episodeId: string, body: { task: T; start?: number; end?: number; count?: number }) =>
+    request<StudioAiResult<T>>(`/admin/episodes/${episodeId}/studio/ai`, { method: 'POST', body: JSON.stringify(body) }),
   transcribeChunk: async (episodeId: string, wav: Blob, offsetSeconds: number, clipSeconds?: number): Promise<{ segments: TranscriptSegment[] }> => {
     const form = new FormData();
     form.append('audio', wav, 'clip.wav');
@@ -852,6 +863,29 @@ export type CourseItemKind = 'video' | 'quiz' | 'test' | 'notes';
 export type CourseFormat = 'series' | 'course' | 'empty';
 export interface CourseSection { id: string; title: string; }
 export interface TranscriptSegment { start: number; end: number; text: string; }
+
+// * Video studio
+export interface StudioEpisode extends ThumbnailState {
+  id: string; title: string; description: string | null; status: string;
+  module_id: string; module_title: string; layout: 'canvas' | 'classic'; course_item_id: string | null;
+  source_duration_seconds: number | null; clip_start: number | null; clip_end: number | null;
+  part: [number, number] | null;
+  parts: { id: string; title: string; clip_start: number; clip_end: number | null; is_this: boolean }[];
+  can_join_next: boolean;
+  // Source time, the whole video's.
+  transcript_segments: TranscriptSegment[];
+  edits: VideoEdits;
+}
+export type StudioAiTask = 'highlights' | 'chapters' | 'hook' | 'tighten' | 'zooms' | 'details';
+export interface StudioHighlight { start: number; end: number; title: string; reason: string; score: number; }
+export interface StudioTighten { start: number; end: number; reason: string; }
+export type StudioAiResult<T extends StudioAiTask> =
+  T extends 'hook' ? { task: 'hook'; hook: { title: string; subtitle: string } }
+  : T extends 'chapters' ? { task: 'chapters'; suggestions: Chapter[] }
+  : T extends 'highlights' ? { task: 'highlights'; suggestions: StudioHighlight[] }
+  : T extends 'details' ? { task: 'details'; details: { title: string; description: string } }
+  // tighten: stretches to cut; zooms: key moments to punch in on.
+  : { task: 'tighten' | 'zooms'; suggestions: StudioTighten[] };
 export interface EpisodeQuestion {
   id: string; episode_id: string; body: string;
   at_seconds: number | null; // clip time; null = about the whole video
@@ -877,6 +911,8 @@ export interface AdminVideoItem extends AdminItemBase, ThumbnailState {
   source_duration_seconds: number | null;
   // [n, of] when the video is split into several episodes.
   part: [number, number] | null;
+  // Cuts, chapters, overlays or styling from the video studio.
+  has_edits?: boolean;
   transcript_status: 'processing' | 'ready' | 'failed' | null;
   transcript_source: 'auto' | 'manual' | null;
   transcript_segments: TranscriptSegment[];
@@ -933,6 +969,8 @@ export interface CourseItemView {
   thumbnail_url?: string | null; has_transcript?: boolean;
   // Part of the Bunny video this episode plays, in its seconds.
   clip_start?: number | null; clip_end?: number | null;
+  // Video studio edits, in clip time.
+  edits?: VideoEdits | null;
   notes?: string | null; notes_source?: 'ai' | 'manual' | null;
   watched_seconds?: number; completed?: boolean;
   // quiz
@@ -956,6 +994,8 @@ export interface StreamUrlResponse {
   stream_url: string; embed_url: string; expires_in: number;
   // Set for canvas course episodes: the course player plays them, trimmed to clip_start..clip_end.
   course_id?: string | null; clip_start?: number | null; clip_end?: number | null;
+  // Video studio edits, in clip time.
+  edits?: VideoEdits | null;
 }
 export interface SearchResult { modules: Module[]; episodes: { id: string; title: string; module_id: string }[]; }
 export interface ProgressEntry {

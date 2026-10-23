@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { api, type AdminVideoItem } from '$lib/api/client';
-  import { uploads, startVideoUpload, transcribeFiles, retryTranscript } from '$lib/stores/course-uploads';
+  import { uploads, startVideoUpload, transcribeFiles, retryTranscript, fileFor } from '$lib/stores/course-uploads';
   import { clock, parseCaptions, segmentsToText, textToSegments } from '$lib/utils/transcribe';
   import { icons } from '../icons';
-  import VideoEditor from './VideoEditor.svelte';
+  import VideoStudio from '$lib/components/studio/VideoStudio.svelte';
   import ThumbnailStudio from '$lib/components/ThumbnailStudio.svelte';
   import Thumb from '$lib/components/Thumb.svelte';
 
@@ -166,12 +166,13 @@
 
   <div class="setting clip">
     <div>
-      <b>Trim and split{#if item.part} · part {item.part[0]} of {item.part[1]}{/if}</b>
-      <span>{rangeText}</span>
-      {#if item.status !== 'ready'}<span>Opens once the video has finished processing.</span>{/if}
+      <b>Video studio{#if item.part} · part {item.part[0]} of {item.part[1]}{/if}</b>
+      <span>{rangeText}{item.has_edits ? ' Has cuts, chapters, text or styling.' : ''}</span>
+      {#if item.status !== 'ready'}<span>Opens once the video has finished processing.</span>
+      {:else}<span>Trim, split, cut, chapters, text, captions, look and AI highlights.</span>{/if}
     </div>
     <div class="row end">
-      <button class="btn sm" on:click={() => (editing = true)} disabled={item.status !== 'ready'}>Trim or split</button>
+      <button class="btn sm primary" on:click={() => (editing = true)} disabled={item.status !== 'ready'}>{@html icons.sparkle} Edit video</button>
       {#if item.part && item.part[0] < item.part[1]}
         <button class="btn sm ghost" on:click={joinNext} disabled={!!busy} title="Undo the split between this part and the next">
           {busy === 'join' ? 'Joining…' : 'Join with next part'}
@@ -180,8 +181,8 @@
     </div>
   </div>
   {#if editing}
-    <VideoEditor {courseId} {item} onClose={() => (editing = false)}
-      onSaved={() => { editing = false; message = 'Saved. The canvas shows the new parts; add a quiz or test between them with +.'; onReload(); }} />
+    <VideoStudio episodeId={item.ref_id} localFile={fileFor(item.id)} onClose={() => { editing = false; onReload(); }}
+      onSaved={s => { message = s.part ? 'Saved. The canvas shows the new parts; add a quiz or test between them with +.' : 'Video edits saved.'; onReload(); }} />
   {/if}
 
   <label class="field">

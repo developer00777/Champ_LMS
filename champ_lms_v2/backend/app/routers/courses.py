@@ -56,6 +56,7 @@ from app.services.purge_service import (
     PurgeError, purge_course_test, purge_episode, purge_note,
 )
 from app.services.test_attempts import attempt_status
+from app.services.video_edits import edits_in_clip
 from app.services.thumbnails import (
     episode_thumbnail_url, module_thumbnail_url, thumbnail_has_text, thumbnail_view,
 )
@@ -413,6 +414,7 @@ async def _admin_item(
             "clip_end": ep.clip_end,
             "source_duration_seconds": source_length(ep),
             "part": list((parts or {}).get(ep.id, ())) or None,
+            "has_edits": bool(ep.edits),
             "transcript_status": ep.transcript_status or ("ready" if ep.transcript_segments else None),
             "transcript_source": ep.transcript_source,
             # Clip time: what the admin edits is this part only, from 0.
@@ -787,10 +789,17 @@ async def _retitle_parts(module: Module) -> None:
     admin renamed keeps its name. A video that is whole again loses the suffix.
     """
     refs = await _load_refs(module)
+    await retitle_parts_in_order([
+        refs.episodes[it.ref_id] for it in module.items
+        if it.kind == ITEM_VIDEO and it.ref_id in refs.episodes
+    ])
+
+
+async def retitle_parts_in_order(ordered: list[Episode]) -> None:
+    """Renumber "(part n)" titles of each video's parts in the order given."""
     groups: dict[str, list[Episode]] = {}
-    for it in module.items:
-        ep = refs.episodes.get(it.ref_id) if it.kind == ITEM_VIDEO else None
-        if ep and ep.bunny_video_guid:
+    for ep in ordered:
+        if ep.bunny_video_guid:
             groups.setdefault(ep.bunny_video_guid, []).append(ep)
     for eps in groups.values():
         for n, ep in enumerate(eps, start=1):
@@ -801,6 +810,76 @@ async def _retitle_parts(module: Module) -> None:
             if title != ep.title:
                 ep.title = title
                 await ep.save()
+
+
+async def insert_part(
+    ep: Episode, title: str, start: float, end: float, length: float, sequence_order: int,
+) -> Episode:
+    """A new episode playing [start, end] of the same Bunny video as `ep`."""
+    part = Episode(
+        module_id=ep.module_id,
+        title=title,
+        description=ep.description,
+        sequence_order=sequence_order,
+        status=ep.status,
+        bunny_video_guid=ep.bunny_video_guid,
+        bunny_video_id=ep.bunny_video_id,
+        thumbnail_url=ep.thumbnail_url,
+        source_filename=ep.source_filename,
+        source_duration_seconds=ep.source_duration_seconds,
+        # The whole video's transcript; each part shows only its own lines.
+        transcript_segments=list(ep.transcript_segments or []) or None,
+        transcript_source=ep.transcript_source,
+        transcript_status=ep.transcript_status,
+        # The studio's edits are kept whole on every part, like the transcript.
+        edits=ep.edits,
+    )
+    _set_range(part, start, end, length)
+    await part.insert()
+    return part
+
+
+async def move_questions_to_parts(ep: Episode, new_parts: list[Episode], length: float) -> None:
+    """A question asked at a moment now in a later part moves with that moment."""
+    for part in new_parts:
+        await EpisodeQuestion.find(
+            EpisodeQuestion.episode_id == ep.id,
+            EpisodeQuestion.at_seconds >= (part.clip_start or 0),
+            EpisodeQuestion.at_seconds < (part.clip_end if part.clip_end is not None else length + 1),
+        ).update({"$set": {"episode_id": part.id}})
+
+
+async def absorb_next_part(ep: Episode, other: Episode, length: float) -> None:
+    """
+    Stretch `ep` over the part after it, ahead of that part being deleted.
+    Lines an admin edited in the later part's transcript are kept, and its
+    quizzes' sources and its questions point at `ep` from now on.
+    """
+    b_start, b_end = clip_bounds(other)
+    b_end = b_end if b_end is not None else length
+    ep.transcript_segments = sorted(
+        [s for s in (ep.transcript_segments or []) if s["start"] < b_start or s["start"] >= b_end]
+        + [s for s in (other.transcript_segments or []) if b_start <= s["start"] < b_end],
+        key=lambda s: s["start"],
+    ) or None
+    if other.transcript_source == "manual":
+        ep.transcript_source = "manual"
+    _set_range(ep, clip_bounds(ep)[0], b_end, length)
+    await ep.save()
+
+    for q in await Assessment.find(
+        Assessment.module_id == ep.module_id, Assessment.kind == "checkpoint"
+    ).to_list():
+        if other.id in q.source_episode_ids:
+            q.source_episode_ids = list(dict.fromkeys(
+                ep.id if s == other.id else s for s in q.source_episode_ids
+            ))
+            await q.save()
+
+    # Questions on the later part are now about this one (times are source time).
+    await EpisodeQuestion.find(EpisodeQuestion.episode_id == other.id).update(
+        {"$set": {"episode_id": ep.id}}
+    )
 
 
 async def _get_course_video(module: Module, item_id: str) -> tuple[CourseItem, Episode]:
@@ -858,36 +937,12 @@ async def set_clip(
     at = module.items.index(item) + 1
     new_parts: list[Episode] = []
     for n, (a, b) in enumerate(ranges[1:], start=2):
-        part = Episode(
-            module_id=module.id,
-            title=f"{base} (part {n})",
-            description=ep.description,
-            sequence_order=0,
-            status=ep.status,
-            bunny_video_guid=ep.bunny_video_guid,
-            bunny_video_id=ep.bunny_video_id,
-            thumbnail_url=ep.thumbnail_url,
-            source_filename=ep.source_filename,
-            source_duration_seconds=ep.source_duration_seconds,
-            # The whole video's transcript; each part shows only its own lines.
-            transcript_segments=list(ep.transcript_segments or []) or None,
-            transcript_source=ep.transcript_source,
-            transcript_status=ep.transcript_status,
-        )
-        _set_range(part, a, b, length)
-        await part.insert()
+        part = await insert_part(ep, f"{base} (part {n})", a, b, length, sequence_order=0)
         module.items.insert(at, CourseItem(kind=ITEM_VIDEO, ref_id=part.id, section_id=item.section_id))
         at += 1
         new_parts.append(part)
     await module.save()
-
-    # A question asked at a moment now in a later part moves with that moment.
-    for part in new_parts:
-        await EpisodeQuestion.find(
-            EpisodeQuestion.episode_id == ep.id,
-            EpisodeQuestion.at_seconds >= (part.clip_start or 0),
-            EpisodeQuestion.at_seconds < (part.clip_end if part.clip_end is not None else length + 1),
-        ).update({"$set": {"episode_id": part.id}})
+    await move_questions_to_parts(ep, new_parts, length)
 
     # A quiz written from the whole video now covers all of its parts.
     if new_parts:
@@ -937,31 +992,7 @@ async def join_next(
             status_code=409, detail="Only a part and the part right after it, from the same video, can be joined.",
         )
 
-    b_start, b_end = clip_bounds(other)
-    b_end = b_end if b_end is not None else length
-    ep.transcript_segments = sorted(
-        [s for s in (ep.transcript_segments or []) if s["start"] < b_start or s["start"] >= b_end]
-        + [s for s in (other.transcript_segments or []) if b_start <= s["start"] < b_end],
-        key=lambda s: s["start"],
-    ) or None
-    if other.transcript_source == "manual":
-        ep.transcript_source = "manual"
-    _set_range(ep, clip_bounds(ep)[0], b_end, length)
-    await ep.save()
-
-    for q in await Assessment.find(
-        Assessment.module_id == module.id, Assessment.kind == "checkpoint"
-    ).to_list():
-        if other.id in q.source_episode_ids:
-            q.source_episode_ids = list(dict.fromkeys(
-                ep.id if s == other.id else s for s in q.source_episode_ids
-            ))
-            await q.save()
-
-    # Questions on the later part are now about this one (times are source time).
-    await EpisodeQuestion.find(EpisodeQuestion.episode_id == other.id).update(
-        {"$set": {"episode_id": ep.id}}
-    )
+    await absorb_next_part(ep, other, length)
 
     try:
         # Keeps the Bunny video: this part still plays it (see purge_service).
@@ -1643,6 +1674,8 @@ async def get_course(course_id: str, user: Annotated[User, Depends(get_current_u
                 # player keeps to it and counts time from clip_start.
                 "clip_start": clip_bounds(doc)[0] if is_clipped(doc) else None,
                 "clip_end": clip_bounds(doc)[1] if is_clipped(doc) else None,
+                # Cuts, chapters, overlays and styling from the video studio.
+                "edits": edits_in_clip(doc),
                 "notes": doc.notes,
                 "notes_source": doc.notes_source,
                 "watched_seconds": p.watched_seconds if p else 0,

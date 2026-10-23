@@ -370,6 +370,77 @@ with the most important idea. Use only what the material says. No preamble.
 {material}"""
 
 
+# Video studio. Every prompt gets numbered transcript lines, "[n] m:ss text",
+# and answers with line numbers, which the router turns into exact times: a
+# model asked for seconds drifts, one asked for line numbers can't.
+STUDIO_HIGHLIGHTS_PROMPT = """You are a video editor for a corporate training team, like OpusClip but for
+learning. From the transcript of the training video "{title}" below, pick the {count} strongest
+standalone moments: a clear explanation, a key rule, a worked example, a memorable story.
+Each must make sense on its own, start at the beginning of a thought and end when it is complete,
+and run about 20 seconds to 3 minutes.
+
+Score each 0-100 for how useful and self-contained it is for a learner.
+
+Return ONLY a JSON array, best first (no markdown):
+[{{"first_line": 3, "last_line": 9, "title": "short title, max 8 words", "reason": "one sentence on why it works", "score": 87}}]
+
+Transcript:
+{lines}"""
+
+STUDIO_CHAPTERS_PROMPT = """Split the training video "{title}" into chapters from its transcript below,
+the way a good YouTube video is chaptered: {min_count} to {max_count} chapters, each where a new
+topic starts, titled in 2-6 plain words. The first chapter starts at the first line.
+
+Return ONLY a JSON array in order (no markdown):
+[{{"line": 0, "title": "Introduction"}}]
+
+Transcript:
+{lines}"""
+
+STUDIO_HOOK_PROMPT = """Write an on-screen hook for the opening seconds of the training video "{title}",
+from its transcript below. A title that makes a learner want to keep watching and says what they
+will be able to do, max 7 words, and a subtitle of max 10 words. No clickbait, no emoji.
+
+Return ONLY a JSON object (no markdown):
+{{"title": "...", "subtitle": "..."}}
+
+Transcript:
+{lines}"""
+
+STUDIO_TIGHTEN_PROMPT = """You are tightening the training video "{title}" for learners. From the
+transcript below, find stretches that can be cut without losing anything a learner needs:
+false starts, repeated sentences, off-topic chatter, setup talk ("can you hear me", "let me share
+my screen"), long filler. Never cut a line that teaches something. Only suggest confident cuts;
+an empty list is fine.
+
+Return ONLY a JSON array (no markdown):
+[{{"first_line": 4, "last_line": 5, "reason": "short reason"}}]
+
+Transcript:
+{lines}"""
+
+STUDIO_ZOOMS_PROMPT = """You are editing the training video "{title}". From the transcript below, pick
+up to {count} lines where the speaker makes a key point a learner must not miss: a rule, a number,
+a warning, the punchline of an example. The editor will zoom in slightly on each, for emphasis,
+so pick moments spread across the video, never two next to each other.
+
+Return ONLY a JSON array in order (no markdown):
+[{{"first_line": 12, "last_line": 12, "reason": "states the refund rule"}}]
+
+Transcript:
+{lines}"""
+
+STUDIO_DETAILS_PROMPT = """Write the title and description learners see for the training video
+"{title}", from its transcript below. The title: specific, plain, max 9 words, no clickbait, no
+emoji, no "(part n)". The description: two or three sentences on what the learner will learn and
+be able to do, in plain English.
+
+Return ONLY a JSON object (no markdown):
+{{"title": "...", "description": "..."}}
+
+Transcript:
+{lines}"""
+
 THUMBNAIL_IMAGE_PROMPT = """Create a 16:9 cover image for a corporate training course.
 
 Course: {title}
@@ -614,6 +685,34 @@ class AIService:
         """Study notes for one video, in the canvas' light markup."""
         prompt = EPISODE_NOTES_PROMPT.format(title=title, transcript=transcript[:16000])
         return (await self._chat(prompt, max_tokens=1200)).strip()
+
+    async def studio_suggestions(self, task: str, title: str, lines: str, count: int = 5) -> list | dict:
+        """
+        Video studio suggestions from numbered transcript lines (see the
+        STUDIO_* prompts). Answers name lines, not seconds.
+        """
+        lines = lines[:24000]
+        if task == "highlights":
+            prompt = STUDIO_HIGHLIGHTS_PROMPT.format(title=title, count=count, lines=lines)
+        elif task == "chapters":
+            prompt = STUDIO_CHAPTERS_PROMPT.format(
+                title=title, min_count=max(2, count - 2), max_count=count + 3, lines=lines,
+            )
+        elif task == "hook":
+            return _extract_json_object(await self._chat(
+                STUDIO_HOOK_PROMPT.format(title=title, lines=lines[:8000]), max_tokens=300,
+            ))
+        elif task == "details":
+            return _extract_json_object(await self._chat(
+                STUDIO_DETAILS_PROMPT.format(title=title, lines=lines[:12000]), max_tokens=500,
+            ))
+        elif task == "tighten":
+            prompt = STUDIO_TIGHTEN_PROMPT.format(title=title, lines=lines)
+        elif task == "zooms":
+            prompt = STUDIO_ZOOMS_PROMPT.format(title=title, count=count, lines=lines)
+        else:
+            raise ValueError(f"Unknown studio task {task}")
+        return _extract_json_array(await self._chat(prompt, max_tokens=2500))
 
     async def section_notes(self, section: str, material: list[tuple[str, str]]) -> str:
         """A reading page for a course section, from its videos' notes or transcripts."""

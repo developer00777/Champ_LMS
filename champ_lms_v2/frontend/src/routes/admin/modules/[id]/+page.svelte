@@ -5,6 +5,7 @@
   import { uploadVideoHybrid } from '$lib/utils/upload-client';
   import ThumbnailField from '$lib/components/ThumbnailField.svelte';
   import ThumbnailStudio from '$lib/components/ThumbnailStudio.svelte';
+  import VideoStudio from '$lib/components/studio/VideoStudio.svelte';
   import type { PickedThumbnail } from '$lib/thumbnails/designer';
   import Icon from '$lib/components/Icon.svelte';
   import Select from '$lib/components/Select.svelte';
@@ -46,6 +47,10 @@
   let uploadProgress = 0;
   let statusMsg = '';
   let addError = '';
+
+  // The episode open in the video studio. ?edit=<episode id> opens it on
+  // arrival (the upload wizard links here once a video is up).
+  let studioEp = $page.url.searchParams.get('edit') ?? '';
 
   // inline episode rename
   let editingEp = '';
@@ -415,6 +420,9 @@ About: ${epDescription.trim()}` : ''}`}
                   <b>{ep.title}</b>
                   <button class="link" on:click={() => startRename(ep)}><Icon name="edit" size={13} /> rename</button>
                   <button class="link" on:click={() => (thumbEp = ep)}><Icon name="sparkles" size={13} /> thumbnail</button>
+                  {#if ep.status === 'ready'}
+                    <button class="link" on:click={() => (studioEp = ep.id)}><Icon name="film" size={13} /> edit video</button>
+                  {/if}
                 </div>
               {/if}
               <div class="chips">
@@ -426,6 +434,10 @@ About: ${epDescription.trim()}` : ''}`}
           </div>
         {/each}
       </div>
+      {#if studioEp}
+        <VideoStudio episodeId={studioEp} onClose={() => { studioEp = ''; load(); }}
+          onSaved={s => { flash(s.part ? `Saved. The video is now ${s.part[1]} episodes.` : 'Video edits saved.'); load(); }} />
+      {/if}
       {#if thumbEp}
         <ThumbnailStudio kind="episode" ownerId={thumbEp.id} title={thumbEp.title}
           kicker={`Episode ${thumbEp.sequence_order}`} current={thumbEp}
