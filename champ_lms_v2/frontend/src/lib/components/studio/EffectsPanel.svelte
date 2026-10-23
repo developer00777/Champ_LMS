@@ -6,7 +6,7 @@
   import { tick } from 'svelte';
   import { api } from '$lib/api/client';
   import { clock } from '$lib/utils/transcribe';
-  import { cutSecondsBetween, type Effect, type EffectKind } from '$lib/utils/video-edits';
+  import { cutSecondsBetween, type Effect, type EffectKind, type FxStyle } from '$lib/utils/video-edits';
   import { EFFECT_NAMES, addEffect, clockShort, deadAir, round, useStudio } from './studio';
 
   const st = useStudio();
@@ -79,7 +79,23 @@
     e.kind === 'zoom' ? `${(e.scale ?? 1.4).toFixed(2)}×`
     : e.kind === 'speed' ? `${e.rate ?? 2}×`
     : e.kind === 'blur' ? (e.mode === 'black' ? 'black box' : 'blurred box')
+    : e.kind === 'freeze' ? `holds ${e.hold ?? 2} s`
+    : e.kind === 'fx' ? FX.find(f => f[0] === e.style)?.[1] ?? 'effect'
     : 'no sound';
+
+  // Visual effects, InShot style: drawn over the picture for the stretch.
+  const FX: [FxStyle, string, string][] = [
+    ['shake', 'Shake', 'The picture jolts'],
+    ['glitch', 'Glitch', 'Digital tearing'],
+    ['analog', 'Analog', 'Old tape and grain'],
+    ['dizzy', 'Dizzy', 'A slow sway'],
+    ['flash', 'Flash', 'A white flash'],
+    ['defocus', 'Defocus', 'Soft blur'],
+    ['pulse', 'Pulse', 'A beat-like throb'],
+  ];
+  function addFx(style: FxStyle) {
+    if (addEffect(st, 'fx', { style }) >= 0) st.say(`${FX.find(f => f[0] === style)?.[1]} added. Drag its block on the timeline to fit.`);
+  }
 </script>
 
 <div class="p-sec">
@@ -91,6 +107,15 @@
   <div class="kinds">
     {#each KINDS as k}
       <button class="kind k-{k.kind}" on:click={() => add(k.kind)}><b>{k.label}</b><span>{k.about}</span></button>
+    {/each}
+  </div>
+</div>
+
+<div class="p-sec">
+  <h3 class="p-h">Visual effects</h3>
+  <div class="fxs">
+    {#each FX as [v, l, about]}
+      <button class="fx fx-{v}" on:click={() => addFx(v)} title={about}><span class="fxd"><i></i></span><b>{l}</b></button>
     {/each}
   </div>
 </div>
@@ -134,8 +159,15 @@
                 <button role="radio" aria-checked={e.mode === 'black'} class:on={e.mode === 'black'} on:click|stopPropagation={() => edit(i, { mode: 'black' })}>Black box</button>
               </div>
               <p class="p-note">Drag the box on the preview; its corner sizes it. A black box hides text a blur might leave readable.</p>
-            {:else}
+            {:else if e.kind === 'mute'}
               <p class="p-note">The picture plays on in silence. Learners can't unmute it.</p>
+            {:else if e.kind === 'freeze'}
+              <label class="slider"><span>Hold<b class="mono">{e.hold ?? 2} s</b></span>
+                <input type="range" min="0.5" max="10" step="0.5" value={e.hold ?? 2} on:input={ev => edit(i, { hold: +ev.currentTarget.value }, `ef-hold-${i}`)} /></label>
+            {:else if e.kind === 'fx'}
+              <div class="seg-ctl small" role="radiogroup" aria-label="Effect">
+                {#each FX as [v, l]}<button role="radio" aria-checked={e.style === v} class:on={e.style === v} on:click|stopPropagation={() => edit(i, { style: v })}>{l}</button>{/each}
+              </div>
             {/if}
             <div class="row tight">
               <button class="btn xs" on:click|stopPropagation={() => setStart(i, e)}>Start at playhead</button>
@@ -156,6 +188,24 @@
   .kind b { font-size: 0.82rem; }
   .kind span { font-size: 0.7rem; color: var(--st-muted); }
   .k-zoom { --k: #6ea8ff; } .k-speed { --k: #ffb057; } .k-mute { --k: #b48bff; } .k-blur { --k: #7ef0a8; }
+  .k-freeze { --k: #9be7ff; } .k-fx { --k: #ff7ad9; }
+  .fxs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+  .fx { display: grid; gap: 0.25rem; padding: 0; background: none; color: var(--st-muted); font-size: 0.66rem; font-weight: 600; }
+  .fx:hover { color: #fff; }
+  .fxd { position: relative; aspect-ratio: 1; border-radius: 9px; overflow: hidden; display: block; background: linear-gradient(135deg, #3a6ea5, #f3b562); }
+  .fxd i { position: absolute; inset: 18%; border-radius: 6px; background: rgba(255,255,255,.85); }
+  .fx-shake .fxd i { animation: fxshake 0.35s linear infinite; }
+  .fx-glitch .fxd i { animation: fxglitch 0.6s steps(3) infinite; }
+  .fx-analog .fxd { background: repeating-linear-gradient(0deg, rgba(0,0,0,.3) 0 1px, transparent 1px 3px), linear-gradient(135deg, #a07a4a, #d9b27c); }
+  .fx-dizzy .fxd i { animation: fxdizzy 2s ease-in-out infinite; }
+  .fx-flash .fxd i { animation: fxflash 1.2s ease-out infinite; }
+  .fx-defocus .fxd i { filter: blur(3px); }
+  .fx-pulse .fxd i { animation: fxpulse 0.6s ease-in-out infinite; }
+  @keyframes fxshake { 25% { translate: -2px 1px; } 50% { translate: 2px -1px; } 75% { translate: -1px -2px; } }
+  @keyframes fxglitch { 33% { translate: 3px 0; filter: hue-rotate(120deg); } 66% { translate: -3px 0; } }
+  @keyframes fxdizzy { 50% { rotate: 8deg; scale: 1.06; } }
+  @keyframes fxflash { 0% { box-shadow: 0 0 0 40px #fff; } 40% { box-shadow: 0 0 0 0 transparent; } }
+  @keyframes fxpulse { 50% { scale: 1.12; } }
   .efl { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
   .efl li { display: grid; gap: 0.45rem; padding: 0.5rem 0.55rem; border: 1px solid var(--st-line); border-radius: 10px; background: var(--st-raise); cursor: pointer; }
   .efl li.cur { border-color: var(--k); cursor: default; }

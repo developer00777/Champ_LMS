@@ -5,17 +5,19 @@ import { getContext, setContext } from 'svelte';
 import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
 import type { StudioEpisode, StudioTighten, TranscriptSegment } from '$lib/api/client';
 import {
-  BRAND_DEFAULTS, CAPTION_DEFAULTS, EFFECT_DEFAULTS, LOOK_DEFAULTS, mergeCuts, playedLength,
-  type Brand, type CaptionStyle, type Chapter, type Cut, type Effect, type EffectKind, type Look, type Overlay,
-  type VideoEdits,
+  AUDIO_DEFAULTS, BRAND_DEFAULTS, CAPTION_DEFAULTS, EFFECT_DEFAULTS, LOOK_DEFAULTS, mergeCuts, playedLength,
+  type AudioMix, type Brand, type CaptionStyle, type Chapter, type Cut, type Effect, type EffectKind, type Look,
+  type Overlay, type VideoEdits,
 } from '$lib/utils/video-edits';
+import { AudioMixer } from '$lib/utils/audio-mix';
+import { api } from '$lib/api/client';
 
 // Keep in step with backend services/clips.py MIN_CLIP_SECONDS.
 export const MIN_PART = 10;
 
 export interface FullEdits {
   cuts: Cut[]; chapters: Chapter[]; overlays: Overlay[]; effects: Effect[];
-  captions: CaptionStyle; look: Look; brand: Brand;
+  captions: CaptionStyle; look: Look; brand: Brand; audio: AudioMix;
 }
 /**
  * What Save sends: the kept part, the splits, and the edits on top. The
@@ -26,7 +28,12 @@ export interface Doc { start: number; end: number; splits: number[]; edits: Full
 export interface Part { from: number; to: number; len: number; played: number; }
 export type Selected = { kind: 'cut' | 'chapter' | 'overlay' | 'effect'; index: number } | null;
 export interface PreviewRun { from: number; to: number; label: string; seq: number | null; }
-export type Tab = 'ai' | 'trim' | 'cuts' | 'captions' | 'text' | 'effects' | 'chapters' | 'look' | 'details' | 'thumb';
+// The tools on the studio's bottom strip; each opens its own sheet.
+export type Tab =
+  | 'ai' | 'trim' | 'cuts' | 'canvas' | 'filter' | 'effects' | 'speed' | 'transition' | 'music' | 'voice'
+  | 'text' | 'sticker' | 'captions' | 'chapters' | 'look' | 'details' | 'thumb';
+/** Where the preview's picture comes from, for the timeline's filmstrip. */
+export interface Source { file: File | null; stream: string | null; }
 
 export const round = (x: number) => Math.round(x * 100) / 100;
 
@@ -39,6 +46,7 @@ export function fullEdits(e: VideoEdits | null | undefined): FullEdits {
     captions: { ...CAPTION_DEFAULTS, ...(e?.captions ?? {}) },
     look: { ...LOOK_DEFAULTS, ...(e?.look ?? {}) },
     brand: { ...BRAND_DEFAULTS, ...(e?.brand ?? {}) },
+    audio: { ...AUDIO_DEFAULTS, ...(e?.audio ?? {}), tracks: (e?.audio?.tracks ?? []).map(t => ({ ...t })) },
   };
 }
 
@@ -83,7 +91,13 @@ export interface Studio {
   mark: Writable<{ in: number | null; out: number | null }>;
   selected: Writable<Selected>;
   preview: Writable<PreviewRun | null>;
-  tab: Writable<Tab>;
+  // The open tool's sheet; null when none is open.
+  tab: Writable<Tab | null>;
+  source: Writable<Source>;
+  // Plays the music and voice tracks in the preview.
+  mixer: AudioMixer;
+  // Hush the video's own sound in the preview (while recording a voice-over).
+  quiet: Writable<boolean>;
   ccOn: Writable<boolean>;
   tighten: Writable<StudioTighten[] | null>;
   notice: Writable<{ text: string; tone: 'ok' | 'bad' } | null>;
@@ -155,7 +169,10 @@ export function createStudio(initial: StudioEpisode): Studio {
     mark: writable({ in: null, out: null }),
     selected: writable(null),
     preview,
-    tab: writable('ai'),
+    tab: writable<Tab | null>(null),
+    source: writable({ file: null, stream: null }),
+    mixer: new AudioMixer(id => api.studioAudio(initial.id, id)),
+    quiet: writable(false),
     ccOn: writable(false),
     tighten: writable(null),
     notice,
@@ -312,7 +329,9 @@ export function removeSelected(st: Studio) {
   return true;
 }
 
-export const EFFECT_NAMES: Record<EffectKind, string> = { zoom: 'Zoom', speed: 'Speed', mute: 'Mute', blur: 'Blur' };
+export const EFFECT_NAMES: Record<EffectKind, string> = {
+  zoom: 'Zoom', speed: 'Speed', mute: 'Mute', blur: 'Blur', freeze: 'Freeze', fx: 'Effect',
+};
 
 /**
  * Add an effect over the marked range, or from the playhead for a few
@@ -322,8 +341,10 @@ export function addEffect(st: Studio, kind: EffectKind, patch: Partial<Effect> =
   const m = get(st.mark);
   const t = get(st.time);
   const marked = m.in !== null && m.out !== null && Math.abs(m.out - m.in) >= 0.5;
-  const start = round(marked ? Math.min(m.in!, m.out!) : t);
-  const end = round(marked ? Math.max(m.in!, m.out!) : Math.min(st.length, t + (kind === 'zoom' ? 4 : 6)));
+  // A freeze is a moment, not a stretch: it holds the frame at the playhead.
+  const point = kind === 'freeze';
+  const start = round(marked && !point ? Math.min(m.in!, m.out!) : t);
+  const end = round(marked && !point ? Math.max(m.in!, m.out!) : Math.min(st.length, t + (point ? 0.5 : kind === 'zoom' ? 4 : 6)));
   if (end - start < 0.5) { st.say('Move the playhead back a little: the effect needs room before the end.', 'bad'); return -1; }
   const e: Effect = { kind, start, end, ...EFFECT_DEFAULTS[kind], ...patch };
   let index = 0;
@@ -331,7 +352,7 @@ export function addEffect(st: Studio, kind: EffectKind, patch: Partial<Effect> =
     d.edits.effects = [...d.edits.effects, e].sort((a, b) => a.start - b.start);
     index = d.edits.effects.indexOf(e);
   });
-  if (marked) st.mark.set({ in: null, out: null });
+  if (marked && !point) st.mark.set({ in: null, out: null });
   st.selected.set({ kind: 'effect', index });
   return index;
 }

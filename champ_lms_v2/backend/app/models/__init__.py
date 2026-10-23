@@ -28,6 +28,7 @@ from app.models.test_request import TestRequest
 from app.models.qna import EpisodeQuestion
 # * Course and episode thumbnails from the thumbnail studio (Mongo, not Bunny).
 from app.models.thumbnail import Thumbnail
+from app.models.studio_audio import StudioAudio
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -39,7 +40,7 @@ __all__ = [
     "TestSeries", "TestAttempt", "TestQuestion", "AttemptGrant",
     "ContentAccessRule",
     "DailyChallenge", "DailyChallengeCompletion", "Kudos",
-    "CourseNote", "NoteAttachment", "TestRequest", "EpisodeQuestion", "Thumbnail",
+    "CourseNote", "NoteAttachment", "TestRequest", "EpisodeQuestion", "Thumbnail", "StudioAudio",
 ]
 
 DOCUMENT_MODELS = [
@@ -53,5 +54,5 @@ DOCUMENT_MODELS = [
     TestSeries, TestAttempt, AttemptGrant,
     ContentAccessRule,
     DailyChallenge, DailyChallengeCompletion, Kudos,
-    CourseNote, NoteAttachment, TestRequest, EpisodeQuestion, Thumbnail,
+    CourseNote, NoteAttachment, TestRequest, EpisodeQuestion, Thumbnail, StudioAudio,
 ]

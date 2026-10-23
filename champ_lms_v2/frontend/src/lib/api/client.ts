@@ -399,6 +399,31 @@ export const api = {
     request<StudioEpisode>(`/admin/episodes/${episodeId}/studio`, { method: 'PUT', body: JSON.stringify(body) }),
   studioJoinNext: (episodeId: string) =>
     request<StudioEpisode>(`/admin/episodes/${episodeId}/join-next`, { method: 'POST' }),
+  // Music and voice-overs for the studio, kept in MongoDB (Bunny is video only).
+  uploadStudioAudio: async (episodeId: string, file: Blob, name: string, kind: 'music' | 'voice', duration: number | null): Promise<StudioAudioFile> => {
+    const form = new FormData();
+    form.append('file', file, name);
+    form.append('kind', kind);
+    if (duration) form.append('duration', String(duration));
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/episodes/${episodeId}/studio/audio`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, detailMessage(err.detail, 'Upload failed'), err.detail);
+    }
+    return res.json();
+  },
+  studioAudio: async (episodeId: string, audioId: string): Promise<Blob> => {
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/episodes/${episodeId}/studio-audio/${audioId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new ApiError(res.status, 'Could not load the audio');
+    return res.blob();
+  },
   // Suggestions only; nothing is saved until the studio saves.
   studioAi: <T extends StudioAiTask>(episodeId: string, body: { task: T; start?: number; end?: number; count?: number }) =>
     request<StudioAiResult<T>>(`/admin/episodes/${episodeId}/studio/ai`, { method: 'POST', body: JSON.stringify(body) }),
@@ -876,6 +901,7 @@ export interface StudioEpisode extends ThumbnailState {
   transcript_segments: TranscriptSegment[];
   edits: VideoEdits;
 }
+export interface StudioAudioFile { id: string; kind: 'music' | 'voice'; name: string; duration: number | null; size: number; }
 export type StudioAiTask = 'highlights' | 'chapters' | 'hook' | 'tighten' | 'zooms' | 'details';
 export interface StudioHighlight { start: number; end: number; title: string; reason: string; score: number; }
 export interface StudioTighten { start: number; end: number; reason: string; }
