@@ -36,6 +36,8 @@
   import LookPanel from './LookPanel.svelte';
   import DetailsPanel from './DetailsPanel.svelte';
   import ThumbPanel from './ThumbPanel.svelte';
+  import StudioTour from './StudioTour.svelte';
+  import type { Result } from './tour';
 
   export let initial: StudioEpisode;
   export let localFile: File | null = null;
@@ -76,8 +78,20 @@
       const { default: Hls } = await import('hls.js/dist/hls.min.js');
       if (Hls.isSupported()) {
         hls = new Hls({ startPosition: startAt });
+        // A dropped connection or a decode hiccup is often only that: try
+        // again a few times before giving up on the preview.
+        let retries = 0;
         hls.on(Hls.Events.ERROR, (_e: unknown, d: any) => {
-          if (d?.fatal) previewError = "The preview couldn't load. You can still edit on the timeline and type times.";
+          if (!d?.fatal) return;
+          if (retries < 3 && d.type === Hls.ErrorTypes.MEDIA_ERROR) { retries++; hls.recoverMediaError(); return; }
+          const code = d.response?.code ?? d.networkDetails?.status;
+          const refused = code === 401 || code === 403 || code === 404;
+          if (retries < 3 && d.type === Hls.ErrorTypes.NETWORK_ERROR && !refused) {
+            retries++;
+            setTimeout(() => hls?.startLoad(), 1000 * retries);
+            return;
+          }
+          previewError = previewProblem(d.details, code);
         });
         hls.loadSource(sres.stream_url);
         hls.attachMedia(videoEl);
@@ -85,10 +99,44 @@
         videoEl.src = sres.stream_url;
         videoEl.addEventListener('loadedmetadata', () => { videoEl.currentTime = startAt; }, { once: true });
       }
-    } catch {
-      previewError = "The preview couldn't load. You can still edit on the timeline and type times.";
+    } catch (e: any) {
+      previewError = `The preview couldn't load: ${e?.message ?? 'the video stream was unavailable'}. You can still edit on the timeline and type times.`;
     }
   });
+
+  /** Why the preview failed, in words an admin can act on. */
+  function previewProblem(details: string | undefined, code: number | undefined): string {
+    const tail = ' You can still edit on the timeline and type times.';
+    if (code === 401 || code === 403) {
+      return `The preview couldn't load: Bunny refused the video stream (${code}). Bunny's token authentication is blocking the direct stream the studio needs; learners still get Bunny's own player.` + tail;
+    }
+    if (code === 404) return "The preview couldn't load: Bunny says the video isn't there (404). It may still be processing, or have been deleted." + tail;
+    if (code === 0 || details?.includes('Timeout')) return "The preview couldn't load: Bunny didn't answer. Check the connection (or a network filter blocking Bunny's CDN), then reopen the studio." + tail;
+    return `The preview couldn't load (${details ?? 'stream error'}${code ? `, HTTP ${code}` : ''}).` + tail;
+  }
+  function onVideoError() {
+    // A file picked in this session that the browser can't decode (MKV, HEVC...).
+    if (localFile && !previewError) previewError = `This browser can't play ${localFile.name} in the preview. You can still edit on the timeline and type times.`;
+  }
+
+  // ---- the tour and the feature check ---------------------------------------------
+  const TOUR_KEY = 'champ_studio_tour_offered';
+  let studioEl: HTMLElement;
+  let tourMode: 'tour' | 'check' | null = null;
+  let tourResults: Record<string, Result> = {};
+  let tourSnapshot: string | null = null;
+  let tourOffer = false;
+  try { tourOffer = !localStorage.getItem(TOUR_KEY); } catch { /* storage blocked */ }
+  function openTour(m: 'tour' | 'check') {
+    tourOffer = false;
+    try { localStorage.setItem(TOUR_KEY, '1'); } catch { /* storage blocked */ }
+    tourMode = m;
+  }
+  // Leaving the tour with its sample edits still on the video: ask what to do with them first.
+  function closeTour() {
+    if (tourSnapshot && tourMode === 'tour') { tourMode = 'check'; return; }
+    tourMode = null;
+  }
   onDestroy(() => {
     hls?.destroy();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -212,6 +260,7 @@
   // ---- save and close -------------------------------------------------------------
   let busy = false;
   async function save() {
+    if (tourSnapshot && !confirm("The tour's sample edits (a sticker, a chime, a cut…) are still on this video. Save them too?\n\nCancel, then use Undo the tour's edits in the feature check, to save without them.")) return;
     busy = true;
     st.pause();
     const d = $doc;
@@ -226,6 +275,7 @@
         start: d.start, end: d.end, split_at: [...d.splits].sort((a, b) => a - b), edits: d.edits,
       });
       st.reset(res);
+      tourSnapshot = null;
       st.say(made > 1 ? `Saved. The video is now ${made} episodes; this is part 1.` : 'Saved. Learners get the edited video now.');
       onSaved(res);
     } catch (e: any) { st.say(e.message, 'bad'); }
@@ -339,7 +389,8 @@
     else if (k === 'Delete' || k === 'Backspace') { if (removeSelected(st)) e.preventDefault(); }
     else if (k === '?') help = !help;
     else if (k === 'Escape') {
-      if (help) help = false;
+      if (tourMode) closeTour();
+      else if (help) help = false;
       else if (get(st.selected) || get(st.mark).in !== null) { st.selected.set(null); st.mark.set({ in: null, out: null }); }
       else if (get(tab)) tab.set(null);
       else close();
@@ -365,7 +416,7 @@
 
 <svelte:window on:keydown={onKey} />
 
-<div class="studio" role="dialog" aria-modal="true" aria-label="Video studio" use:portal>
+<div class="studio" role="dialog" aria-modal="true" aria-label="Video studio" use:portal bind:this={studioEl}>
   <header class="top">
     <button class="icon" on:click={close} aria-label="Close the studio" title="Close (Esc)">{@html icons.x}</button>
     <div class="ttl">
@@ -376,7 +427,9 @@
       <button class="icon" on:click={() => st.undo()} disabled={!$canUndo} aria-label="Undo" title="Undo (Ctrl+Z)">↶</button>
       <button class="icon" on:click={() => st.redo()} disabled={!$canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">↷</button>
       <button class="icon help-btn" on:click={() => (help = !help)} aria-label="Keyboard shortcuts" title="Shortcuts (?)">?</button>
-      <button class="btn sm" on:click={() => playPart(0)} disabled={tooShort}
+      <button class="btn sm tour-btn" class:on={!!tourMode} on:click={() => (tourMode ? closeTour() : openTour('tour'))}
+        title="A guided tour of every tool, checking each one works on this video">🎓 <span class="hide-sm">Tour</span></button>
+      <button class="btn sm" data-tour="preview" on:click={() => playPart(0)} disabled={tooShort}
         title="Play it the way learners will get it: trimmed, cut, and stopping at each split">{@html icons.play} <span class="hide-sm">Preview as learner</span></button>
       <button class="btn save" on:click={save} disabled={busy || !dirty || tooShort} title="Save (Ctrl+S)">
         {busy ? 'Saving…' : $parts.length > 1 ? `Save · ${$parts.length} parts` : dirty ? 'Save' : 'Saved'}
@@ -393,7 +446,7 @@
           <BackdropFill video={videoEl ?? null} active={look.background === 'blur'} />
           <!-- svelte-ignore a11y-media-has-caption a11y-click-events-have-key-events a11y-no-noninteractive-element-interactions -->
           <video bind:this={videoEl} preload="metadata" playsinline style={videoStyle}
-            on:play={onPlay} on:pause={onPause} on:seeking={onSeeking} on:timeupdate={onTimeUpdate} on:click={() => st.toggle()}></video>
+            on:play={onPlay} on:pause={onPause} on:seeking={onSeeking} on:timeupdate={onTimeUpdate} on:error={onVideoError} on:click={() => st.toggle()}></video>
           <EditedLayer edits={$doc.edits} {t} from={partNow?.from ?? $doc.start} to={partNow?.to ?? $doc.end}
             captions={segs} ccOn={$ccOn} editable={!$playing} selected={selOverlay}
             onPick={i => selected.set({ kind: 'overlay', index: i })} onMove={moveOverlay} />
@@ -479,11 +532,25 @@
 
   <nav class="toolbar" aria-label="Studio tools">
     {#each TOOLS as tl}
-      <button class="tool" class:on={!tl.run && $tab === tl.id} on:click={() => useTool(tl)} aria-pressed={!tl.run && $tab === tl.id}>
+      <button class="tool" data-tool={tl.label} class:on={!tl.run && $tab === tl.id} on:click={() => useTool(tl)} aria-pressed={!tl.run && $tab === tl.id}>
         <span class="ti">{@html tl.icon}</span><span class="tlabel">{tl.label}</span>
       </button>
     {/each}
   </nav>
+
+  {#if tourMode && studioEl}
+    <StudioTour root={studioEl} bind:mode={tourMode} bind:results={tourResults} bind:snapshot={tourSnapshot} onClose={closeTour} />
+  {:else if tourOffer}
+    <div class="offer" role="dialog" aria-label="Studio tour">
+      <b>New to the studio?</b>
+      <span>Take the 2-minute tour: each step shows a tool and checks it works on this video. Or run every check at once.</span>
+      <div class="row">
+        <button class="btn sm save" on:click={() => openTour('tour')}>Start the tour</button>
+        <button class="btn sm" on:click={() => openTour('check')}>Feature check</button>
+        <button class="btn sm ghost" on:click={() => { tourOffer = false; try { localStorage.setItem(TOUR_KEY, '1'); } catch { /* storage blocked */ } }}>No thanks</button>
+      </div>
+    </div>
+  {/if}
 
   {#if help}
     <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
@@ -590,6 +657,11 @@
   .tool.on .ti { background: #fff; color: #000; }
   .tool.on { color: #fff; }
 
+  .tour-btn.on { background: #fff; color: #000; }
+  .offer { position: absolute; left: 14px; bottom: 96px; z-index: 30; width: min(380px, calc(100vw - 28px)); display: grid; gap: 0.45rem; padding: 0.85rem 0.95rem;
+    border-radius: 16px; background: #fff; color: #15151a; box-shadow: 0 20px 50px rgba(0,0,0,.5); font-size: 0.82rem; line-height: 1.45; animation: pop-in 260ms ease-out; }
+  .offer b { font-size: 0.95rem; }
+  .offer .btn.ghost { color: #15151a; border-color: #d4d4dc; }
   .help { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 20; }
   .help-in { background: var(--st-panel); border: 1px solid var(--st-line); border-radius: 14px; padding: 1.2rem 1.4rem; display: grid; gap: 0.8rem; min-width: 320px; max-height: 90vh; overflow: auto; }
   .help dl { display: grid; grid-template-columns: auto 1fr; gap: 0.35rem 1.2rem; font-size: 0.82rem; }

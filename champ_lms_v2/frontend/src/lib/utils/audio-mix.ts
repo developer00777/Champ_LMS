@@ -53,6 +53,11 @@ export class AudioMixer {
 
   pauseAll() { for (const el of this.els.values()) el.pause(); }
 
+  /** The tracks sounding right now (the studio's feature check listens for them). */
+  playing(): string[] {
+    return [...this.els].filter(([, el]) => !el.paused && el.volume > 0).map(([id]) => id);
+  }
+
   destroy() {
     this.dead = true;
     this.pauseAll();
