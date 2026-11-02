@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { player } from '$lib/stores/player';
-  import type { TranscriptSegment } from '$lib/api/client';
+  import { api, type TranscriptSegment } from '$lib/api/client';
   import { icons } from '$lib/components/course/icons';
   import { segmentsToVtt } from '$lib/utils/transcribe';
   import {
-    chapterIndexAt, cutAt, cutSecondsBetween, frameStyle, lookFilter, mutedAt, speedAt, type VideoEdits,
+    chapterIndexAt, cutAt, cutSecondsBetween, frameStyle, freezeAt, lookFilter, mutedAt, speedAt,
+    type Effect, type VideoEdits,
   } from '$lib/utils/video-edits';
+  import { AudioMixer } from '$lib/utils/audio-mix';
   import EditedLayer from '$lib/components/video/EditedLayer.svelte';
+  import BackdropFill from '$lib/components/video/BackdropFill.svelte';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -76,15 +79,26 @@
   // screen.
   export let onFullscreen: (() => void) | null = null;
   // Video studio edits in clip time: cuts are jumped over, chapters marked on
-  // the scrub bar, speed and mute effects applied as it plays, and overlays,
-  // caption style, look, zooms and brand drawn over it.
+  // the scrub bar, speed, mute and freeze effects applied as it plays, music
+  // and voice-overs mixed in, and overlays, caption style, look (filter,
+  // canvas, zooms, transitions) and brand drawn over it.
   export let edits: VideoEdits | null = null;
   $: cuts = edits?.cuts ?? [];
   $: chapters = edits?.chapters ?? [];
   $: effects = edits?.effects ?? [];
-  $: timed = effects.some(e => e.kind === 'speed' || e.kind === 'mute');
+  $: tracks = edits?.audio?.tracks ?? [];
+  // The video's own sound level set in the studio; the learner's volume scales it.
+  $: ownVolume = (edits?.audio?.volume ?? 100) / 100;
+  $: timed = effects.some(e => e.kind === 'speed' || e.kind === 'mute' || e.kind === 'freeze') || tracks.length > 0 || ownVolume < 1;
   $: chapterIdx = chapterIndexAt(chapters, rel);
-  $: videoStyle = [lookFilter(edits?.look) && `filter: ${lookFilter(edits?.look)};`, frameStyle(edits?.look, effects, frameT)].filter(Boolean).join(' ');
+  $: videoStyle = [lookFilter(edits?.look) && `filter: ${lookFilter(edits?.look)};`, frameStyle(edits?.look, effects, frameT, cuts)].filter(Boolean).join(' ');
+  $: canvasBg = edits?.look?.background === 'color' ? `background:${edits.look.bg_color};` : '';
+  let mixer: AudioMixer | null = null;
+  $: if (tracks.length && !mixer) mixer = new AudioMixer(id => api.studioAudio(episodeId, id));
+  // A freeze holds the picture: the video pauses for its hold, then plays on.
+  let holding = false;
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  const frozen = new Set<Effect>();
   let chaptersOpen = false;
   // Overlays, word-by-word captions and cut skips follow the frame, not the
   // video's few time updates a second.
@@ -96,8 +110,32 @@
     frameT = Math.max(0, videoEl.currentTime - clipStart);
     const cut = !videoEl.seeking && cutAt(cuts, frameT);
     if (cut) videoEl.currentTime = clipStart + cut.end;
-    else applyEffects(frameT);
+    else {
+      const fz = freezeAt(effects, frameT);
+      if (fz && !frozen.has(fz)) { hold(fz); return; }
+      applyEffects(frameT);
+      mixer?.sync(edits, frameT, { playing: true, rate, master: muted ? 0 : volume, end: clipLength });
+    }
     raf = requestAnimationFrame(tick);
+  }
+  function hold(fz: Effect) {
+    if (!videoEl) return;
+    frozen.add(fz);
+    holding = true;
+    videoEl.pause();
+    // Music and voice play on through the hold, untouched.
+    holdTimer = setTimeout(() => {
+      holding = false;
+      holdTimer = null;
+      videoEl?.play().catch(() => {});
+    }, ((fz.hold ?? 2) * 1000) / rate);
+  }
+  // A freeze's own pause isn't the learner pausing: no play button, no mixer stop.
+  function onPause() {
+    if (holding) return;
+    paused = true;
+    settled = true;
+    mixer?.pauseAll();
   }
   /** The learner's speed times the edit's, and their mute or the edit's. */
   function applyEffects(t: number) {
@@ -106,6 +144,8 @@
     if (Math.abs(videoEl.playbackRate - want) > 0.001) videoEl.playbackRate = want;
     const mute = muted || mutedAt(effects, t);
     if (videoEl.muted !== mute) videoEl.muted = mute;
+    const vol = volume * ownVolume;
+    if (Math.abs(videoEl.volume - vol) > 0.001) videoEl.volume = vol;
   }
   function startFrames() { if (!raf && typeof requestAnimationFrame !== 'undefined') raf = requestAnimationFrame(tick); }
 
@@ -221,6 +261,9 @@
     if (!videoEl) return;
     if (furthestAtSeek === null) furthestAtSeek = furthest;
     let target = videoEl.currentTime;
+    // A seek ends a freeze early, and freezes ahead of where it lands play again.
+    if (holding) { holding = false; if (holdTimer) clearTimeout(holdTimer); holdTimer = null; }
+    for (const f of frozen) if (clipStart + f.start > target) frozen.delete(f);
     if (clipped) {
       const end = endAbs || videoEl.duration || Infinity;
       target = Math.min(Math.max(target, clipStart), end);
@@ -320,6 +363,8 @@
   onDestroy(() => {
     destroyed = true;
     if (raf) cancelAnimationFrame(raf);
+    if (holdTimer) clearTimeout(holdTimer);
+    mixer?.destroy();
     hls?.destroy();
     if (vttUrl) URL.revokeObjectURL(vttUrl);
     if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange);
@@ -347,6 +392,7 @@
     }
     rel = Math.max(0, t - clipStart);
     if (videoEl.paused) frameT = rel;
+    if (videoEl.paused && !holding) mixer?.sync(edits, rel, { playing: false, rate, master: muted ? 0 : volume, end: clipLength });
     const cut = !videoEl.seeking && cutAt(cuts, rel);
     if (cut) {
       videoEl.currentTime = clipStart + cut.end;
@@ -432,7 +478,7 @@
   }
   function applyVolume() {
     // The learner's mute, or a Video studio mute effect at this moment.
-    if (videoEl) { videoEl.volume = volume; videoEl.muted = muted || mutedAt(effects, rel); }
+    if (videoEl) { videoEl.volume = volume * ownVolume; videoEl.muted = muted || mutedAt(effects, rel); }
     try { localStorage.setItem('champ_volume', String(volume)); } catch { /* storage blocked */ }
   }
   function fullscreen() {
@@ -527,10 +573,12 @@
      while the player has focus: k/space, j/l, arrows, m, f, c. -->
 <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
 <div bind:this={container} class="player-wrap" class:native={useNative} class:idle={useNative && !showBar}
-     role="region" aria-label="Video player" tabindex={useNative ? 0 : -1}
+     role="region" aria-label="Video player" tabindex={useNative ? 0 : -1} style={canvasBg}
      on:keydown={onKey} on:mousemove={wake} on:touchstart={onTouch}
      on:mouseleave={() => { if (!paused) active = false; hoverPct = null; }}>
   {#if useNative}
+    <!-- The studio's canvas: a blurred copy of the picture filling the frame. -->
+    <BackdropFill video={videoEl} active={edits?.look?.background === 'blur'} />
     <!-- Preferred: token-authenticated HLS in a native player. This is the ONLY
          path that fires timeupdate/ended, so it is the only one that records
          watch progress. -->
@@ -548,7 +596,7 @@
       on:seeked={() => { onSeeked(); buffering = false; onProgress(); }}
       on:playing={() => { onPlaying(); buffering = false; settled = true; }}
       on:play={() => { paused = false; wake(); if (showAutoAdvance) stopAutoAdvance(); }}
-      on:pause={() => { paused = true; settled = true; }}
+      on:pause={onPause}
       on:waiting={() => (buffering = true)}
       on:canplay={() => (buffering = false)}
       on:progress={onProgress}
@@ -854,7 +902,8 @@
   }
   /* Overlays and captions (EditedLayer) are sized to the player's width. */
   .player-wrap { container-type: inline-size; }
-  .video { transition: filter 200ms; }
+  /* Positioned, so it paints over the canvas's blurred fill behind it. */
+  .video { position: relative; transition: filter 200ms; }
 
   /* Video studio marks on the seek bar: cut-out parts and chapter starts. */
   .cutzone {

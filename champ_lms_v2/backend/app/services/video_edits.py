@@ -8,10 +8,14 @@ edit is a small package the players apply while they play:
   chapters  named points, marked on the player's scrub bar
   overlays  text over the video for a while (a hook title, a callout)
   effects   stretches played differently without cutting them: a punch-in
-            zoom, a speed change, the sound muted, a box of the picture blurred
+            zoom, a speed change, the sound muted, a box of the picture
+            blurred, a frozen frame, a visual effect (shake, glitch...)
   captions  how the CC captions look, and whether they start on
-  look      colour, zoom and framing, fade in and out
+  look      colour, filter, canvas (background fill, rotation, flip), zoom
+            and framing, fades, and the transition at each cut
   brand     the Champions Group mark in a corner, a progress bar
+  audio     the video's own volume, and music and voice-over tracks mixed in
+            (files in StudioAudio, timed in watch time from where they start)
 
 The package is stored in source time, and the same package sits on every part
 of a split video (like transcript_segments), so moving a split never loses an
@@ -32,7 +36,11 @@ CAPTION_DEFAULTS = {
 LOOK_DEFAULTS = {
     "brightness": 100, "contrast": 100, "saturation": 100,
     "zoom": 1.0, "focus_x": 50, "focus_y": 50, "fade_in": False, "fade_out": False,
+    "filter": "none", "filter_strength": 100, "warmth": 0, "hue": 0, "vignette": 0,
+    "background": "black", "bg_color": "#101014", "rotate": 0, "flip_h": False, "flip_v": False,
+    "transition": "none",
 }
+AUDIO_DEFAULTS = {"volume": 100}
 BRAND_DEFAULTS = {
     "watermark": False, "position": "tr", "opacity": 0.85, "progress_bar": False, "progress_color": "#ff3b45",
 }
@@ -42,6 +50,8 @@ EFFECT_FIELDS = {
     "speed": ("rate",),
     "mute": (),
     "blur": ("x", "y", "w", "h", "mode"),
+    "freeze": ("hold",),
+    "fx": ("style",),
 }
 
 
@@ -102,6 +112,22 @@ def normalize(edits: dict, length: float) -> dict | None:
         effects.append(e)
     effects.sort(key=lambda e: e["start"])
 
+    audio_in = edits.get("audio") or {}
+    tracks = sorted(
+        (
+            {**t, "start": inside(t["start"]), "name": (t.get("name") or "Audio").strip()[:120] or "Audio"}
+            for t in audio_in.get("tracks") or []
+        ),
+        key=lambda t: t["start"],
+    )
+    audio: dict = {}
+    if tracks:
+        audio["tracks"] = tracks
+    if audio_in.get("volume") is not None and audio_in["volume"] != AUDIO_DEFAULTS["volume"]:
+        audio["volume"] = audio_in["volume"]
+    if audio:
+        audio = {**AUDIO_DEFAULTS, "tracks": [], **audio}
+
     out: dict = {}
     if cuts:
         out["cuts"] = cuts
@@ -111,6 +137,8 @@ def normalize(edits: dict, length: float) -> dict | None:
         out["overlays"] = overlays
     if effects:
         out["effects"] = effects
+    if audio:
+        out["audio"] = audio
     for key, defaults in (("captions", CAPTION_DEFAULTS), ("look", LOOK_DEFAULTS), ("brand", BRAND_DEFAULTS)):
         given = {k: v for k, v in (edits.get(key) or {}).items() if k in defaults}
         if given and any(given[k] != defaults[k] for k in given):
@@ -163,10 +191,22 @@ def edits_in_clip(ep: Episode) -> dict | None:
     ]
     if effects:
         out["effects"] = effects
+    audio = ep.edits.get("audio")
+    if audio:
+        # A track that started in an earlier part carries on into this one,
+        # so its start can be before 0 here.
+        out["audio"] = {**audio, "tracks": [
+            {**t, "start": rel(t["start"])} for t in audio.get("tracks") or [] if t["start"] < end
+        ]}
     for key in ("captions", "look", "brand"):
         if ep.edits.get(key):
             out[key] = ep.edits[key]
     return out or None
+
+
+def referenced_audio(edits: dict | None) -> set[str]:
+    """The StudioAudio ids an edit package plays."""
+    return {t["id"] for t in ((edits or {}).get("audio") or {}).get("tracks") or []}
 
 
 def _overlap(ranges: list[dict], a: float, b: float) -> float:
@@ -194,9 +234,15 @@ def cut_seconds_between(ep: Episode, a: float, b: float) -> float:
 
 
 def played_seconds(edits: dict | None, start: float, end: float) -> float:
-    """How long [start, end] of the source takes to watch: cuts skipped, speed changes applied."""
+    """
+    How long [start, end] of the source takes to watch: cuts skipped, speed
+    changes applied, and frozen frames held.
+    """
     cuts = (edits or {}).get("cuts") or []
     total = end - start - _overlap(cuts, start, end)
+    for e in (edits or {}).get("effects") or []:
+        if e["kind"] == "freeze" and start <= e["start"] < end and not _overlap(cuts, e["start"], e["start"] + 0.01):
+            total += e.get("hold") or 0
     for e in (edits or {}).get("effects") or []:
         if e["kind"] == "speed" and e.get("rate") and e["rate"] != 1:
             lo, hi = max(e["start"], start), min(e["end"], end)

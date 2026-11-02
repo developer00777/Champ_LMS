@@ -107,6 +107,59 @@ for task in ("zooms", "details"):
     r = c.post(f"/admin/episodes/{ep_id}/studio/ai", json={"task": task}, headers=A)
     check(r.status_code != 422, f"the {task} task is accepted ({r.status_code})")
 
+print("\n== InShot tools: canvas, filter, freeze, fx, stickers ==")
+look = {"filter": "vintage", "filter_strength": 60, "warmth": 30, "vignette": 20, "background": "blur",
+        "rotate": 90, "flip_h": True, "transition": "zoom"}
+bad = c.put(f"/admin/episodes/{ep_id}/studio", json={"start": 0, "end": 150, "edits": {"look": {"rotate": 45}}}, headers=A)
+check(bad.status_code == 422, "a rotation other than a quarter turn is refused")
+more = {
+    "cuts": [{"start": 50, "end": 60}],
+    "effects": [
+        {"kind": "freeze", "start": 20, "end": 20.5, "hold": 3},
+        {"kind": "fx", "start": 30, "end": 34, "style": "glitch"},
+    ],
+    "overlays": [{"start": 5, "end": 8, "text": "🔥", "style": "sticker", "position": "free", "x": 70, "y": 30, "size": "xl", "anim": "bounce"}],
+    "look": look,
+}
+saved = ok(c.put(f"/admin/episodes/{ep_id}/studio", json={"start": 0, "end": 150, "edits": more}, headers=A), "save inshot")
+e = saved["edits"]
+check(all(e["look"][k] == v for k, v in look.items()), "filter, canvas and transition are kept")
+frz = next(x for x in e["effects"] if x["kind"] == "freeze")
+check(frz["hold"] == 3 and "style" not in frz, "a freeze keeps its hold and nothing else")
+check(next(x for x in e["effects"] if x["kind"] == "fx")["style"] == "glitch", "a visual effect keeps its style")
+st_ov = e["overlays"][0]
+check(st_ov["style"] == "sticker" and st_ov["position"] == "free" and st_ov["x"] == 70, "a sticker keeps where it was dragged")
+
+print("\n== music and voice ==")
+wav = b"RIFF" + (36).to_bytes(4, "little") + b"WAVEfmt " + bytes(16) + b"data" + bytes(4)
+r = c.post(f"/admin/episodes/{ep_id}/studio/audio", files={"file": ("x.txt", b"hello", "text/plain")}, headers=A)
+check(r.status_code == 422, "a file that isn't audio is refused")
+up = ok(c.post(f"/admin/episodes/{ep_id}/studio/audio", files={"file": ("bed.wav", wav, "audio/wav")},
+               data={"kind": "music", "duration": "12.5"}, headers=A), "upload music")
+spare = ok(c.post(f"/admin/episodes/{ep_id}/studio/audio", files={"file": ("v.webm", wav, "audio/webm")},
+                  data={"kind": "voice"}, headers=A), "upload voice")
+check(up["kind"] == "music" and up["duration"] == 12.5, "an upload says what it is and how long")
+r = c.put(f"/admin/episodes/{ep_id}/studio", json={"start": 0, "end": 150, "edits": {
+    "audio": {"tracks": [{"id": "not-a-file", "start": 0, "duration": 5}]}}}, headers=A)
+check(r.status_code == 422, "a track whose file doesn't exist is refused")
+track = {"id": up["id"], "kind": "music", "name": "Bed", "start": 2, "duration": 12.5, "volume": 40, "loop": True, "fade_in": True, "fade_out": True}
+saved = ok(c.put(f"/admin/episodes/{ep_id}/studio", json={"start": 0, "end": 150, "edits": {
+    **more, "audio": {"volume": 60, "tracks": [track]}}}, headers=A), "save with music")
+check(saved["edits"]["audio"]["volume"] == 60 and saved["edits"]["audio"]["tracks"][0]["loop"] is True, "the mix is kept")
+check(mongo.studio_audio.count_documents({"_id": spare["id"]}) == 0, "an upload no track uses is removed on save")
+check(mongo.studio_audio.count_documents({"_id": up["id"]}) == 1, "a track's file is kept")
+r = c.get(f"/episodes/{ep_id}/studio-audio/{up['id']}", headers=A)
+check(r.status_code == 200 and r.content == wav and r.headers["content-type"].startswith("audio/wav"), "the track's file can be played back")
+s2 = ok(c.get(f"/episodes/{part2['id']}/stream", headers=A), "stream part 2 again")
+tr2 = s2["edits"]["audio"]["tracks"][0]
+check(tr2["start"] == -148.0, "a track that started in part 1 carries on into part 2 (its start is before 0 there)")
+r = c.get(f"/episodes/{part2['id']}/studio-audio/{up['id']}", headers=A)
+check(r.status_code == 200, "every part of the video plays the same track")
+r = c.get(f"/episodes/{ep_id}/studio-audio/{up['id']}")
+check(r.status_code == 401, "the audio needs a sign-in")
+ok(c.put(f"/admin/episodes/{ep_id}/studio", json={"start": 0, "end": 150, "edits": more}, headers=A), "save without music")
+check(mongo.studio_audio.count_documents({"_id": up["id"]}) == 0, "removing the track removes its file")
+
 print(f"\n{PASSED} passed, {len(FAILED)} failed")
 for f in FAILED:
     print("  -", f)

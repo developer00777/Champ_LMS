@@ -7,9 +7,11 @@ for video only, and its files are never cut or re-encoded):
 
   trim and split   which part plays, and parts with room for a quiz between
                    (services/clips.py; canvas courses reuse the course routes)
-  edits            cuts, chapters, text overlays, effects (zoom, speed, mute,
-                   blur), caption style, look, brand mark and progress bar
-                   (services/video_edits.py)
+  edits            cuts, chapters, text and stickers, effects (zoom, speed,
+                   mute, blur, freeze, visual effects), caption style, look
+                   (filter, canvas, transitions), brand mark and progress bar,
+                   and audio: music and voice-overs mixed in as it plays
+                   (services/video_edits.py, models/studio_audio.py)
   AI               highlights, chapters, an opening hook, cuts to tighten it,
                    moments to zoom in on, and a title and description,
                    suggested from the transcript; nothing is saved until the
@@ -26,24 +28,26 @@ import re
 from typing import Annotated, Literal
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app.core.auth import require_admin
+from app.core.auth import get_current_user, require_admin
 from app.core.redis import get_redis
 from app.models.episode import Episode
 from app.models.module import ITEM_VIDEO, LAYOUT_CANVAS, Module
+from app.models.studio_audio import MAX_STUDIO_AUDIO_BYTES, StudioAudio
 from app.models.user import User
 from app.routers.courses import (
     _PART_TITLE, ClipIn, _draft_episode_notes, _set_range, absorb_next_part, insert_part,
     join_next, move_questions_to_parts, retitle_parts_in_order, set_clip,
 )
 from app.services.ai_service import AIServiceError, ai_service
+from app.services import content_access
 from app.services.bunny_stream import bunny_stream
 from app.services.clips import MIN_CLIP_SECONDS, apply_source_length, clip_bounds, source_length
 from app.services.purge_service import PurgeError, purge_episode
 from app.services.thumbnails import thumbnail_view
-from app.services.video_edits import normalize, played_seconds
+from app.services.video_edits import normalize, played_seconds, referenced_audio
 
 logger = logging.getLogger(__name__)
 
@@ -71,16 +75,20 @@ class OverlayIn(BaseModel):
     end: float = Field(gt=0)
     text: str = Field(min_length=1, max_length=200)
     subtext: str | None = Field(default=None, max_length=200)
-    position: Literal["top", "center", "bottom", "lower-third"] = "lower-third"
-    style: Literal["title", "callout", "label", "quote"] = "callout"
-    size: Literal["s", "m", "l"] = "m"
-    anim: Literal["rise", "fade", "pop", "type", "none"] = "rise"
+    # free: placed where it was dragged on the preview, centred on (x, y).
+    position: Literal["top", "center", "bottom", "lower-third", "free"] = "lower-third"
+    # sticker: an emoji or two, drawn big with no box.
+    style: Literal["title", "callout", "label", "quote", "sticker"] = "callout"
+    size: Literal["s", "m", "l", "xl"] = "m"
+    anim: Literal["rise", "fade", "pop", "type", "bounce", "none"] = "rise"
     # The style's accent (callout fill, label bar, quote mark); None = its own.
     color: HexColor | None = None
+    x: float | None = Field(default=None, ge=0, le=100)
+    y: float | None = Field(default=None, ge=0, le=100)
 
 
 class EffectIn(BaseModel):
-    kind: Literal["zoom", "speed", "mute", "blur"]
+    kind: Literal["zoom", "speed", "mute", "blur", "freeze", "fx"]
     start: float = Field(ge=0)
     end: float = Field(gt=0)
     scale: float | None = Field(default=None, ge=1.05, le=3.0)   # zoom
@@ -91,6 +99,8 @@ class EffectIn(BaseModel):
     w: float | None = Field(default=None, ge=2, le=100)          # blur
     h: float | None = Field(default=None, ge=2, le=100)
     mode: Literal["blur", "black"] | None = None
+    hold: float | None = Field(default=None, ge=0.5, le=10)        # freeze: seconds held
+    style: Literal["shake", "glitch", "analog", "dizzy", "flash", "defocus", "pulse"] | None = None  # fx
 
 
 class CaptionStyleIn(BaseModel):
@@ -116,6 +126,21 @@ class LookIn(BaseModel):
     focus_y: int = Field(default=50, ge=0, le=100)
     fade_in: bool = False
     fade_out: bool = False
+    filter: Literal[
+        "none", "clear", "warm", "cool", "vintage", "film", "mono", "noir", "sepia", "vivid", "fade", "dream",
+    ] = "none"
+    filter_strength: int = Field(default=100, ge=0, le=100)
+    warmth: int = Field(default=0, ge=-100, le=100)
+    hue: int = Field(default=0, ge=-180, le=180)
+    vignette: int = Field(default=0, ge=0, le=100)
+    # What fills the frame around a picture that isn't 16:9.
+    background: Literal["black", "blur", "color"] = "black"
+    bg_color: HexColor = "#101014"
+    rotate: Literal[0, 90, 180, 270] = 0
+    flip_h: bool = False
+    flip_v: bool = False
+    # Played at every cut, as playback jumps over it.
+    transition: Literal["none", "fade", "flash", "blur", "zoom", "shake"] = "none"
 
 
 class BrandIn(BaseModel):
@@ -127,11 +152,30 @@ class BrandIn(BaseModel):
     progress_color: HexColor = "#ff3b45"
 
 
+class AudioTrackIn(BaseModel):
+    id: str = Field(min_length=1, max_length=64)  # StudioAudio.id
+    kind: Literal["music", "voice"] = "music"
+    name: str = Field(default="Audio", max_length=120)
+    start: float = Field(ge=0)  # source time it starts at
+    duration: float = Field(gt=0, le=6 * 3600)
+    volume: int = Field(default=80, ge=0, le=150)
+    loop: bool = False
+    fade_in: bool = False
+    fade_out: bool = False
+
+
+class AudioIn(BaseModel):
+    # The video's own sound, in percent.
+    volume: int = Field(default=100, ge=0, le=100)
+    tracks: list[AudioTrackIn] = Field(default_factory=list, max_length=12)
+
+
 class EditsIn(BaseModel):
     cuts: list[CutIn] = Field(default_factory=list, max_length=200)
     chapters: list[ChapterIn] = Field(default_factory=list, max_length=60)
     overlays: list[OverlayIn] = Field(default_factory=list, max_length=60)
     effects: list[EffectIn] = Field(default_factory=list, max_length=120)
+    audio: AudioIn | None = None
     captions: CaptionStyleIn | None = None
     look: LookIn | None = None
     brand: BrandIn | None = None
@@ -293,10 +337,19 @@ async def save_studio(
             detail=f"Each part needs at least {MIN_CLIP_SECONDS} seconds left to play after its cuts.",
         )
 
+    known = {a.id for a in await StudioAudio.find(StudioAudio.video_guid == ep.bunny_video_guid).to_list()}
+    if referenced_audio(edits) - known:
+        raise HTTPException(status_code=422, detail="A music or voice track's file is missing. Add it again.")
+
     ordered = await _ordered_videos(module)
     for part in _parts_of(ep, ordered):
         part.edits = edits
         await part.save()
+    # Files no part plays any more (removed tracks, uploads never kept).
+    await StudioAudio.find(
+        StudioAudio.video_guid == ep.bunny_video_guid,
+        {"_id": {"$nin": list(referenced_audio(edits))}},
+    ).delete()
 
     cur_start, cur_end = clip_bounds(ep)
     cur_end = cur_end if cur_end is not None else length
@@ -390,6 +443,55 @@ async def join_next_part(
     if ep.transcript and ep.notes_source != "manual":
         background.add_task(_draft_episode_notes, ep.id)
     return await _studio_view(await _episode_or_404(episode_id))
+
+
+@router.post("/{episode_id}/studio/audio", status_code=201)
+async def upload_studio_audio(
+    episode_id: str,
+    admin: Annotated[User, Depends(require_admin)],
+    file: UploadFile = File(...),
+    kind: Literal["music", "voice"] = Form("music"),
+    duration: float | None = Form(None),
+):
+    """
+    Music or a voice-over for the studio. Stored in MongoDB (Bunny is video
+    only); kept once a saved edit plays it, removed on a save that doesn't.
+    """
+    ep = await _episode_or_404(episode_id)
+    if not ep.bunny_video_guid:
+        raise HTTPException(status_code=409, detail="Upload the video before adding audio to it.")
+    ctype = (file.content_type or "").split(";")[0].strip().lower()
+    if not ctype.startswith("audio/") and ctype != "video/webm":
+        raise HTTPException(status_code=422, detail="That isn't an audio file. Use MP3, M4A, WAV, OGG or WebM.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="The file is empty")
+    if len(data) > MAX_STUDIO_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio files can be up to 12 MB")
+    audio = StudioAudio(
+        video_guid=ep.bunny_video_guid, kind=kind, filename=(file.filename or kind).strip()[:200],
+        content_type=ctype, duration=duration if duration and duration > 0 else None, data=data,
+    )
+    await audio.insert()
+    return {"id": audio.id, "kind": audio.kind, "name": audio.filename, "duration": audio.duration, "size": len(data)}
+
+
+# Learners fetch the tracks too, so this one sits outside /admin.
+audio_router = APIRouter(tags=["video-studio"])
+
+
+@audio_router.get("/episodes/{episode_id}/studio-audio/{audio_id}")
+async def get_studio_audio(
+    episode_id: str, audio_id: str, user: Annotated[User, Depends(get_current_user)],
+):
+    """A music or voice track the episode's edits play, for anyone who can watch it."""
+    ep = await Episode.get(episode_id)
+    if not ep or not await content_access.can_access_module_id(ep.module_id, user):
+        raise HTTPException(status_code=404, detail="Audio not found")
+    audio = await StudioAudio.get(audio_id)
+    if not audio or audio.video_guid != ep.bunny_video_guid:
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return Response(content=audio.data, media_type=audio.content_type, headers={"Cache-Control": "private, max-age=86400"})
 
 
 def _snap_lines(lines: list[dict], i: int) -> dict | None:

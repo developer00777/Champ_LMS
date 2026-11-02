@@ -85,6 +85,7 @@ app.include_router(courses.router)
 app.include_router(qna.router)
 app.include_router(thumbnails.router)
 app.include_router(video_studio.router)
+app.include_router(video_studio.audio_router)
 app.include_router(webhooks.router)
 # Bunny dashboard may be configured with /api prefix — support both paths
 app.include_router(webhooks.router, prefix="/api")

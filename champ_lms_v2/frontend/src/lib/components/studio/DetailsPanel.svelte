@@ -57,5 +57,5 @@
 
 <style>
   textarea { font: inherit; font-size: 0.82rem; color: var(--st-text); background: var(--st-deep); border: 1px solid var(--st-line); border-radius: 7px; padding: 0.45rem 0.55rem; resize: vertical; line-height: 1.45; }
-  textarea:focus { outline: none; border-color: #6ea8ff; }
+  textarea:focus { outline: none; border-color: var(--st-focus); }
 </style>

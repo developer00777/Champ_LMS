@@ -7,14 +7,17 @@ import type { TranscriptSegment } from '$lib/api/client';
 
 export interface Cut { start: number; end: number; }
 export interface Chapter { start: number; title: string; }
-export type OverlayPosition = 'top' | 'center' | 'bottom' | 'lower-third';
-export type OverlayStyle = 'title' | 'callout' | 'label' | 'quote';
-export type OverlayAnim = 'rise' | 'fade' | 'pop' | 'type' | 'none';
+// free: wherever it was dragged on the preview, centred on (x, y) in %.
+export type OverlayPosition = 'top' | 'center' | 'bottom' | 'lower-third' | 'free';
+// sticker: an emoji or two, big, with no box.
+export type OverlayStyle = 'title' | 'callout' | 'label' | 'quote' | 'sticker';
+export type OverlayAnim = 'rise' | 'fade' | 'pop' | 'type' | 'bounce' | 'none';
 export interface Overlay {
   start: number; end: number; text: string; subtext?: string | null;
   position: OverlayPosition; style: OverlayStyle;
   // Optional, for overlays saved before they existed: m, rise, the style's colour.
-  size?: 's' | 'm' | 'l'; anim?: OverlayAnim; color?: string | null;
+  size?: 's' | 'm' | 'l' | 'xl'; anim?: OverlayAnim; color?: string | null;
+  x?: number | null; y?: number | null;
 }
 export type CaptionPreset = 'classic' | 'bold' | 'pop' | 'karaoke' | 'minimal';
 export type CaptionFont = 'sans' | 'display' | 'serif' | 'rounded' | 'mono';
@@ -22,9 +25,17 @@ export interface CaptionStyle {
   preset: CaptionPreset; position: 'bottom' | 'middle' | 'top'; size: 's' | 'm' | 'l'; default_on: boolean;
   font: CaptionFont; color: string; highlight: string; uppercase: boolean;
 }
+export type FilterId = 'none' | 'clear' | 'warm' | 'cool' | 'vintage' | 'film' | 'mono' | 'noir' | 'sepia' | 'vivid' | 'fade' | 'dream';
+export type Transition = 'none' | 'fade' | 'flash' | 'blur' | 'zoom' | 'shake';
 export interface Look {
   brightness: number; contrast: number; saturation: number;
   zoom: number; focus_x: number; focus_y: number; fade_in: boolean; fade_out: boolean;
+  // Filter preset and its strength (0-100), then fine adjustments.
+  filter: FilterId; filter_strength: number; warmth: number; hue: number; vignette: number;
+  // Canvas: what fills the frame around a picture that isn't 16:9, and turning it.
+  background: 'black' | 'blur' | 'color'; bg_color: string; rotate: 0 | 90 | 180 | 270; flip_h: boolean; flip_v: boolean;
+  // Played at every cut, as playback jumps over it.
+  transition: Transition;
 }
 export interface Brand {
   watermark: boolean; position: 'tl' | 'tr' | 'bl' | 'br'; opacity: number;
@@ -32,20 +43,34 @@ export interface Brand {
 }
 /**
  * A stretch of the video played differently, without cutting it:
- *   zoom   punch in to `scale` about (x, y), easing in and out
- *   speed  play at `rate` (a screen loading, typing, a slow demo)
- *   mute   silence the sound (a name, a phone ringing)
- *   blur   hide a box of the picture: x, y, w, h in % of the frame
+ *   zoom    punch in to `scale` about (x, y), easing in and out
+ *   speed   play at `rate` (a screen loading, typing, a slow demo)
+ *   mute    silence the sound (a name, a phone ringing)
+ *   blur    hide a box of the picture: x, y, w, h in % of the frame
+ *   freeze  hold the frame at `start` for `hold` seconds, then play on
+ *   fx      a visual effect over the stretch (shake, glitch, analog...)
  */
-export type EffectKind = 'zoom' | 'speed' | 'mute' | 'blur';
+export type EffectKind = 'zoom' | 'speed' | 'mute' | 'blur' | 'freeze' | 'fx';
+export type FxStyle = 'shake' | 'glitch' | 'analog' | 'dizzy' | 'flash' | 'defocus' | 'pulse';
 export interface Effect {
   kind: EffectKind; start: number; end: number;
   scale?: number; rate?: number;
   x?: number; y?: number; w?: number; h?: number; mode?: 'blur' | 'black';
+  hold?: number; style?: FxStyle;
 }
+/**
+ * Music or a voice-over, mixed in as the video plays. `start` is in video
+ * time; the track then runs in watch time, so it plays smoothly over cuts
+ * and speed changes instead of jumping with them.
+ */
+export interface AudioTrack {
+  id: string; kind: 'music' | 'voice'; name: string; start: number; duration: number;
+  volume: number; loop: boolean; fade_in: boolean; fade_out: boolean;
+}
+export interface AudioMix { volume: number; tracks: AudioTrack[]; }
 export interface VideoEdits {
   cuts?: Cut[]; chapters?: Chapter[]; overlays?: Overlay[]; effects?: Effect[];
-  captions?: CaptionStyle; look?: Look; brand?: Brand;
+  captions?: CaptionStyle; look?: Look; brand?: Brand; audio?: AudioMix;
 }
 
 export const CAPTION_DEFAULTS: CaptionStyle = {
@@ -54,7 +79,10 @@ export const CAPTION_DEFAULTS: CaptionStyle = {
 };
 export const LOOK_DEFAULTS: Look = {
   brightness: 100, contrast: 100, saturation: 100, zoom: 1, focus_x: 50, focus_y: 50, fade_in: false, fade_out: false,
+  filter: 'none', filter_strength: 100, warmth: 0, hue: 0, vignette: 0,
+  background: 'black', bg_color: '#101014', rotate: 0, flip_h: false, flip_v: false, transition: 'none',
 };
+export const AUDIO_DEFAULTS: AudioMix = { volume: 100, tracks: [] };
 export const BRAND_DEFAULTS: Brand = {
   watermark: false, position: 'tr', opacity: 0.85, progress_bar: false, progress_color: '#ff3b45',
 };
@@ -64,6 +92,8 @@ export const EFFECT_DEFAULTS: Record<EffectKind, Partial<Effect>> = {
   speed: { rate: 2 },
   mute: {},
   blur: { x: 35, y: 35, w: 30, h: 22, mode: 'blur' },
+  freeze: { hold: 2 },
+  fx: { style: 'shake' },
 };
 
 /** The cut playing at `t`, if any: playback jumps to its end. */
@@ -94,6 +124,10 @@ export function playedLength(edits: Pick<VideoEdits, 'cuts' | 'effects'> | undef
     if (hi <= lo) continue;
     const plays = hi - lo - cutSecondsBetween(edits?.cuts, lo, hi);
     total -= plays * (1 - 1 / e.rate);
+  }
+  // A frozen frame holds the picture: the stretch takes that much longer.
+  for (const e of edits?.effects ?? []) {
+    if (e.kind === 'freeze' && e.start >= from && e.start < to && !cutAt(edits?.cuts, e.start)) total += e.hold ?? 0;
   }
   return Math.max(0, total);
 }
@@ -126,11 +160,128 @@ export function frameAt(look: Look | undefined, effects: Effect[] | undefined, t
   return { scale: mix(base.scale, Math.max(base.scale, z.scale ?? 1.4)), x: mix(base.x, z.x ?? 50), y: mix(base.y, z.y ?? 50) };
 }
 
-/** CSS for the framing at `t`, or '' when the picture is untouched. */
-export function frameStyle(look: Look | undefined, effects: Effect[] | undefined, t: number): string {
+/** 0 to 1 and back over an effect's range, ramping over `ramp` seconds at each end. */
+function envelope(e: { start: number; end: number }, t: number, ramp = 0.2): number {
+  return Math.max(0, Math.min(1, (t - e.start) / ramp, (e.end - t) / ramp));
+}
+
+/**
+ * The transition at a cut around `t`: `p` runs 1 at the jump to 0 a moment
+ * either side of it (out over the last 0.3 s before, in over 0.45 s after).
+ */
+export function transitionAt(look: Look | undefined, cuts: Cut[] | undefined, t: number): { kind: Transition; p: number } | null {
+  if (!look?.transition || look.transition === 'none') return null;
+  let p = 0;
+  for (const c of cuts ?? []) {
+    if (t >= c.end && t < c.end + 0.45) p = Math.max(p, 1 - (t - c.end) / 0.45);
+    if (t < c.start && t > c.start - 0.3) p = Math.max(p, 1 - (c.start - t) / 0.3);
+  }
+  return p > 0.001 ? { kind: look.transition, p } : null;
+}
+
+/** Movement from fx effects and the transition, for the picture's transform. */
+function motionAt(look: Look | undefined, effects: Effect[] | undefined, t: number, cuts?: Cut[]): { x: number; y: number; rot: number; scale: number } {
+  let x = 0, y = 0, rot = 0, scale = 1;
+  for (const e of effectsAt(effects, t, 'fx')) {
+    const k = envelope(e, t);
+    if (e.style === 'shake') { x += Math.sin(t * 53) * 1.4 * k; y += Math.cos(t * 41) * 1.1 * k; }
+    else if (e.style === 'dizzy') { rot += Math.sin(t * 2.6) * 4 * k; scale *= 1 + 0.08 * k; }
+    else if (e.style === 'pulse') scale *= 1 + 0.05 * k * (0.5 + 0.5 * Math.sin(t * Math.PI * 3.2));
+  }
+  const tr = transitionAt(look, cuts, t);
+  if (tr?.kind === 'zoom') scale *= 1 + 0.14 * tr.p;
+  if (tr?.kind === 'shake') { x += Math.sin(t * 61) * 2.2 * tr.p; y += Math.cos(t * 47) * 1.6 * tr.p; }
+  return { x, y, rot, scale };
+}
+
+/**
+ * CSS for the picture at `t`: the canvas's rotation and flip, the framing
+ * (zoom and focus, with zoom effects eased in), and any movement from
+ * effects or the cut transition. '' when the picture is untouched.
+ */
+export function frameStyle(look: Look | undefined, effects: Effect[] | undefined, t: number, cuts?: Cut[]): string {
   const f = frameAt(look, effects, t);
-  if (f.scale <= 1.001) return '';
-  return `transform: scale(${f.scale.toFixed(4)}); transform-origin: ${f.x}% ${f.y}%;`;
+  const m = motionAt(look, effects, t, cuts);
+  const rotate = look?.rotate ?? 0;
+  // Turned on its side, a 16:9 picture has to shrink to fit the 16:9 frame.
+  const fit = rotate === 90 || rotate === 270 ? 9 / 16 : 1;
+  const sx = (look?.flip_h ? -1 : 1) * fit, sy = (look?.flip_v ? -1 : 1) * fit;
+  const scale = f.scale * m.scale;
+  const parts: string[] = [];
+  if (m.x || m.y) parts.push(`translate(${m.x.toFixed(3)}%, ${m.y.toFixed(3)}%)`);
+  if (Math.abs(scale - 1) > 0.001) parts.push(`scale(${scale.toFixed(4)})`);
+  if (rotate || m.rot) parts.push(`rotate(${(rotate + m.rot).toFixed(3)}deg)`);
+  if (sx !== 1 || sy !== 1) parts.push(`scale(${sx}, ${sy})`);
+  if (!parts.length) return '';
+  return `transform: ${parts.join(' ')}; transform-origin: ${f.x}% ${f.y}%;`;
+}
+
+/** The visual (fx) effects playing at `t`, with how far in they are (0-1). */
+export function fxAt(effects: Effect[] | undefined, t: number): { style: FxStyle; k: number; since: number }[] {
+  return effectsAt(effects, t, 'fx').map(e => ({ style: e.style ?? 'shake', k: envelope(e, t), since: t - e.start }));
+}
+
+/** The freeze whose frame is `t`, if playback has just reached it. */
+export function freezeAt(effects: Effect[] | undefined, t: number): Effect | null {
+  for (const e of effects ?? []) if (e.kind === 'freeze' && t >= e.start && t < e.start + 0.3) return e;
+  return null;
+}
+
+// ---- filters ----------------------------------------------------------------
+// Each preset is CSS filter functions (value, and the value that changes
+// nothing, so strength can blend between them), an optional colour wash
+// blended over the picture, and an optional vignette.
+type FilterFn = [name: string, value: number, identity: number, unit: string];
+interface FilterDef { label: string; fns: FilterFn[]; tint?: { color: string; blend: string; opacity: number }; vignette?: number; }
+export const FILTERS: Record<FilterId, FilterDef> = {
+  none: { label: 'Original', fns: [] },
+  clear: { label: 'Clear', fns: [['contrast', 1.08, 1, ''], ['saturate', 1.12, 1, ''], ['brightness', 1.03, 1, '']] },
+  warm: { label: 'Warm', fns: [['saturate', 1.1, 1, '']], tint: { color: '#ff9a3c', blend: 'soft-light', opacity: 0.38 } },
+  cool: { label: 'Cool', fns: [['saturate', 0.95, 1, ''], ['brightness', 1.02, 1, '']], tint: { color: '#3c8dff', blend: 'soft-light', opacity: 0.38 } },
+  vintage: { label: 'Vintage', fns: [['sepia', 0.35, 0, ''], ['contrast', 0.92, 1, ''], ['saturate', 0.85, 1, ''], ['brightness', 1.05, 1, '']], tint: { color: '#f2c27b', blend: 'multiply', opacity: 0.16 }, vignette: 0.3 },
+  film: { label: 'Film', fns: [['contrast', 1.12, 1, ''], ['saturate', 0.82, 1, '']], tint: { color: '#008f87', blend: 'soft-light', opacity: 0.22 } },
+  mono: { label: 'Mono', fns: [['grayscale', 1, 0, ''], ['contrast', 1.05, 1, '']] },
+  noir: { label: 'Noir', fns: [['grayscale', 1, 0, ''], ['contrast', 1.45, 1, ''], ['brightness', 0.92, 1, '']], vignette: 0.45 },
+  sepia: { label: 'Sepia', fns: [['sepia', 0.8, 0, ''], ['contrast', 1.02, 1, '']] },
+  vivid: { label: 'Vivid', fns: [['saturate', 1.5, 1, ''], ['contrast', 1.1, 1, '']] },
+  fade: { label: 'Fade', fns: [['contrast', 0.82, 1, ''], ['brightness', 1.08, 1, ''], ['saturate', 0.8, 1, '']], tint: { color: '#ffffff', blend: 'normal', opacity: 0.08 } },
+  dream: { label: 'Dream', fns: [['brightness', 1.06, 1, ''], ['saturate', 1.2, 1, '']], tint: { color: '#ff7ad9', blend: 'soft-light', opacity: 0.26 } },
+};
+
+/** Colour washes over the picture: the preset's, then warmth's. */
+export function tintsOf(look: Look | undefined): { color: string; blend: string; opacity: number }[] {
+  if (!look) return [];
+  const out: { color: string; blend: string; opacity: number }[] = [];
+  const def = FILTERS[look.filter ?? 'none'];
+  const k = (look.filter_strength ?? 100) / 100;
+  if (def?.tint && k > 0) out.push({ ...def.tint, opacity: def.tint.opacity * k });
+  const w = look.warmth ?? 0;
+  if (w) out.push({ color: w > 0 ? '#ff8a2a' : '#2a7dff', blend: 'soft-light', opacity: (Math.abs(w) / 100) * 0.45 });
+  return out;
+}
+
+/** Vignette strength, 0 to 1: the preset's and the slider's together. */
+export function vignetteOf(look: Look | undefined): number {
+  if (!look) return 0;
+  const def = FILTERS[look.filter ?? 'none'];
+  return Math.min(1, (look.vignette ?? 0) / 100 + (def?.vignette ?? 0) * ((look.filter_strength ?? 100) / 100));
+}
+
+// ---- audio ------------------------------------------------------------------
+/** How far into a track playback is at video time `t`, or null when it isn't playing then. */
+export function trackPosition(edits: Pick<VideoEdits, 'cuts' | 'effects'> | undefined, tr: AudioTrack, t: number): number | null {
+  if (t < tr.start) return null;
+  const pos = playedLength(edits, tr.start, t);
+  if (tr.loop) return tr.duration > 0 ? pos % tr.duration : null;
+  return pos < tr.duration ? pos : null;
+}
+
+/** A track's volume (0-1.5) at a position, with its fades and the end of what plays. */
+export function trackVolume(tr: AudioTrack, pos: number, untilEnd: number): number {
+  let v = tr.volume / 100;
+  if (tr.fade_in) v *= Math.min(1, pos / 1.5);
+  if (tr.fade_out) v *= Math.min(1, Math.max(0, untilEnd) / 2, tr.loop ? 1 : Math.max(0, tr.duration - pos) / 2);
+  return Math.max(0, v);
 }
 
 /**
@@ -170,13 +321,20 @@ export function overlaysAt(overlays: Overlay[] | undefined, t: number): Overlay[
   return (overlays ?? []).filter(o => t >= o.start && t < o.end);
 }
 
-/** CSS filter for the look's colour settings, or '' when untouched. */
+/** CSS filter for the look's colour settings and filter preset, or '' when untouched. */
 export function lookFilter(look: Look | undefined): string {
   if (!look) return '';
   const parts = [];
   if (look.brightness !== 100) parts.push(`brightness(${look.brightness}%)`);
   if (look.contrast !== 100) parts.push(`contrast(${look.contrast}%)`);
   if (look.saturation !== 100) parts.push(`saturate(${look.saturation}%)`);
+  const def = FILTERS[look.filter ?? 'none'];
+  const k = (look.filter_strength ?? 100) / 100;
+  for (const [name, value, identity, unit] of def?.fns ?? []) {
+    const v = identity + (value - identity) * k;
+    if (Math.abs(v - identity) > 0.001) parts.push(`${name}(${v.toFixed(3)}${unit})`);
+  }
+  if (look.hue) parts.push(`hue-rotate(${look.hue}deg)`);
   return parts.join(' ');
 }
 

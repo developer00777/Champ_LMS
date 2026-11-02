@@ -62,7 +62,7 @@
 
 <div class="p-sec">
   <h3 class="p-h">Add text</h3>
-  <p class="p-note">Text appears over the video at the playhead for 4 seconds. Drag its block on the timeline to move it or change how long it stays.</p>
+  <p class="p-note">Text appears over the video at the playhead for 4 seconds. Drag it on the preview to place it anywhere, and its block on the timeline to change when and how long.</p>
   <div class="styles">
     {#each STYLES as s}
       <button class="sty st-{s.id}" on:click={() => add(s)}><span class="demo">{s.name}</span></button>
@@ -70,11 +70,11 @@
   </div>
 </div>
 
-{#if $doc.edits.overlays.length}
+{#if $doc.edits.overlays.some(o => o.style !== 'sticker')}
   <div class="p-sec">
     <h3 class="p-h">On this video</h3>
     <ol class="ovl" bind:this={listEl}>
-      {#each $doc.edits.overlays as o, i}
+      {#each $doc.edits.overlays as o, i}{#if o.style !== 'sticker'}
         <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-noninteractive-element-interactions -->
         <li data-i={i} class:cur={sel === i} on:click={() => selected.set({ kind: 'overlay', index: i })}>
           <div class="ovh">
@@ -90,6 +90,7 @@
             {#each POSITIONS as [v, l]}
               <button role="radio" aria-checked={o.position === v} class:on={o.position === v} on:click={() => edit(i, { position: v })}>{l}</button>
             {/each}
+            {#if o.position === 'free'}<button role="radio" aria-checked="true" class="on" title="Placed by dragging it on the preview">Dragged</button>{/if}
           </div>
           {#if sel === i}
             <div class="opts">
@@ -116,7 +117,7 @@
             <button class="btn xs ghost" on:click|stopPropagation={() => duplicate(i)}>Duplicate</button>
           </div>
         </li>
-      {/each}
+      {/if}{/each}
     </ol>
   </div>
 {/if}
