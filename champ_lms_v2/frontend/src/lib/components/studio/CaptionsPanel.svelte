@@ -244,7 +244,7 @@
 <style>
   .warn { border-color: rgba(245,197,24,.45); }
   .p-hrow { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-  .pill { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: rgba(110,168,255,.18); color: #cfe0ff; }
+  .pill { font-size: 0.68rem; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: rgba(110,168,255,.18); color: var(--st-focus); }
   .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
   .preset { display: grid; gap: 0.3rem; text-align: left; padding: 0.5rem; border-radius: 10px; border: 1px solid var(--st-line); background: var(--st-raise); color: var(--st-text); }
   .preset.on { border-color: var(--st-hot); box-shadow: 0 0 0 1px var(--st-hot); }
@@ -280,6 +280,6 @@
   .lines li input:hover, .lines li input:focus { border-color: var(--st-line); background: var(--st-deep); }
   .t { font-size: 0.7rem; color: var(--st-muted); }
   .t:hover { color: var(--st-text); }
-  .spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255,255,255,.2); border-top-color: #fff; animation: spin .9s linear infinite; vertical-align: -2px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; animation: spin .9s linear infinite; vertical-align: -2px; }
   @keyframes spin { to { rotate: 360deg; } }
 </style>

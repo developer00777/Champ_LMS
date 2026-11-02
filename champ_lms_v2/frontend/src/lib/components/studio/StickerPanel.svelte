@@ -78,7 +78,7 @@
   .set { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--st-muted); }
   .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.3rem; }
   .emo { aspect-ratio: 1; border-radius: 9px; background: var(--st-raise); font-size: 1.35rem; display: grid; place-items: center; transition: transform 120ms; }
-  .emo:hover { transform: scale(1.12); background: #2a2d38; }
+  .emo:hover { transform: scale(1.12); background: var(--st-hover); }
   .big { font-size: 1.3rem; line-height: 1; }
   .linkish { font-size: 0.76rem; color: var(--st-text); text-decoration: underline dotted; margin-right: auto; }
 </style>

@@ -191,7 +191,7 @@
   .k-freeze { --k: #9be7ff; } .k-fx { --k: #ff7ad9; }
   .fxs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
   .fx { display: grid; gap: 0.25rem; padding: 0; background: none; color: var(--st-muted); font-size: 0.66rem; font-weight: 600; }
-  .fx:hover { color: #fff; }
+  .fx:hover { color: var(--st-text); }
   .fxd { position: relative; aspect-ratio: 1; border-radius: 9px; overflow: hidden; display: block; background: linear-gradient(135deg, #3a6ea5, #f3b562); }
   .fxd i { position: absolute; inset: 18%; border-radius: 6px; background: rgba(255,255,255,.85); }
   .fx-shake .fxd i { animation: fxshake 0.35s linear infinite; }

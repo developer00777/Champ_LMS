@@ -201,7 +201,7 @@
   .hl-b { display: grid; gap: 0.25rem; min-width: 0; }
   .hl-b b { font-size: 0.86rem; }
   .why { font-size: 0.76rem; color: var(--st-muted); line-height: 1.4; }
-  .score { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--c) var(--p), rgba(255,255,255,.1) 0); }
+  .score { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--c) var(--p), color-mix(in srgb, var(--st-text) 10%, transparent) 0); }
   .score b { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--st-panel); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
   .score.hi { --c: #4fd17f; } .score.mid { --c: #ffd23f; } .score.lo { --c: #ff8a8f; }
   .linkish { font-size: 0.78rem; color: var(--st-text); text-decoration: underline dotted; }

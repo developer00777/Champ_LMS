@@ -254,21 +254,21 @@
   .panel .x { color: var(--st-text); }
   .panel .x:hover { background: var(--st-raise); }
   .sum { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; font-size: 0.76rem; color: var(--st-muted); margin: 0; }
-  .sum .pass { color: #2ee6a6; } .sum .fail { color: #ff7a82; } .sum .skip { color: #f5c518; }
+  .sum .pass { color: var(--st-ok-text); } .sum .fail { color: var(--st-bad-text); } .sum .skip { color: var(--st-warn-text); }
   .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
   .list li { display: grid; grid-template-columns: 22px 1fr auto; gap: 0.5rem; align-items: start; padding: 0.45rem 0.5rem; border-radius: 10px; background: var(--st-raise); border: 1px solid transparent; }
   .list li.now { border-color: var(--st-mint); }
   .ic { width: 22px; height: 22px; border-radius: 99px; display: grid; place-items: center; font-size: 0.78rem; background: var(--st-deep); color: var(--st-muted); }
-  .list li.pass .ic { background: #0f3d2e; color: #2ee6a6; }
-  .list li.fail .ic { background: #4a1418; color: #ff7a82; }
-  .list li.skip .ic { background: #3d3410; color: #f5c518; }
+  .list li.pass .ic { background: color-mix(in srgb, var(--st-ok-text) 18%, transparent); color: var(--st-ok-text); }
+  .list li.fail .ic { background: color-mix(in srgb, var(--st-bad-text) 18%, transparent); color: var(--st-bad-text); }
+  .list li.skip .ic { background: color-mix(in srgb, var(--st-warn-text) 18%, transparent); color: var(--st-warn-text); }
   .txt { display: grid; gap: 0.1rem; min-width: 0; }
   .name { font-weight: 700; font-size: 0.82rem; color: var(--st-text); text-align: left; padding: 0; }
   .name:hover { text-decoration: underline; }
   .note { font-size: 0.72rem; color: var(--st-muted); line-height: 1.4; }
-  .list li.fail .note { color: #ffb3b8; }
+  .list li.fail .note { color: var(--st-bad-text); }
   .panel .b.ghost { border-color: var(--st-line); color: var(--st-text); }
-  .panel .b.try { background: #fff; color: #000; }
+  .panel .b.try { background: var(--st-ink); color: var(--st-on-ink); }
   .sandbox { display: grid; gap: 0.45rem; padding: 0.6rem; border-radius: 12px; background: rgba(46,230,166,.08); border: 1px solid rgba(46,230,166,.35); font-size: 0.78rem; }
   .sandbox .row { display: flex; gap: 0.4rem; }
   .sandbox .b.next { margin-left: 0; }

@@ -115,7 +115,7 @@
   .rate input { width: 100%; accent-color: var(--st-hot); }
   .ticks { display: flex; justify-content: space-between; width: 100%; }
   .ticks button { font-size: 0.66rem; color: var(--st-muted); padding: 0 0.2rem; font-variant-numeric: tabular-nums; }
-  .ticks button.on { color: #fff; font-weight: 800; }
+  .ticks button.on { color: var(--st-text); font-weight: 800; }
   .linkish { font-size: 0.76rem; color: var(--st-text); text-decoration: underline dotted; }
   .list input[type='range'] { width: 100%; accent-color: var(--st-hot); }
 </style>
