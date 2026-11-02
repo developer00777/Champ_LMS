@@ -59,21 +59,25 @@
   $: items = NAV.filter((i) => !i.admin || $isAdmin);
 
   // The notch: the content panel bulges up under the active tab, and slides
-  // to follow it (the reference's signature detail).
+  // to follow it (the reference's signature detail). It lives inside the top
+  // bar, layered under the tabs' tooltips: drawn over the whole bar from the
+  // canvas, it covered the tooltip of a neighbouring tab, which showed in dark
+  // mode as a dark bite out of the light bubble (in light mode the notch and
+  // the bubble are the same colour, so it went unseen).
   let tabsEl: HTMLElement;
-  let canvasEl: HTMLElement;
+  let topbarEl: HTMLElement;
   let notchX = 0;
   let notchOn = false;
   async function placeNotch() {
     await tick();
     const a = tabsEl?.querySelector<HTMLElement>('a.active');
-    if (!a || !canvasEl || !tabsEl.offsetParent) { notchOn = false; return; }
+    if (!a || !topbarEl || !tabsEl.offsetParent) { notchOn = false; return; }
     const r = a.getBoundingClientRect();
-    const c = canvasEl.getBoundingClientRect();
-    notchX = r.left + r.width / 2 - c.left;
+    const t = topbarEl.getBoundingClientRect();
+    notchX = r.left + r.width / 2 - t.left;
     notchOn = true;
   }
-  $: if (tabsEl && canvasEl) { path; items; placeNotch(); }
+  $: if (tabsEl && topbarEl) { path; items; placeNotch(); }
 
   let drawerOpen = false;
   let menuOpen = false;
@@ -101,7 +105,14 @@
     <div class="route-progress" role="progressbar" aria-label="Loading page"><span></span></div>
   {/if}
   <div class="shell">
-    <header class="topbar">
+    <header class="topbar" bind:this={topbarEl}>
+      <svg
+        class="notch"
+        class:on={notchOn}
+        style="--x:{notchX}px"
+        width="150" height="18" viewBox="0 0 150 18" aria-hidden="true"
+      ><path d="M0 18C34 18 46 0 75 0s41 18 75 18z" /></svg>
+
       <button class="hamburger" on:click={() => (drawerOpen = true)} aria-label="Open navigation">
         <Icon name="menu" size={22} />
       </button>
@@ -191,13 +202,7 @@
       </div>
     </header>
 
-    <div class="canvas" bind:this={canvasEl}>
-      <svg
-        class="notch"
-        class:on={notchOn}
-        style="--x:{notchX}px"
-        width="150" height="18" viewBox="0 0 150 18" aria-hidden="true"
-      ><path d="M0 18C34 18 46 0 75 0s41 18 75 18z" /></svg>
+    <div class="canvas">
 
       {#if $auth.user?.must_change_password && !$page.url.pathname.startsWith('/auth')}
         <!-- Signed in with an admin-issued password: nudge, don't lock them out,
@@ -444,8 +449,11 @@
     margin: 0 10px; border-radius: 30px 30px 0 0;
     background: var(--bg);
   }
+  /* Inside the top bar, sitting on its bottom edge and 1px over the canvas so
+     the two meet without a seam. z-index 1 within the bar: over its black
+     background, under the tab tooltips (130) and the profile menu (120). */
   .notch {
-    position: absolute; top: -17px; left: 0; z-index: 101;
+    position: absolute; bottom: -1px; left: 0; z-index: 1;
     fill: var(--bg);
     transform: translateX(calc(var(--x) - 75px));
     transition: transform 520ms var(--ease-out), opacity var(--dur-2) var(--ease-out);

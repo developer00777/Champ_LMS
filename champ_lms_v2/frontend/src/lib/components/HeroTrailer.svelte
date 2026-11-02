@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { moduleHref, type Module } from '$lib/api/client';
+  import { moduleHref, moduleWatchHref, type Module } from '$lib/api/client';
   import Icon from './Icon.svelte';
   import { tilt } from '$lib/actions/auto-motion';
   export let module: Module | null = null;
@@ -19,7 +19,7 @@
       <h2>{module.title}</h2>
       <p class="desc">{module.description || 'Start learning with this module.'}</p>
       <div class="actions">
-        <a href={moduleHref(module)} class="btn-primary play-btn">
+        <a href={moduleWatchHref(module)} class="btn-primary play-btn">
           <span class="play-ico"><Icon name="play" size={14} stroke={0} /></span> Start learning
         </a>
         <a href={moduleHref(module)} class="btn-ghost">Details</a>

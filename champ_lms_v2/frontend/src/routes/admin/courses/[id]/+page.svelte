@@ -440,8 +440,8 @@
       <div class="fmt-hint ui-rise" style="--i:2">
         <div class="fmt-mini" aria-hidden="true"><span class="fs" class:on={course.format === 'series'}>SERIES</span><span class="fc" class:on={course.format === 'course'}>COURSE</span></div>
         <div>
-          {#if course.format === 'series'}<b>Only videos so far</b>, so learners get the Netflix-style series player. Add an AI quiz, a test or notes and it becomes a full course with a course map.
-          {:else if course.format === 'course'}<b>Mixed content</b>, so learners get the full course player with the course map on the left, notes and a synced transcript.
+          {#if course.format === 'series'}<b>Only videos so far</b>, so learners see the standard player with an episode list beside it. Add an AI quiz, a test or notes and that list becomes a course map with every step.
+          {:else if course.format === 'course'}<b>Mixed content</b>, so learners get the standard player with the course map on the right, notes and a synced transcript.
           {:else}<b>Empty course.</b> Drop videos below to start.{/if}
         </div>
       </div>

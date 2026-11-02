@@ -64,7 +64,9 @@
 
 <div class="page">
   <Breadcrumbs items={data
-    ? [{ label: 'Tests', href: '/tests' }, { label: data.test_title }, { label: 'Result' }]
+    // The test's own page starts an attempt, so its name isn't a link: it
+    // names the current page instead of sitting as a dead middle crumb.
+    ? [{ label: 'Tests', href: '/tests' }, { label: `${data.test_title} · Result` }]
     : [{ label: 'Tests', href: '/tests' }, { label: 'Result' }]} />
 
   {#if loading}
