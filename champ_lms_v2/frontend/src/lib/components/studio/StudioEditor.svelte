@@ -6,8 +6,14 @@
   // overview of the edit when none is open), and the timeline across the
   // bottom. On a phone the dock is a strip you swipe and the panel a sheet. It owns the shared state (studio.ts) that the
   // stage, timeline and panels work on.
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
+  import { isAdmin } from '$lib/stores/auth';
+  import { pendingRequests } from '$lib/stores/test-requests';
+  import { NAV } from '$lib/nav';
+  import Icon from '$lib/components/Icon.svelte';
   import { api, type StudioEpisode } from '$lib/api/client';
   import { clock, lineAt } from '$lib/utils/transcribe';
   import { cutAt, frameStyle, freezeAt, lookFilter, mutedAt, speedAt, type Effect, type Overlay } from '$lib/utils/video-edits';
@@ -15,6 +21,7 @@
   import BackdropFill from '$lib/components/video/BackdropFill.svelte';
   import { icons } from '$lib/components/course/icons';
   import { theme } from '$lib/stores/theme';
+  import { confirmDialog, openDialog } from '$lib/stores/dialog';
   import {
     MIN_PART, addEffect, createStudio, cutMarked, provideStudio, removeSelected, round, splitAt, trimEnd, trimStart,
     type Tab,
@@ -294,8 +301,14 @@
 
   // ---- save and close -------------------------------------------------------------
   let busy = false;
-  async function save() {
-    if (tourSnapshot && !confirm("The tour's sample edits (a sticker, a chime, a cut…) are still on this video. Save them too?\n\nCancel, then use Undo the tour's edits in the feature check, to save without them.")) return;
+  /** True once saved. */
+  async function save(): Promise<boolean> {
+    if (busy) return false;
+    if (tourSnapshot && !(await confirmDialog({
+      title: "Save the tour's sample edits too?",
+      message: "The tour's sample edits (a sticker, a chime, a cut…) are still on this video.\n\nTo save without them, go back and use Undo the tour's edits in the feature check.",
+      confirm: 'Save them too', cancel: 'Go back', icon: 'alert',
+    }))) return false;
     busy = true;
     st.pause();
     const d = $doc;
@@ -313,13 +326,73 @@
       tourSnapshot = null;
       st.say(made > 1 ? `Saved. The video is now ${made} episodes; this is part 1.` : 'Saved. Learners get the edited video now.');
       onSaved(res);
-    } catch (e: any) { st.say(e.message, 'bad'); }
+      return true;
+    } catch (e: any) { st.say(e.message, 'bad'); return false; }
     finally { busy = false; }
   }
-  function close() {
-    if (busy) return;
-    if (dirty && !confirm('Close the studio without saving your changes?')) return;
+  let closing = false;
+  /** Leaves the studio, asking about unsaved edits first. False if it stayed open. */
+  async function close(): Promise<boolean> {
+    if (busy || closing) return false;
+    if (dirty) {
+      closing = true;
+      const choice = await openDialog({
+        title: 'Save your changes before closing?',
+        message: tooShort
+          ? `You have edits that aren't saved yet. They can't be saved as they are: every part must play at least ${MIN_PART} seconds.`
+          : "You have edits that aren't saved yet. Learners only see them once they're saved.",
+        icon: 'unsaved', tone: 'warn',
+        actions: [
+          { id: 'keep', label: 'Keep editing', kind: 'ghost' },
+          { id: 'discard', label: 'Discard changes', kind: 'danger' },
+          { id: 'save', label: 'Save and close', kind: 'primary', disabled: tooShort },
+        ],
+        focus: tooShort ? 'keep' : 'save',
+      });
+      closing = false;
+      if (choice === 'save') { if (!(await save())) return false; }
+      else if (choice !== 'discard') return false;
+    }
     onClose();
+    return true;
+  }
+
+  // ---- app menu -------------------------------------------------------------------
+  // The studio covers the app's top bar, so its own bar carries the main
+  // navigation. Going somewhere closes the studio first (same unsaved-edits
+  // question as ✕), and only then navigates.
+  let appMenu = false;
+  let appMenuBtn: HTMLButtonElement;
+  let appMenuEl: HTMLElement;
+  $: navItems = NAV.filter(i => !i.admin || $isAdmin);
+  async function toggleAppMenu() {
+    appMenu = !appMenu;
+    if (appMenu) { await tick(); appMenuEl?.querySelector<HTMLElement>('a')?.focus(); }
+  }
+  async function goTo(href: string) {
+    // Focus the menu button before its link goes, so "Keep editing" in the
+    // unsaved-edits question hands focus back there, not to the page body.
+    appMenuBtn?.focus();
+    appMenu = false;
+    if (await close()) goto(href);
+  }
+  /** Tabbing out of the menu closes it. */
+  function menuFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget as Node | null;
+    if (next && !(e.currentTarget as HTMLElement).contains(next)) appMenu = false;
+  }
+  function clickAway(node: HTMLElement) {
+    const handler = (e: MouseEvent) => { if (!node.contains(e.target as Node)) appMenu = false; };
+    document.addEventListener('click', handler, true);
+    return { destroy: () => document.removeEventListener('click', handler, true) };
+  }
+  function menuKeys(e: KeyboardEvent) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const links = [...appMenuEl.querySelectorAll<HTMLElement>('a')];
+    const i = links.indexOf(document.activeElement as HTMLElement);
+    links[(i + (e.key === 'ArrowDown' ? 1 : -1) + links.length) % links.length]?.focus();
   }
 
   // ---- tools ----------------------------------------------------------------------
@@ -474,6 +547,15 @@
   let help = false;
   function onKey(e: KeyboardEvent) {
     const el = e.target as HTMLElement;
+    // Keys typed in another modal on top (the admin's test-request pop-up)
+    // are that modal's, not the editor's.
+    const modal = el.closest?.('[aria-modal="true"]');
+    if (modal && !studioEl?.contains(modal)) return;
+    // While the app menu is open, keys belong to it, not the editor.
+    if (appMenu) {
+      if (e.key === 'Escape') { appMenu = false; appMenuBtn?.focus(); }
+      return;
+    }
     const typing = el.closest('input, textarea, select, [contenteditable="true"]');
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? st.redo() : st.undo(); return; }
@@ -534,9 +616,34 @@
 <div class="studio" class:no-props={!showProps} role="dialog" aria-modal="true" aria-label="Video studio"
   style="--tl-max:{tlH ? `${tlH}px` : 'none'}" use:portal bind:this={studioEl}>
   <!-- ============ top bar ============ -->
-  <header class="top">
+  <header class="top" class:raised={appMenu}>
     <div class="tl-left">
       <button class="icon" on:click={close} aria-label="Close the studio" title="Close (Esc)">{@html icons.x}</button>
+      <div class="appnav" use:clickAway on:focusout={menuFocusOut}>
+        <button class="icon" class:pressed={appMenu} bind:this={appMenuBtn} on:click={toggleAppMenu}
+          aria-haspopup="menu" aria-expanded={appMenu} aria-label="Main menu: go to another part of Champ LMS" title="Main menu">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="5.5" r="1.9"/><circle cx="12" cy="5.5" r="1.9"/><circle cx="18.5" cy="5.5" r="1.9"/><circle cx="5.5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18.5" cy="12" r="1.9"/><circle cx="5.5" cy="18.5" r="1.9"/><circle cx="12" cy="18.5" r="1.9"/><circle cx="18.5" cy="18.5" r="1.9"/></svg>
+          {#if $isAdmin && $pendingRequests.length}<span class="am-dot" aria-hidden="true"></span>{/if}
+        </button>
+        {#if appMenu}
+          <div class="appmenu" role="menu" tabindex="-1" aria-label="Main menu" bind:this={appMenuEl} on:keydown={menuKeys}>
+            <div class="am-head"><span class="am-logo">Champ<span>LMS</span></span><em>Leaving closes the studio</em></div>
+            {#each navItems as item}
+              {@const active = item.match($page.url.pathname)}
+              <a role="menuitem" href={item.href} class:active aria-current={active ? 'page' : undefined}
+                on:click|preventDefault={() => goTo(item.href)}>
+                <Icon name={item.icon} size={18} /> {item.label}
+                {#if item.admin && $pendingRequests.length}
+                  <span class="am-count" title="Test requests waiting">{$pendingRequests.length}</span>
+                {/if}
+              </a>
+            {/each}
+            <a role="menuitem" href="/settings" on:click|preventDefault={() => goTo('/settings')}>
+              <Icon name="settings" size={18} /> Settings
+            </a>
+          </div>
+        {/if}
+      </div>
       <div class="ttl">
         <nav class="crumbs" aria-label="Where you are">
           <span class="app">Video studio</span><span class="sep">›</span>
@@ -887,7 +994,34 @@
     grid-area: top; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem;
     padding: 0.3rem 0.7rem; border-bottom: 1px solid var(--st-line); background: var(--st-panel);
   }
+  /* Over the stage, panels and timeline while the app menu hangs below it. */
+  .top.raised { position: relative; z-index: 40; }
   .tl-left { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+
+  /* ---- app menu (the main navigation the studio covers) ---- */
+  .appnav { position: relative; flex: none; margin-left: -0.3rem; }
+  .appnav > .icon { position: relative; }
+  .am-dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--st-hot); box-shadow: 0 0 0 2px var(--st-panel); }
+  .appmenu {
+    position: absolute; top: calc(100% + 8px); left: 0; z-index: 40;
+    width: 240px; padding: 0.4rem; display: grid; gap: 1px;
+    background: var(--st-panel); color: var(--st-text);
+    border: 1px solid var(--st-line); border-radius: 14px; box-shadow: var(--st-shadow);
+    transform-origin: top left; animation: am-in 180ms ease-out;
+  }
+  @keyframes am-in { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: none; } }
+  .am-head { display: grid; gap: 2px; padding: 0.45rem 0.6rem 0.55rem; margin-bottom: 0.25rem; border-bottom: 1px solid var(--st-line); }
+  .am-logo { font-size: 1rem; font-weight: 900; letter-spacing: -0.04em; display: inline-flex; align-items: baseline; gap: 0.15rem; }
+  .am-logo span { font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: #e50914; padding: 0.08rem 0.32rem; border-radius: 5px; transform: translateY(-0.25rem); }
+  .am-head em { font-style: normal; font-size: 0.7rem; color: var(--st-muted); }
+  .appmenu a {
+    display: flex; align-items: center; gap: 0.6rem; min-height: 36px; padding: 0 0.6rem;
+    border-radius: 9px; font-size: 0.84rem; font-weight: 500; color: var(--st-text);
+  }
+  .appmenu a:hover, .appmenu a:focus-visible { background: var(--st-hover); outline: none; }
+  .appmenu a:focus-visible { box-shadow: inset 0 0 0 2px var(--st-focus); }
+  .appmenu a.active { color: var(--st-hot); font-weight: 700; }
+  .am-count { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--st-hot); color: #fff; font-size: 0.68rem; font-weight: 700; line-height: 18px; text-align: center; }
   .ttl { min-width: 0; display: grid; gap: 1px; }
   .crumbs { display: flex; gap: 0.35rem; align-items: center; font-size: 0.62rem; font-weight: 600; color: var(--st-muted); min-width: 0; }
   .crumbs .app { color: var(--st-hot); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; flex: none; }

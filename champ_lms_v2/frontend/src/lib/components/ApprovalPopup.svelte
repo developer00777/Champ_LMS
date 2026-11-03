@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type TestRequestRow } from '$lib/api/client';
   import { activeRequest, closeRequest, refreshRequests } from '$lib/stores/test-requests';
+  import { trapFocus } from '$lib/utils/focus-trap';
 
   let attempts = 1;
   let note = '';
@@ -47,7 +48,7 @@
 {#if $activeRequest}
   {@const r = $activeRequest}
   <div class="scrim" on:click|self={() => !busy && closeRequest()} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="req-title">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="req-title" tabindex="-1" use:trapFocus>
       <div class="eyebrow"><span class="pulse"></span>Test request · {ago(r.created_at)}</div>
       <h2 id="req-title">{r.full_name} wants to take {r.test_title}</h2>
       <dl class="facts">
@@ -100,14 +101,17 @@
 
 <style>
   .scrim {
-    position: fixed; inset: 0; z-index: 400;
-    background: rgba(4, 4, 10, 0.6);
+    /* Above the video studio (1000): requests pop up on any screen, and the
+       dialog takes focus, so it must never open hidden behind something.
+       Below DialogHost (3000). */
+    position: fixed; inset: 0; z-index: 1100;
+    background: var(--scrim);
     display: grid; place-items: center; padding: 1rem;
   }
   .modal {
     width: min(480px, 100%); max-height: calc(100vh - 2rem); overflow: auto;
-    background: var(--surface); border: 1px solid var(--border-hover);
-    border-radius: 16px; box-shadow: var(--shadow-lg);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); outline: none;
     padding: 1.4rem; display: grid; gap: 1rem;
   }
   .eyebrow {

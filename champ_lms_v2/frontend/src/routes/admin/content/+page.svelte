@@ -7,6 +7,7 @@
   import Icon from '$lib/components/Icon.svelte';
   import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
   import { countUp } from '$lib/actions/motion';
+  import { trapFocus } from '$lib/utils/focus-trap';
   import SortHeader from '$lib/components/SortHeader.svelte';
   import { ariaSort, sortRows, type SortAccessors, type SortState } from '$lib/utils/table-sort';
 
@@ -263,7 +264,9 @@
 <!-- Confirmation modal. Not a native confirm() — those block the page. -->
 {#if target}
   <div class="overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title" tabindex="-1" use:trapFocus
+      on:keydown={(e) => { if (e.key === 'Escape' && !deleting) closeModal(); }}>
       <span class="m-warn" aria-hidden="true"><Icon name="trash" size={24} /></span>
       <h2 id="del-title">Permanently delete this {target.kind}?</h2>
       <p class="warn-box">
@@ -432,7 +435,7 @@
 
   /* ---------- modal (entrance comes from the global .overlay rule) ---------- */
   .overlay { position: fixed; inset: 0; background: var(--scrim); display: grid; place-items: center; padding: 1rem; z-index: 200; }
-  .modal { background: var(--surface); border-radius: 28px; box-shadow: var(--shadow-lg); padding: 1.6rem; max-width: 500px; width: 100%; max-height: 90vh; overflow-y: auto; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 1.6rem; max-width: 500px; width: 100%; max-height: 90vh; overflow-y: auto; outline: none; }
   .m-warn { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 0.8rem; color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); animation: wiggle 600ms var(--ease-out) 250ms backwards; }
   .modal h2 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.8rem; }
   .warn-box { display: flex; gap: 0.55rem; align-items: flex-start; font-size: 0.84rem; line-height: 1.6; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 16px; padding: 0.75rem 0.9rem; margin-bottom: 1rem; }

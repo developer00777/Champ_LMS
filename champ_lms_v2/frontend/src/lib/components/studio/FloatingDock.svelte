@@ -9,7 +9,7 @@
   // moves along them, a divider between groups, a dot under the open tool.
   // On touch screens, narrow ones and with reduced motion it is a plain strip
   // you swipe, without the magnifying.
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import DockItem from './DockItem.svelte';
 
   export let groups: DockGroup[] = [];
@@ -71,8 +71,25 @@
     const left = r.left + r.width / 2 - restOffsets.width / 2;
     centers = restOffsets.out.map(o => left + o);
     mouseX = e.clientX;
+    pointer = { x: e.clientX, y: e.clientY };
+    if (!frame) frame = requestAnimationFrame(findPointed);
   }
-  function onLeave() { mouseX = Infinity; }
+  function onLeave() { mouseX = Infinity; pointer = null; pointedIdx = -1; }
+
+  // Which icon is under the pointer, checked every frame while it's over the
+  // dock: the icons keep sliding as they settle after the pointer stops, and
+  // the browser only re-checks hover when the mouse moves.
+  let pointer: { x: number; y: number } | null = null;
+  let pointedIdx = -1;
+  let frame = 0;
+  function findPointed() {
+    frame = 0;
+    if (!pointer || still || !dockEl) { pointedIdx = -1; return; }
+    const el = document.elementFromPoint(pointer.x, pointer.y)?.closest('.dock-item');
+    pointedIdx = el ? [...dockEl.querySelectorAll('.dock-item')].indexOf(el) : -1;
+    frame = requestAnimationFrame(findPointed);
+  }
+  onDestroy(() => { if (frame) cancelAnimationFrame(frame); });
 </script>
 
 <div class="room" bind:clientWidth={roomW}>
@@ -85,6 +102,7 @@
         {@const i = flat.indexOf(tl)}
         <DockItem label={tl.label} icon={tl.icon} desc={tl.desc} shortcut={tl.key ?? ''} action={!!tl.run}
           active={!tl.run && active === tl.id} {mouseX} center={centers[i] ?? NaN} {base} {max} {still} {instant}
+          pointed={i === pointedIdx}
           on:click={() => dispatch('use', tl)} />
       {/each}
     </span>

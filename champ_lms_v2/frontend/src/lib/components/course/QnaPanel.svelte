@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { api, type EpisodeQuestion } from '$lib/api/client';
   import { clock } from '$lib/utils/transcribe';
+  import { confirmDialog } from '$lib/stores/dialog';
   import { icons } from './icons';
 
   export let courseId: string;
@@ -47,7 +48,11 @@
   }
 
   async function remove(q: EpisodeQuestion) {
-    if (!confirm(q.mine ? 'Delete your question?' : 'Delete this question for everyone?')) return;
+    if (!(await confirmDialog({
+      title: q.mine ? 'Delete your question?' : 'Delete this question for everyone?',
+      message: q.answer ? 'Its answer is deleted too. This cannot be undone.' : 'This cannot be undone.',
+      confirm: 'Delete', danger: true,
+    }))) return;
     busy = q.id; error = '';
     try {
       await api.deleteMyQuestion(courseId, q.id);

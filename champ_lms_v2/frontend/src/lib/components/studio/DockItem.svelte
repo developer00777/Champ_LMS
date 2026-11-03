@@ -36,8 +36,14 @@
   // the original's useTransform(distance, [-150, 0, 150], [40, 80, 40]).
   $: target = still || dist >= reach ? base : base + (max - base) * (1 - dist / reach);
   $: size.set(target, still || instant ? { hard: true } : undefined);
-  // Hovered: the pointer is within this icon's resting slot.
-  $: hovered = !still && dist <= base / 2 + 4;
+  /** The pointer is over this icon right now (the dock checks every frame). */
+  export let pointed = false;
+  // The tooltip follows what's really under the pointer. (Working it out
+  // from the resting slot, as the sizes are, named the wrong tool near the
+  // dock's ends, where grown icons have slid furthest from their slots.) The
+  // hit area spans the gaps either side, so moving along the dock never
+  // drops the tooltip.
+  $: hovered = !still && pointed;
   $: showTip = hovered || focused;
   $: iconSize = Math.round($size * 0.48);
 </script>
@@ -61,6 +67,9 @@
     background: var(--st-raise); color: var(--st-text); border: 1px solid var(--st-line);
     transition: background-color 140ms, border-color 140ms, color 140ms;
   }
+  /* Hover area: half the 8px gap on each side (neighbours meet, never
+     overlap) and down to the dock's bottom edge. */
+  .dock-item::before { content: ''; position: absolute; inset: -6px -4px -9px; }
   .dock-item:hover { background: var(--st-hover); }
   .dock-item:focus-visible { outline: 2px solid var(--st-focus); outline-offset: 2px; }
   .dock-item.action { border-style: dashed; }

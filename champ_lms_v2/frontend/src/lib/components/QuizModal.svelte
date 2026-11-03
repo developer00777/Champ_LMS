@@ -5,6 +5,7 @@
   import ShareAchievement from './ShareAchievement.svelte';
   import Icon from './Icon.svelte';
   import { countUp } from '$lib/actions/motion';
+  import { trapFocus } from '$lib/utils/focus-trap';
 
   export let assessmentId: string;
   export let questions: AssessmentData['questions'];
@@ -41,7 +42,7 @@
 <!-- The backdrop is a mouse shortcut only; keyboard users close with the × button.
      Escape deliberately does nothing: one stray press would throw away a half-done quiz. -->
 <div class="overlay" role="presentation" on:click|self={() => dispatch('close')}>
-  <div class="modal" role="dialog" aria-modal="true" aria-label="Quiz">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Quiz" tabindex="-1" use:trapFocus>
     <button class="close ui-round" on:click={() => dispatch('close')} aria-label="Close"><Icon name="close" size={16} /></button>
 
     {#if result}
@@ -121,8 +122,10 @@
   }
   .modal {
     background: var(--surface);
-    border-radius: 32px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
     box-shadow: var(--shadow-lg);
+    outline: none;
     padding: 2rem 1.75rem 1.75rem;
     max-width: 580px;
     width: 100%;

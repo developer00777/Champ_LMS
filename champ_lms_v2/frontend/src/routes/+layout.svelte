@@ -12,10 +12,12 @@
   import RewardModal from '$lib/components/RewardModal.svelte';
   import ApprovalPopup from '$lib/components/ApprovalPopup.svelte';
   import Tooltips from '$lib/components/Tooltips.svelte';
+  import DialogHost from '$lib/components/DialogHost.svelte';
   import { pendingRequests, startRequestPolling, stopRequestPolling } from '$lib/stores/test-requests';
   import { countUp } from '$lib/actions/motion';
   import { autoMotion, installRipple, staggerIn } from '$lib/actions/auto-motion';
   import { motion } from '$lib/stores/motion';
+  import { NAV } from '$lib/nav';
   import '../app.css';
 
   onMount(() => {
@@ -44,17 +46,6 @@
   $: if ($isAdmin) startRequestPolling(); else stopRequestPolling();
   $: if (!$isLoggedIn && !isAuthPage && !$auth.loading) goto('/auth/login');
 
-  type NavItem = { href: string; label: string; icon: string; match: (p: string) => boolean; admin?: boolean };
-  const NAV: NavItem[] = [
-    { href: '/', label: 'Home', icon: 'home', match: (p) => p === '/' },
-    { href: '/my-learning', label: 'My Learning', icon: 'book', match: (p) => p === '/my-learning' },
-    { href: '/paths', label: 'Paths', icon: 'route', match: (p) => p === '/paths' },
-    { href: '/daily', label: 'Today', icon: 'flame', match: (p) => p === '/daily' },
-    { href: '/challenges', label: 'Challenges', icon: 'flag', match: (p) => p === '/challenges' },
-    { href: '/tests', label: 'Tests', icon: 'clipboard', match: (p) => p.startsWith('/tests') },
-    { href: '/leaderboard', label: 'Leaderboard', icon: 'trophy', match: (p) => p === '/leaderboard' },
-    { href: '/admin', label: 'Admin', icon: 'settings', match: (p) => p.startsWith('/admin'), admin: true },
-  ];
   $: path = $page.url.pathname;
   $: items = NAV.filter((i) => !i.admin || $isAdmin);
 
@@ -253,6 +244,7 @@
 {/if}
 
 <Tooltips />
+<DialogHost />
 
 <style>
   /* ---------- loading ---------- */
