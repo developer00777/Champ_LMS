@@ -11,6 +11,7 @@
   import { AudioMixer } from '$lib/utils/audio-mix';
   import EditedLayer from '$lib/components/video/EditedLayer.svelte';
   import BackdropFill from '$lib/components/video/BackdropFill.svelte';
+  import { arrive, carry, clearSkip, exitPip, inPip, pipSupported, setSkip, takeOver } from '$lib/utils/pip-handoff';
 
   export let episodeId: string;
   export let embedUrl: string = '';   // Bunny iframe embed fallback
@@ -39,6 +40,8 @@
   function fallbackToEmbed(reason: string) {
     if (!embedUrl) return; // nothing to fall back to; leave the error visible
     console.warn(`[VideoPlayer] HLS failed (${reason}) — falling back to embed; progress tracking disabled`);
+    // The video is about to leave the page; its floating window would stay on a dead picture.
+    if (inPip(videoEl)) exitPip();
     hls?.destroy();
     hls = null;
     hlsFailed = true;
@@ -107,16 +110,20 @@
   function tick() {
     raf = 0;
     if (!videoEl || videoEl.paused) return;
+    if (step()) raf = requestAnimationFrame(tick);
+  }
+  /** One frame's edits: skip a cut, start a freeze, apply effects, keep the music in step. False once a freeze holds. */
+  function step(): boolean {
     frameT = Math.max(0, videoEl.currentTime - clipStart);
     const cut = !videoEl.seeking && cutAt(cuts, frameT);
     if (cut) videoEl.currentTime = clipStart + cut.end;
     else {
       const fz = freezeAt(effects, frameT);
-      if (fz && !frozen.has(fz)) { hold(fz); return; }
+      if (fz && !frozen.has(fz)) { hold(fz); return false; }
       applyEffects(frameT);
       mixer?.sync(edits, frameT, { playing: true, rate, master: muted ? 0 : volume, end: clipLength });
     }
-    raf = requestAnimationFrame(tick);
+    return true;
   }
   function hold(fz: Effect) {
     if (!videoEl) return;
@@ -178,7 +185,9 @@
     isFs = !!document.fullscreenElement && !!container && document.fullscreenElement.contains(container);
   };
   let trackMode: TextTrackMode = 'hidden';
-  $: trackMode = ccOn && vttUrl && videoFs ? 'showing' : 'hidden';
+  // The browser draws the track itself in its own full screen and in the
+  // picture-in-picture window (where the browser supports it).
+  $: trackMode = ccOn && vttUrl && (videoFs || pipOn) ? 'showing' : 'hidden';
   $: if (trackEl?.track) trackEl.track.mode = trackMode;
   function toggleCc() {
     ccOn = !ccOn;
@@ -208,8 +217,14 @@
   let hoverPct: number | null = null; // pointer over the seek bar, 0–1
   let active = true; // pointer moved recently: show the bar while playing
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  // Picture in picture: the video in the browser's floating window. The
+  // button waits for the video's size to be known (asking sooner fails).
+  // Leaving the page while in it, the video plays on there (see pip-handoff).
   let pipOn = false;
-  const canPip = typeof document !== 'undefined' && 'pictureInPictureEnabled' in document && (document as any).pictureInPictureEnabled;
+  const canPip = pipSupported();
+  let metaReady = false;
+  let pipHref = ''; // this video's page, for the window's "Back to tab"
+  const skipOwner = {};
   let rel = 0; // current position in clip time
   let clipEnded = false;
   // Once per play-through: a part whose clipEnd is at the video's end gets
@@ -318,13 +333,19 @@
     // A player created while the page is already full screen (auto-advance
     // to the next episode) starts with the right full-screen button.
     onFsChange();
+    // The video a picture-in-picture window was playing (or "Back to tab"
+    // from it) carries on from where the window had got to.
+    const carried = arrive(episodeId);
+    if (carried != null) startAt = carried;
     if (track) player.startTracking(episodeId);
     furthest = Math.max(furthestStart, startAt);
 
     if (!streamUrl) return;
     videoEl.volume = volume;
-    videoEl.addEventListener('enterpictureinpicture', () => (pipOn = true));
-    videoEl.addEventListener('leavepictureinpicture', () => (pipOn = false));
+    videoEl.addEventListener('enterpictureinpicture', () => { pipOn = true; pipHref = location.pathname + location.search; });
+    videoEl.addEventListener('leavepictureinpicture', () => { pipOn = false; wake(); });
+    // The floating window's own skip buttons (and media keys): 10 s, like j / l.
+    setSkip(skipOwner, by => nudge(by));
     wake();
 
     // Dynamically import HLS.js — works with Bunny Stream HLS URLs
@@ -364,11 +385,23 @@
     destroyed = true;
     if (raf) cancelAnimationFrame(raf);
     if (holdTimer) clearTimeout(holdTimer);
-    mixer?.destroy();
-    hls?.destroy();
+    clearSkip(skipOwner);
+    // Leaving while in picture in picture: the video plays on in the window,
+    // with its stream, music and progress tracking, until the window closes.
+    const carried = inPip(videoEl);
+    if (carried) {
+      carry({
+        video: videoEl, hls, mixer, edits, episodeId, clipStart, clipEnd, track,
+        href: pipHref || location.pathname + location.search,
+        skipLimit: skipLimitSeconds, furthest, rate, volume, muted, resume: holding,
+      });
+    } else {
+      mixer?.destroy();
+      hls?.destroy();
+    }
     if (vttUrl) URL.revokeObjectURL(vttUrl);
     if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange);
-    if (track) player.stopTracking();
+    if (track && !carried) player.stopTracking();
     stopAutoAdvance();
     if (noticeTimer) clearTimeout(noticeTimer);
     if (hideTimer) clearTimeout(hideTimer);
@@ -399,6 +432,9 @@
       return;
     }
     applyEffects(rel);
+    // A background tab (watching in picture in picture from another tab)
+    // gets no animation frames: run the frame's edits here instead.
+    if (document.hidden && !videoEl.paused && !videoEl.seeking) step();
     report();
     if (!videoEl.seeking) furthest = Math.max(furthest, rel);
     onTime?.(rel);
@@ -483,15 +519,22 @@
   }
   function fullscreen() {
     rateMenu = false;
+    // Going full screen brings the video back from its floating window.
+    if (pipOn && !isFs) exitPip();
     if (onFullscreen) { onFullscreen(); return; }
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else container.requestFullscreen?.().catch(() => {});
   }
   async function togglePip() {
-    if (!videoEl) return;
+    if (!videoEl || !metaReady) return;
+    rateMenu = false; chaptersOpen = false;
     try {
-      if ((document as any).pictureInPictureElement) await (document as any).exitPictureInPicture();
-      else await (videoEl as any).requestPictureInPicture();
+      if (inPip(videoEl)) await (document as any).exitPictureInPicture();
+      else {
+        // Out of full screen first: the window can't open from it.
+        if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+        await (videoEl as any).requestPictureInPicture();
+      }
     } catch { /* not allowed here */ }
   }
   function onProgress() {
@@ -512,7 +555,7 @@
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(() => { active = false; }, 2600);
   }
-  $: showBar = paused || active || rateMenu || chaptersOpen || clipEnded;
+  $: showBar = paused || active || rateMenu || chaptersOpen || clipEnded || pipOn;
   // A click anywhere outside the speed or chapters menu closes it (otherwise
   // it, and the bar it keeps visible, would stay up for the rest of the video).
   function closeRateMenu(e: MouseEvent) {
@@ -532,7 +575,7 @@
   // Pause while playing, shown whenever the control bar is (pointer moved,
   // paused) and hidden with it. Never while loading or buffering, where the
   // ring takes its place.
-  $: showBig = settled && !showAutoAdvance && !(buffering && !paused) && showBar;
+  $: showBig = settled && !showAutoAdvance && !(buffering && !paused) && showBar && !pipOn;
   $: bigLabel = !paused ? 'Pause' : clipEnded ? 'Replay' : 'Play';
   // On touch screens the first tap on a playing video only reveals the
   // controls (with the centre Pause); a tap while they show toggles play.
@@ -572,7 +615,7 @@
 <!-- One themed control bar on every video (whole or trimmed part). Keys work
      while the player has focus: k/space, j/l, arrows, m, f, c. -->
 <!-- svelte-ignore a11y-no-noninteractive-tabindex a11y-no-noninteractive-element-interactions -->
-<div bind:this={container} class="player-wrap" class:native={useNative} class:idle={useNative && !showBar}
+<div bind:this={container} class="player-wrap" class:native={useNative} class:idle={useNative && !showBar} data-video-player
      role="region" aria-label="Video player" tabindex={useNative ? 0 : -1} style={canvasBg}
      on:keydown={onKey} on:mousemove={wake} on:touchstart={onTouch}
      on:mouseleave={() => { if (!paused) active = false; hoverPct = null; }}>
@@ -600,7 +643,7 @@
       on:waiting={() => (buffering = true)}
       on:canplay={() => (buffering = false)}
       on:progress={onProgress}
-      on:loadedmetadata={() => { duration = videoEl.duration || 0; applyVolume(); }}
+      on:loadedmetadata={() => { duration = videoEl.duration || 0; applyVolume(); metaReady = true; takeOver(videoEl); }}
       on:ended={onEnded}
     >
       {#if vttUrl}
@@ -614,7 +657,14 @@
          is always in the DOM and only fades, so play/pause never re-creates
          it (that re-creation, with its pop-in animation, made it jump). -->
     <div class="center-layer">
-      {#if !settled || (buffering && !paused)}<span class="ring" aria-hidden="true"></span>{/if}
+      {#if pipOn}
+        <!-- The browser leaves the page's video blank while it plays in the floating window. -->
+        <div class="pip-card" role="status">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11.5" width="6.5" height="5" rx="1" fill="currentColor"/></svg>
+          <p>Playing in picture in picture</p>
+          <button class="pip-back" on:click|stopPropagation={togglePip}>Bring it back here</button>
+        </div>
+      {:else if !settled || (buffering && !paused)}<span class="ring" aria-hidden="true"></span>{/if}
       <button class="bigplay" class:show={showBig} class:is-play={bigLabel === 'Play'} on:click={() => { togglePlay(); wake(); }}
         tabindex={showBig ? 0 : -1} aria-hidden={!showBig} aria-label={bigLabel} title={`${bigLabel} (k)`}>
         {#if bigLabel === 'Pause'}
@@ -700,7 +750,8 @@
           {/if}
         </span>
         {#if canPip}
-          <button on:click={togglePip} aria-label={pipOn ? 'Exit picture in picture' : 'Picture in picture'} title="Picture in picture">
+          <button on:click={togglePip} class:on-pip={pipOn} disabled={!metaReady} aria-pressed={pipOn}
+            aria-label={pipOn ? 'Exit picture in picture' : 'Picture in picture'} title={pipOn ? 'Exit picture in picture' : 'Picture in picture'}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11.5" width="6.5" height="5" rx="1" fill="currentColor"/></svg>
           </button>
         {/if}
@@ -729,7 +780,9 @@
        the studio's overlays, look and brand. Raised clear of the control bar
        while it shows. -->
   {#if useNative}
-    <EditedLayer {edits} t={frameT} from={0} to={clipLength} {captions} ccOn={ccOn && !videoFs} raised={showBar} />
+    {#if !pipOn}
+      <EditedLayer {edits} t={frameT} from={0} to={clipLength} {captions} ccOn={ccOn && !videoFs} raised={showBar} />
+    {/if}
   {/if}
 
   {#if !useNative && onQna}
@@ -873,6 +926,22 @@
   .bigplay.is-play svg { translate: 2px 0; }
   .bigplay.show:hover { background: var(--brand); border-color: var(--brand); scale: 1.06; }
   .bigplay.show:active { scale: 0.96; }
+
+  /* while the video plays in the floating window */
+  .pip-card {
+    display: grid; justify-items: center; gap: 0.6rem; padding: 1rem; text-align: center;
+    color: rgba(244, 244, 246, 0.82); font-size: 0.92rem; animation: pop 220ms var(--ease-out);
+  }
+  .pip-card p { margin: 0; }
+  .pip-back {
+    pointer-events: auto; height: 36px; padding: 0 1rem; border-radius: var(--radius-pill);
+    background: #fff; color: #0b0b0d; font-size: 0.82rem; font-weight: 700;
+    transition: background-color var(--dur-2), scale var(--dur-2) var(--ease-out);
+  }
+  .pip-back:hover { background: var(--brand); color: #fff; }
+  .pip-back:active { scale: 0.96; }
+  .pip-back:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .cbar button.on-pip { background: #fff; color: #000; }
 
   /* narrow players: keep the essentials */
   @container (max-width: 520px) {

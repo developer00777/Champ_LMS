@@ -6,7 +6,8 @@
   export let hint = '';
 </script>
 
-<div class="stage-ph" role="status">
+<!-- data-video-pending: a video is on its way (picture in picture waits for it). -->
+<div class="stage-ph" role="status" data-video-pending={busy || null}>
   {#if busy}<span class="ring"></span>{/if}
   <p>{message}</p>
   {#if hint}<small>{hint}</small>{/if}
