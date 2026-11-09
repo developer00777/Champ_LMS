@@ -27,6 +27,9 @@ const ORG_ALLOWLIST = `
   103.170.163.0/24
   # Airtel TDS
   182.78.39.1-182.78.39.255
+  # Office connection seen on the block page (Nov 2026); not part of the
+  # TATA ranges above
+  152.233.15.123
 `;
 
 // Paths that must answer without an office IP: Railway's healthcheck, and the
