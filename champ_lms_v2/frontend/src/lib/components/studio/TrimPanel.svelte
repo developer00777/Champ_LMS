@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api/client';
   import { clock } from '$lib/utils/transcribe';
+  import { confirmDialog } from '$lib/stores/dialog';
   import { MIN_PART, splitAt, trimEnd, trimStart, useStudio } from './studio';
 
   export let dirty = false;
@@ -26,7 +27,11 @@
   const setEnd = (x: number) => trimEnd(st, x);
 
   async function joinNext() {
-    if (dirty && !confirm('Joining reloads the studio, and unsaved changes here will be lost. Join anyway?')) return;
+    if (dirty && !(await confirmDialog({
+      title: 'Join with the next part?',
+      message: "Joining reloads the studio, so the changes you haven't saved here will be lost.",
+      confirm: 'Join anyway', cancel: 'Keep editing', danger: true, icon: 'alert',
+    }))) return;
     joining = true;
     try { st.reset(await api.studioJoinNext($ep.id)); st.say('Joined with the next part.'); onJoined(); }
     catch (e: any) { st.say(e.message, 'bad'); }

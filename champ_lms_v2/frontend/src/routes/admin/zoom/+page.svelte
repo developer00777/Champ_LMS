@@ -3,6 +3,7 @@
   import { api, type ZoomSession } from '$lib/api/client';
   import Icon from '$lib/components/Icon.svelte';
   import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
+  import { alertDialog } from '$lib/stores/dialog';
 
   let sessions: ZoomSession[] = [];
   let loading = true;
@@ -30,7 +31,7 @@
       await api.buildModule(sessionId);
       await loadSessions();
     } catch (e: any) {
-      alert(e.message);
+      alertDialog({ title: "Couldn't build the module", message: e.message });
     } finally {
       building = null;
     }

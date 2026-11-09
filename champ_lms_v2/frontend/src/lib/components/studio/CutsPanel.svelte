@@ -166,10 +166,10 @@
   .tx li { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5rem; align-items: start; padding: 0.3rem 0.35rem; border-radius: 6px; font-size: 0.8rem; line-height: 1.4; }
   .tx li:hover { background: var(--st-raise); }
   .tx li.now { background: rgba(110,168,255,.14); }
-  .tx li.gone .x { text-decoration: line-through; color: #ff9196; opacity: 0.8; }
+  .tx li.gone .x { text-decoration: line-through; color: var(--st-bad-text); opacity: 0.8; }
   .t { font-size: 0.7rem; color: var(--st-muted); padding-top: 0.1rem; }
   .t:hover { color: var(--st-text); }
   .strike { width: 24px; height: 22px; border-radius: 5px; color: var(--st-muted); font-size: 0.8rem; }
-  .strike:hover { background: rgba(255,77,94,.2); color: #fff; }
+  .strike:hover { background: rgba(255,77,94,.16); color: var(--st-bad-text); }
   .linkish { font-size: 0.78rem; color: var(--st-text); text-decoration: underline dotted; }
 </style>

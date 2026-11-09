@@ -103,7 +103,7 @@
   .tools { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
   .tool { display: grid; justify-items: center; gap: 0.15rem; padding: 0.5rem 0.2rem; border-radius: 10px; background: var(--st-raise); border: 1px solid var(--st-line); color: var(--st-text); font-size: 0.7rem; font-weight: 600; }
   .tool span { font-size: 1.2rem; line-height: 1; }
-  .tool.on { border-color: var(--st-hot); color: #fff; }
+  .tool.on { border-color: var(--st-hot); color: var(--st-text); }
   .slider { display: grid; gap: 0.25rem; font-size: 0.76rem; }
   .slider span { display: flex; justify-content: space-between; color: var(--st-muted); }
   .slider b { color: var(--st-text); font-weight: 600; }

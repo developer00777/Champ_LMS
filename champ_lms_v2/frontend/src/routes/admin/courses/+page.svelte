@@ -58,7 +58,7 @@
       </h1>
       <p class="sub ui-rise" style="--i:2">
         Build each course on one canvas: videos, AI quizzes, tests and notes in one order.
-        Learners get a series player when a course is only videos, and the full course player once it has anything else.
+        Learners watch every course in the same player: an episode list when a course is only videos, a course map once it has anything else.
         New courses start closed. Nobody sees one until you add people.
       </p>
     </div>

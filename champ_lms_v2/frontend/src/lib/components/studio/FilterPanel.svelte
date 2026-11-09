@@ -89,7 +89,7 @@
   .tile { display: grid; gap: 0.25rem; padding: 0; background: none; color: var(--st-muted); font-size: 0.66rem; font-weight: 600; text-align: center; }
   .img { position: relative; display: block; aspect-ratio: 16/9; border-radius: 7px; overflow: hidden; background: linear-gradient(135deg, #3a6ea5, #f3b562); border: 2px solid transparent; isolation: isolate; }
   .tile.on .img { border-color: var(--st-hot); }
-  .tile.on { color: #fff; }
+  .tile.on { color: var(--st-text); }
   .img canvas { width: 100%; height: 100%; display: block; }
   .tint, .vig { position: absolute; inset: 0; pointer-events: none; }
   .vig { background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,calc(var(--v) * 0.85)) 100%); }

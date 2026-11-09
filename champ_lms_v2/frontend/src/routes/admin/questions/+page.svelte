@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api, type AdminQuestion } from '$lib/api/client';
   import { clock } from '$lib/utils/transcribe';
+  import { confirmDialog } from '$lib/stores/dialog';
 
   let tab: 'open' | 'answered' | 'all' = 'open';
   let courseId = '';
@@ -49,7 +50,11 @@
   }
 
   async function remove(q: AdminQuestion) {
-    if (!confirm('Delete this question for everyone? Its answer goes too.')) return;
+    if (!(await confirmDialog({
+      title: 'Delete this question for everyone?',
+      message: q.answer ? 'Its answer is deleted too. This cannot be undone.' : 'This cannot be undone.',
+      confirm: 'Delete', danger: true,
+    }))) return;
     busy = q.id; error = '';
     try {
       await api.deleteQuestion(q.id);

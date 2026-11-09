@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, moduleHref, type FeedRow, type Module, type ProgressEntry } from '$lib/api/client';
+  import { api, moduleWatchHref, type FeedRow, type Module, type ProgressEntry } from '$lib/api/client';
   import { gamification } from '$lib/stores/gamification';
   import { auth, isAdmin } from '$lib/stores/auth';
   import Avatar from '$lib/components/Avatar.svelte';
@@ -176,7 +176,7 @@
     <section class="band" aria-label="Pick up where you left off">
       {#if spotlight}
         <article class="spot ui-rise" style="--i:3">
-          <a class="art {tone(spotlight.title)}" href={moduleHref(spotlight)} tabindex="-1" aria-hidden="true" use:tilt={{ max: 5 }}>
+          <a class="art {tone(spotlight.title)}" href={moduleWatchHref(spotlight)} tabindex="-1" aria-hidden="true" use:tilt={{ max: 5 }}>
             {#if spotImg}
               <Thumb src={spotImg} eager />
             {:else}
@@ -197,7 +197,7 @@
               {#if spotPct > 0}<span><Icon name="check" size={14} /> {spotPct}% done</span>{/if}
             </div>
             <div class="actions">
-              <a href={moduleHref(spotlight)} class="btn-primary play-btn">
+              <a href={moduleWatchHref(spotlight)} class="btn-primary play-btn">
                 <span class="play-ico"><Icon name="play" size={13} stroke={0} /></span>
                 {resuming ? 'Resume' : 'Start learning'}
               </a>

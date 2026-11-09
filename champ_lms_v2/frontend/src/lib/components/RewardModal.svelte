@@ -2,6 +2,7 @@
   import { rewardQueue, hasLevelUp } from '$lib/stores/gamification';
   import { onDestroy } from 'svelte';
   import { fade, scale } from 'svelte/transition';
+  import { trapFocus } from '$lib/utils/focus-trap';
 
   $: current = $rewardQueue[0] ?? null;
   $: show = Boolean(current || $hasLevelUp);
@@ -40,7 +41,7 @@
       </div>
     {/if}
 
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="reward-title" transition:scale={{ duration: 220, start: 0.9 }}>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="reward-title" tabindex="-1" use:trapFocus transition:scale={{ duration: 220, start: 0.9 }}>
       {#if current?.level_up}
         <div class="level-up-banner">⭐ Level {current.new_level ?? '?'}!</div>
         <h2 id="reward-title">Level Up</h2>
@@ -88,19 +89,21 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.72);
+    background: var(--scrim);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    padding: 1rem;
   }
   .modal {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-xl);
     padding: 2rem 2.5rem;
     max-width: 420px;
-    width: 90%;
+    width: 100%;
+    outline: none;
     text-align: center;
     box-shadow: var(--shadow-lg);
   }
@@ -136,7 +139,7 @@
   .rewards li {
     background: var(--surface2);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 0.65rem 0.9rem;
     display: flex;
     align-items: center;

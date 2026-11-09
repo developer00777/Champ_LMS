@@ -53,8 +53,8 @@
 {/if}
 
 <style>
-  .loading { position: fixed; inset: 0; z-index: 1000; background: #0e0f13; color: #9a9ba8; display: grid; place-items: center; align-content: center; gap: 0.8rem; }
-  .loading button { height: 32px; padding: 0 0.9rem; border-radius: 8px; background: #1e2028; color: #ececf1; font-weight: 600; }
-  .ring { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,.15); border-top-color: #fff; animation: spin .9s linear infinite; }
+  .loading { position: fixed; inset: 0; z-index: 1000; background: var(--bg); color: var(--muted); display: grid; place-items: center; align-content: center; gap: 0.8rem; }
+  .loading button { height: 32px; padding: 0 0.9rem; border-radius: 999px; background: var(--surface2); color: var(--text); font-weight: 600; }
+  .ring { width: 36px; height: 36px; border-radius: 50%; border: 3px solid var(--surface3); border-top-color: var(--brand); animation: spin .9s linear infinite; }
   @keyframes spin { to { rotate: 360deg; } }
 </style>

@@ -890,9 +890,15 @@ export interface Module {
   // "canvas" modules open in the course player at /course/{id}.
   layout?: 'classic' | 'canvas';
 }
-// Where a module card should link: canvas courses have their own player.
+// Where a module card should link: the course page (overview, progress and
+// every episode). Canvas courses live at /course/{id}, older ones at /module/{id}.
 export function moduleHref(m: { id: string; layout?: string }): string {
   return m.layout === 'canvas' ? `/course/${m.id}` : `/module/${m.id}`;
+}
+// Where a Play / Resume / Start button should link: straight into the player,
+// on the first episode the learner hasn't finished.
+export function moduleWatchHref(m: { id: string; layout?: string }): string {
+  return `${moduleHref(m)}?play=1`;
 }
 export interface Episode {
   id: string; title: string; description: string | null;
