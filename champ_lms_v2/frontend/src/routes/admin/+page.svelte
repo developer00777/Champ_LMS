@@ -21,6 +21,8 @@
     { href: '/admin/test-requests', icon: 'bell', tone: 'butter', title: 'Test requests', text: 'Approve who sits a course test, and how many attempts they get' },
     { href: '/admin/questions', icon: 'message', tone: 'sky', title: 'Questions', text: 'Answer what learners ask from the Q&A button on course videos', countsOpen: true },
     { href: '/admin/upload', icon: 'upload', tone: 'peach', title: 'Upload Video', text: 'Upload to Bunny Stream — auto-transcodes to HLS' },
+    { href: '/admin/shorts', icon: 'shorts', tone: 'peach', title: 'Shorts', text: 'Add short videos in 9:16, 4:5, 1:1 or 16:9 for the swipeable Shorts feed' },
+    { href: '/admin/resizer', icon: 'crop', tone: 'lilac', title: 'Video Resizer', text: 'Resize any video to a short, a square or any size: crop or fit, trim, download or publish' },
     { href: '/admin/zoom', icon: 'video', tone: 'sky', title: 'Zoom → Module Builder', text: 'Convert Zoom recordings into AI-structured modules' },
     { href: '/admin/tests', icon: 'clipboard', tone: 'lilac', title: 'Test Series', text: 'Turn a Q&A PDF or Word doc into a scored test with AI improvement insights' },
     { href: '/admin/daily', icon: 'flame', tone: 'peach', title: 'Daily Challenges', text: "Write a challenge pool — three rotate into everyone's day automatically" },

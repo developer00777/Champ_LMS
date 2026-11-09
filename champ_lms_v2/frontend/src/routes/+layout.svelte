@@ -47,6 +47,7 @@
   type NavItem = { href: string; label: string; icon: string; match: (p: string) => boolean; admin?: boolean };
   const NAV: NavItem[] = [
     { href: '/', label: 'Home', icon: 'home', match: (p) => p === '/' },
+    { href: '/shorts', label: 'Shorts', icon: 'shorts', match: (p) => p.startsWith('/shorts') },
     { href: '/my-learning', label: 'My Learning', icon: 'book', match: (p) => p === '/my-learning' },
     { href: '/paths', label: 'Paths', icon: 'route', match: (p) => p === '/paths' },
     { href: '/daily', label: 'Today', icon: 'flame', match: (p) => p === '/daily' },

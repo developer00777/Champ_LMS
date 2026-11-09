@@ -17,6 +17,9 @@ export interface UploadOptions {
   token: string;
   onProgress?: (bytesUploaded: number, bytesTotal: number) => void;
   onStatus?: (message: string) => void;
+  // Where prepare-upload and the server relay live. Defaults to the
+  // episode's; shorts pass /api/admin/shorts/{id}.
+  endpoint?: string;
 }
 
 export interface UploadResult {
@@ -35,12 +38,13 @@ const RETRY_DELAY = 1000; // 1 second
  */
 export async function uploadVideoHybrid(options: UploadOptions): Promise<UploadResult> {
   const { file, episodeId, token, onProgress, onStatus } = options;
+  const endpoint = options.endpoint ?? `/api/admin/episodes/${episodeId}`;
 
   // Step 1: Create TUS session via backend
   onStatus?.('Creating upload session...');
   
   try {
-    const prepareRes = await fetch(`/api/admin/episodes/${episodeId}/prepare-upload`, {
+    const prepareRes = await fetch(`${endpoint}/prepare-upload`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -84,7 +88,7 @@ export async function uploadVideoHybrid(options: UploadOptions): Promise<UploadR
     
     try {
       await uploadViaServer({
-        episodeId,
+        endpoint,
         file,
         token,
         onProgress,
@@ -211,12 +215,12 @@ async function getUploadOffset(tusUploadUrl: string): Promise<number> {
  * Used when TUS direct upload fails (CORS, network issues, etc.)
  */
 function uploadViaServer(options: {
-  episodeId: string;
+  endpoint: string;
   file: File;
   token: string;
   onProgress?: (bytesUploaded: number, bytesTotal: number) => void;
 }): Promise<void> {
-  const { episodeId, file, token, onProgress } = options;
+  const { endpoint, file, token, onProgress } = options;
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -248,7 +252,7 @@ function uploadViaServer(options: {
     // 'error' event, so dropping the timeout doesn't leak a pending promise.
     xhr.timeout = 0;
     
-    xhr.open('POST', `/api/admin/episodes/${episodeId}/upload`);
+    xhr.open('POST', `${endpoint}/upload`);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.send(formData);
   });

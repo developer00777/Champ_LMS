@@ -82,6 +82,12 @@
     pause: '<path class="lv-bar" d="M8 5v14"/><path class="lv-bar lv-d2" d="M16 5v14"/>',
     hash: '<path class="lv-wobble" d="M5 9h15M4 15h15M10 3 8 21M16 3l-2 18"/>',
     medal: '<g class="lv-swing"><circle cx="12" cy="15" r="6"/><path d="M8.5 10 5 3h5l2 4 2-4h5l-3.5 7"/></g>',
+    // Shorts: a phone-shaped frame with a play mark.
+    shorts: '<rect x="6" y="2.5" width="12" height="19" rx="3.2"/><path class="lv-pulse" d="M10.4 9v6l4.6-3z" fill="currentColor"/>',
+    // Video resizer: a frame being cropped to a new shape.
+    crop: '<path d="M6 2v13a3 3 0 0 0 3 3h13"/><path class="lv-se" d="M18 22V9a3 3 0 0 0-3-3H2"/>',
+    thumbUp: '<path class="lv-hop" d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM7 10l4-7.5a2.3 2.3 0 0 1 3 2.4L13.4 9H19a2 2 0 0 1 2 2.3l-1.3 7.6A2.5 2.5 0 0 1 17.3 21H7"/>',
+    share: '<path class="lv-right" d="M14 4.5 21 11l-7 6.5V14c-5 0-8.5 1.5-11 5.5C4 14 7 9.5 14 8.5z"/>',
     building: '<path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M16 9h2a2 2 0 0 1 2 2v10M2 21h20"/><path class="lv-blink" d="M8 7h4"/><path class="lv-blink lv-d1" d="M8 11h4"/><path class="lv-blink lv-d2" d="M8 15h4"/>',
   };
 </script>

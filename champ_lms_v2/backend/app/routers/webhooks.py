@@ -41,6 +41,10 @@ async def bunny_stream_webhook(request: Request):
     # a part of the same Bunny video, and all of them become ready together.
     episodes = await Episode.find(Episode.bunny_video_guid == video_guid).to_list()
     if not episodes:
+        # Not a course video: it may be a short.
+        from app.routers.shorts import apply_bunny_webhook
+        if await apply_bunny_webhook(video_guid, status, duration):
+            return {"processed": True, "video_guid": video_guid, "kind": "short"}
         return {"ignored": True, "reason": "no episode found for guid"}
 
     thumbnail_url = None

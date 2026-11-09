@@ -590,6 +590,41 @@ export const api = {
     request<{ deleted: boolean; deactivated: boolean; completions: number }>(
       `/admin/daily/challenges/${id}`, { method: 'DELETE' }),
 
+  // Shorts — learner feed. Short videos, any shape, in a swipeable feed.
+  shorts: (start?: string) => request<ShortItem[]>(`/shorts${start ? `?start=${encodeURIComponent(start)}` : ''}`),
+  short: (id: string) => request<ShortItem>(`/shorts/${id}`),
+  shortStream: (id: string) => request<{ stream_url: string; embed_url: string; expires_in: number }>(`/shorts/${id}/stream`),
+  likeShort: (id: string) => request<{ liked: boolean; like_count: number }>(`/shorts/${id}/like`, { method: 'POST' }),
+  viewShort: (id: string, watchedSeconds: number, completed: boolean) =>
+    request<{ view_count: number }>(`/shorts/${id}/view`, {
+      method: 'POST', body: JSON.stringify({ watched_seconds: watchedSeconds, completed }),
+    }),
+  // Shorts — admin. The file goes to Bunny with uploadVideoHybrid (endpoint
+  // /api/admin/shorts/{id}); the poster frame is kept in MongoDB.
+  adminShorts: () => request<AdminShort[]>('/admin/shorts'),
+  createShort: (body: ShortCreate) =>
+    request<AdminShort>('/admin/shorts', { method: 'POST', body: JSON.stringify(body) }),
+  updateShort: (id: string, body: Partial<Pick<AdminShort, 'title' | 'description' | 'module_id' | 'fit' | 'focus_x' | 'is_published'>>) =>
+    request<AdminShort>(`/admin/shorts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  shortStatus: (id: string) =>
+    request<{ id: string; status: string; duration_seconds: number | null; poster_url: string | null }>(`/admin/shorts/${id}/status`),
+  deleteShort: (id: string) =>
+    request<{ deleted: string; video: string }>(`/admin/shorts/${id}?confirm=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  uploadShortPoster: async (id: string, image: Blob): Promise<{ poster_url: string }> => {
+    const form = new FormData();
+    form.append('image', image, 'poster.jpg');
+    const token = localStorage.getItem('champ_token');
+    const res = await fetch(`${BASE}/admin/shorts/${id}/poster`, {
+      method: 'POST', body: form,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new ApiError(res.status, detailMessage(err.detail, 'Could not save the poster'), err.detail);
+    }
+    return res.json();
+  },
+
   // Social
   socialFeed: (department?: string, limit = 30) =>
     request<SocialPostItem[]>(`/social/feed?limit=${limit}${department ? `&department=${department}` : ''}`),
@@ -1488,4 +1523,32 @@ export interface NotificationItem {
   id: string; type: string; title: string; body: string | null;
   ref_type: string | null; ref_id: string | null;
   read: boolean; created_at: string;
+}
+
+// Shorts
+export type ShortAspect = '9:16' | '4:5' | '1:1' | '16:9';
+export type ShortFit = 'contain' | 'cover';
+export interface ShortItem {
+  id: string; title: string; description: string | null;
+  duration_seconds: number | null; width: number | null; height: number | null;
+  aspect: ShortAspect; fit: ShortFit; focus_x: number;
+  poster_url: string | null; view_count: number; like_count: number;
+  liked: boolean; seen: boolean;
+  course: { id: string; title: string; layout: string; thumbnail_url: string | null } | null;
+  created_at: string;
+}
+export interface AdminShort {
+  id: string; title: string; description: string | null;
+  module_id: string | null; module_title: string | null;
+  status: 'pending' | 'processing' | 'ready' | 'failed';
+  duration_seconds: number | null; width: number | null; height: number | null;
+  aspect: ShortAspect; fit: ShortFit; focus_x: number;
+  made_with: string | null; source_filename: string | null;
+  poster_url: string | null; is_published: boolean;
+  view_count: number; like_count: number; has_video: boolean; created_at: string;
+}
+export interface ShortCreate {
+  title: string; description?: string; module_id?: string | null;
+  duration_seconds?: number; width?: number; height?: number;
+  fit?: ShortFit; focus_x?: number; is_published?: boolean; made_with?: 'resizer';
 }

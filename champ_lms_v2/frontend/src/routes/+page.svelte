@@ -10,6 +10,7 @@
   import Thumb from '$lib/components/Thumb.svelte';
   import UpskillingTrack from '$lib/components/UpskillingTrack.svelte';
   import QuestList from '$lib/components/QuestList.svelte';
+  import ShortsShelf from '$lib/components/shorts/ShortsShelf.svelte';
   import { countUp } from '$lib/actions/motion';
   import { tilt } from '$lib/actions/auto-motion';
 
@@ -112,7 +113,7 @@
 
   const SHORTCUTS = [
     { href: '/admin/upload', label: 'Upload video', icon: 'upload', tone: 'sky' },
-    { href: '/admin/courses', label: 'Courses', icon: 'layers', tone: 'lilac' },
+    { href: '/admin/shorts', label: 'Shorts', icon: 'shorts', tone: 'lilac' },
     { href: '/admin/employees', label: 'Employees', icon: 'users', tone: 'mint' },
   ];
 </script>
@@ -274,6 +275,8 @@
         <UpskillingTrack {track} {modulesById} {query} />
         <div class="spacer"></div>
       {/if}
+
+      <ShortsShelf {query} />
 
       {#each shownRows as row}
         <ContentRow title={row.row_title} modules={row.modules} {progressMap} />

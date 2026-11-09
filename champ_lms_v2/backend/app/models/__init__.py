@@ -29,6 +29,8 @@ from app.models.qna import EpisodeQuestion
 # * Course and episode thumbnails from the thumbnail studio (Mongo, not Bunny).
 from app.models.thumbnail import Thumbnail
 from app.models.studio_audio import StudioAudio
+# * Shorts: standalone short videos in a swipeable feed, with likes and views.
+from app.models.short import Short, ShortLike, ShortView
 
 __all__ = [
     "User", "Module", "Episode", "WatchProgress", "Enrollment",
@@ -41,6 +43,7 @@ __all__ = [
     "ContentAccessRule",
     "DailyChallenge", "DailyChallengeCompletion", "Kudos",
     "CourseNote", "NoteAttachment", "TestRequest", "EpisodeQuestion", "Thumbnail", "StudioAudio",
+    "Short", "ShortLike", "ShortView",
 ]
 
 DOCUMENT_MODELS = [
@@ -55,4 +58,5 @@ DOCUMENT_MODELS = [
     ContentAccessRule,
     DailyChallenge, DailyChallengeCompletion, Kudos,
     CourseNote, NoteAttachment, TestRequest, EpisodeQuestion, Thumbnail, StudioAudio,
+    Short, ShortLike, ShortView,
 ]
