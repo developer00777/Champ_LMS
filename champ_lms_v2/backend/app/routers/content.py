@@ -359,15 +359,11 @@ async def get_stream_url(
 
     # Try to get direct stream URL for native players (Video.js, HLS.js, etc.)
     # This may return 403 if Token Authentication is enabled in Bunny Stream dashboard.
-    stream_url = None
+    # Signed locally: Bunny has no API endpoint that issues these tokens.
     try:
-        stream_url = await bunny_stream.get_token_auth_url_from_api(ep.bunny_video_guid, expires_in_seconds=14400)
-    except Exception as e:
-        logger.warning(f"Bunny token API failed for {ep.bunny_video_guid}: {e}")
-        try:
-            stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
-        except RuntimeError:
-            stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
+        stream_url = bunny_stream.get_token_auth_url(ep.bunny_video_guid, expires_in_seconds=14400)
+    except RuntimeError:
+        stream_url = bunny_stream.get_hls_url(ep.bunny_video_guid)
 
     # A canvas course episode may be a trimmed or split part of its video; only
     # the course player knows to keep to that part, so /watch hands over to it.

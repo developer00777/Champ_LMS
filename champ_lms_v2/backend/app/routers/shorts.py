@@ -430,14 +430,11 @@ async def short_stream(short_id: str, user: Annotated[User, Depends(get_current_
     await _refresh_status(s)
     if s.status != "ready" or not s.bunny_video_guid:
         raise HTTPException(status_code=425, detail="This short is still processing")
+    # Signed locally: Bunny has no API endpoint that issues these tokens.
     try:
-        stream_url = await bunny_stream.get_token_auth_url_from_api(s.bunny_video_guid, expires_in_seconds=14400)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Bunny token API failed for short %s: %s", s.id, exc)
-        try:
-            stream_url = bunny_stream.get_token_auth_url(s.bunny_video_guid, expires_in_seconds=14400)
-        except RuntimeError:
-            stream_url = bunny_stream.get_hls_url(s.bunny_video_guid)
+        stream_url = bunny_stream.get_token_auth_url(s.bunny_video_guid, expires_in_seconds=14400)
+    except RuntimeError:
+        stream_url = bunny_stream.get_hls_url(s.bunny_video_guid)
     return {"stream_url": stream_url, "embed_url": bunny_stream.get_embed_url(s.bunny_video_guid), "expires_in": 14400}
 
 
